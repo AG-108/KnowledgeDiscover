@@ -7,7 +7,7 @@ from typing import Any, Dict, Optional, Tuple
 
 import numpy as np
 
-from discover.task.pde.utils_fd import FiniteDiff
+from ..discover.task.pde.utils_fd import FiniteDiff
 
 
 

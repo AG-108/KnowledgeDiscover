@@ -206,3 +206,6 @@ examples/log/
 workflow/
 
 agent.md
+/kd/model/DeepSymbolicOptimization/config/
+/kd/model/DeepSymbolicOptimization/config/
+/examples/physo_res/

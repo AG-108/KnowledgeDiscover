@@ -261,7 +261,7 @@ def raw_eqn_to_str(raw_eqn, n_vars=2):
 
     if current_op == 'log':
         if left_is_float:
-            return "{:.3f}".format(np.math.log(safe_abs(left_value)))
+            return "{:.3f}".format(np.log(safe_abs(left_value)))
         return "log({})".format(left_side)
 
     if current_op == 'sin':
@@ -549,9 +549,9 @@ def dataGen(nv, decimals,
     - decimals: number of floating points
     - number_of_points: number of points for each instance
     - seed: random generator seed (DEPRICATED)
-    - xRange: range of x
-    - testPoints: a flag to generate (XT) for testing range
-    - testRange: range of x for testing
+    - x_range: range of x
+    - test_points: a flag to generate (XT) for testing range
+    - test_range: range of x for testing
     - n_levels: complexity of formulas
     - op_list: operator lists for using in the experiment
     """
@@ -571,10 +571,10 @@ def dataGen(nv, decimals,
     # currEqn, n_vars=nv, decimals=decimals)
     skeletonEqn = eqn_to_str_skeleton(cleanEqn)
     # data = create_dataset_from_raw_eqn(currEqn, n_points=nPoints, n_vars=nv,
-    #                                    decimals=decimals, support_points=support_points, min_x=xRange[0], max_x=xRange[1])
-    # if testPoints:
+    #                                    decimals=decimals, support_points=support_points, min_x=x_range[0], max_x=x_range[1])
+    # if test_points:
     #     dataTest = create_dataset_from_raw_eqn(currEqn, n_points=nPoints, n_vars=nv, decimals=decimals,
-    #                                            support_points=support_points_test, min_x=testRange[0], max_x=testRange[1])
+    #                                            support_points=support_points_test, min_x=test_range[0], max_x=test_range[1])
     #     return data[0], data[1], cleanEqn, skeletonEqn, dataTest[0], dataTest[1], currEqn
     return cleanEqn, skeletonEqn, currEqn
 

@@ -1,6 +1,7 @@
 from typing import Optional
 
 from ._base import (PDEDataset,
+                    SymbolicRegressionDataset,
                     load_burgers_equation,
                     load_kdv_equation,
                     load_pde_dataset,
@@ -106,6 +107,7 @@ def load_pde(name: str, **kwargs) -> PDEDataset:
 
 __all__ = [
     "PDEDataset",
+    "SymbolicRegressionDataset",
     "load_pde",  # 新增统一接口
     "load_burgers_equation",
     "load_mat_file",

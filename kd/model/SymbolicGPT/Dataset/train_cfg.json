@@ -1,12 +1,11 @@
 {
-    "seed": 2021,
     "num_vars": [1,2,3,4,5,6,7,8,9],
     "decimals": 8,
     "number_of_points": [20,250],
     "num_samples": 100,
-    "testPoints": false,
-    "trainRange": [-3.0,3.0],
-    "testRange": [[-5.0, 3.0],[-3.0, 5.0]],
+    "test_points": false,
+    "train_range": [-3.0,3.0],
+    "test_range": [[-5.0, 3.0],[-3.0, 5.0]],
     "support_points": null,
     "support_points_test": null,
     "n_levels": 4,
@@ -16,7 +15,8 @@
     "op_list": [
         "id", "add", "mul",
         "sin", "pow", "cos", "sqrt",
-        "exp", "div", "sub", "log"
+        "exp", "div", "sub", "log",
+        "arcsin"
     ],
     "exponents": [3, 4, 5, 6],
     "sortY": false,

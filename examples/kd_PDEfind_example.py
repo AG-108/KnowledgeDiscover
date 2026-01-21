@@ -7,7 +7,6 @@ x = data.x
 t = data.t
 u = data.usol
 
-# 2) 构造 PDEDataset
 dataset = PDEDataset(
     equation_name="KdV",
     pde_data={"x": x, "t": t, "usol": u},
@@ -15,7 +14,6 @@ dataset = PDEDataset(
     epi=0.0
 )
 
-# 3) 初始化并拟合 PDEFindModel
 model = PDEFindModel(
     derivative_order=3,               # 包含到二阶导，适配扩散
     threshold=5,
@@ -29,12 +27,12 @@ model.fit(dataset)
 # 打印识别到的 PDE（u_t = ...）
 model.print_model()
 
-# 4) 时间外推预测
+# 预测
 U0 = u[:, 50]            # 取 t=50 对应的空间场
 dt = t[51] - t[50]             # 邻近时间步长
 U1_pred = model.predict(U0, dt)
 
-# 简单检查：外推后的场与真实的下一时刻的场对比（MSE）
+# sanity check
 U1_true = u[:, 51]
 mse = np.mean((U1_pred - U1_true)**2)
 print(f"One-step forecast MSE: {mse:.6e}")

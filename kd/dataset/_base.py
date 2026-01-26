@@ -11,7 +11,7 @@ import numpy as np
 import pandas as pd
 import scipy.io as sio
 import matplotlib.pyplot as plt
-from typing import Any, Dict, Union, Optional, Tuple
+from typing import Any, Dict, Union, Optional, Tuple, List
 from pathlib import Path
 from importlib import resources
 from abc import ABC, abstractmethod
@@ -308,7 +308,10 @@ class PDEDataset(MetaData):
                  x: Optional[np.ndarray] = None, 
                  t: Optional[np.ndarray] = None, 
                  usol: Optional[np.ndarray] = None,
-                 descr: Optional[DatasetInfo] = None):
+                 descr: Optional[DatasetInfo] = None,
+                 coords: Optional[Dict[str, np.ndarray]] = None,
+                 time_var: str = "t",
+                 ):
         """
         Initializes the PDE dataset, supporting two input methods:
         1. Providing data through the `pde_data` dictionary.
@@ -319,89 +322,267 @@ class PDEDataset(MetaData):
         :param pde_data: Optional dictionary containing 'x', 't', and 'usol' data.
         :param x: Optional, spatial coordinate array.
         :param t: Optional, temporal coordinate array.
-        :param usol: Optional, solution array u(x, t).
+        :param usol: Optional, solution array u(X, t).
         :param domain: Dictionary defining the domain {variable: (min_value, max_value)}.
         :param epi: Additional parameter.
+        :param coords: Optional[recommended], dictionary of coordinate arrays for each variable.
+        :param time_var: Name of the time variable in coords (default is 't').
         """
         super().__init__(equation_name)
-
-        if pde_data is not None:
-            # Assign data from the provided dictionary
-            self.x = np.asarray(pde_data.get('x'), dtype=float).flatten()
-            self.t = np.asarray(pde_data.get('t'), dtype=float).flatten()
-            self.usol = np.real(np.asarray(pde_data.get('usol')))
-        elif x is not None and t is not None and usol is not None:
-            # Directly assign provided x, t, and usol arrays
-            self.x = np.asarray(x, dtype=float).flatten()
-            self.t = np.asarray(t, dtype=float).flatten()
-            self.usol = np.real(np.asarray(usol))
-        else:
-            raise ValueError("Either `pde_data` or `x`, `t`, and `usol` must be provided.")
-
-        # Ensure consistency of data dimensions
-        if self.usol.shape != (len(self.x), len(self.t)):
-            raise ValueError(f"usol dimensions {self.usol.shape} do not match x {len(self.x)} and t {len(self.t)}")
         
         self.u = self.usol
         self.equation_name = equation_name
         self.domain = domain
-        self.epi = epi 
-        
-    def get_datapoint(self, x_id: int, t_id: int) -> Tuple[float, float, float]:
-        """
-        Retrieves the (x, t) coordinates and the corresponding solution value.
+        self.epi = epi
+        self.descr = descr
+        self.time_var = time_var
 
-        :param x_id: Index in the spatial dimension.
-        :param t_id: Index in the temporal dimension.
-        :return: A tuple (x, t, usol) representing the coordinates and solution.
+        # ---- Load data into coords + usol (unified internal representation) ----
+        if pde_data is not None:
+            # Prefer new-style coords if present
+            if "coords" in pde_data:
+                self.coords = {k: np.asarray(v, dtype=float).reshape(-1) for k, v in pde_data["coords"].items()}
+                self.usol = np.real(np.asarray(pde_data["usol"]))
+            else:
+                # legacy dict: x,t,usol
+                self.coords = {
+                    "x": np.asarray(pde_data.get("x"), dtype=float).reshape(-1),
+                    self.time_var: np.asarray(pde_data.get("t"), dtype=float).reshape(-1),
+                }
+                self.usol = np.real(np.asarray(pde_data.get("usol")))
+        elif coords is not None and usol is not None:
+            self.coords = {k: np.asarray(v, dtype=float).reshape(-1) for k, v in coords.items()}
+            self.usol = np.real(np.asarray(usol))
+        elif x is not None and t is not None and usol is not None:
+            # legacy direct input
+            self.coords = {
+                "x": np.asarray(x, dtype=float).reshape(-1),
+                self.time_var: np.asarray(t, dtype=float).reshape(-1),
+            }
+            self.usol = np.real(np.asarray(usol))
+        else:
+            raise ValueError("Provide either `pde_data`, or (`coords` & `usol`), or (`x`,`t`,`usol`).")
+
+        # ---- Validate coords and usol shape ----
+        if self.time_var not in self.coords:
+            raise ValueError(f"coords must contain time variable '{self.time_var}'")
+
+        self._vars: List[str] = list(self.coords.keys())
+        # stable ordering: spatial vars in insertion order, then time last
+        self._spatial_vars: List[str] = [v for v in self._vars if v != self.time_var]
+        self._ordered_vars: List[str] = self._spatial_vars + [self.time_var]
+
+        # require usol dims match coords lengths
+        expected_shape = tuple(len(self.coords[v]) for v in self._ordered_vars)
+        if self.usol.shape != expected_shape:
+            raise ValueError(
+                f"usol shape {self.usol.shape} does not match coords lengths {expected_shape} "
+                f"for vars {self._ordered_vars} (time last)."
+            )
+
+        # legacy aliases
+        self.u = self.usol
+
+    @property
+    def t(self) -> np.ndarray:
+        return self.coords[self.time_var]
+
+    @property
+    def x(self) -> np.ndarray:
+        # If x is multidimensional, return the first spatial variable
+        if len(self._spatial_vars) == 0:
+            raise AttributeError("No spatial variables found in coords.")
+        return self.coords[self._spatial_vars[0]]
+
+    @property
+    def spatial_vars(self) -> List[str]:
+        return list(self._spatial_vars)
+
+    @property
+    def vars(self) -> List[str]:
+        return list(self._ordered_vars)
+        
+    def get_datapoint(self, *ids: int) -> Tuple[Tuple[float, ...], float]:
         """
-        if not (0 <= x_id < len(self.x)) or not (0 <= t_id < len(self.t)):
-            raise IndexError("Index out of range.")
-        return self.x[x_id], self.t[t_id], self.usol[x_id, t_id]
+        - 1D legacy: get_datapoint(x_id, t_id) -> ((x,t), u)
+        - ND: get_datapoint(i1, i2, ..., it) -> ((x1,x2,...,t), u)
+
+        Return shape is: (coords_tuple, u_value)
+        """
+        if len(ids) == 1 and isinstance(ids[0], (tuple, list)):
+            ids = tuple(ids[0])  # type: ignore
+
+        if len(ids) != len(self._ordered_vars):
+            raise ValueError(f"Expected {len(self._ordered_vars)} indices, got {len(ids)}")
+
+        # bounds check
+        for k, v in enumerate(self._ordered_vars):
+            n = len(self.coords[v])
+            if not (0 <= ids[k] < n):
+                raise IndexError(f"Index out of range for '{v}': {ids[k]} not in [0, {n})")
+
+        coord_vals = tuple(float(self.coords[v][ids[k]]) for k, v in enumerate(self._ordered_vars))
+        u_val = float(self.usol[ids])
+        return coord_vals, u_val
 
     def get_data(self) -> Dict[str, Any]:
-        """
-        Returns the dataset information as a dictionary.
-        """
-        return {'x': self.x, 't': self.t, 'usol': self.usol}
-        
-    def sample(self, n_samples: Union[int, float], method: str = 'random') -> Tuple[np.ndarray, np.ndarray]:
-        """
-        Samples a subset of the data points using different sampling methods.
+        """Backward-compatible: still returns x,t,usol when available; plus coords for ND."""
+        data = {"coords": self.coords, "usol": self.usol}
+        # legacy keys for 1D case
+        if len(self._spatial_vars) >= 1 and self._spatial_vars[0] == "x":
+            data["x"] = self.x
+        data["t"] = self.t
+        return data
 
-        :param n_samples: Number of samples to draw. If < 1, treated as a ratio.
-        :param method: Sampling method to use ('random', 'uniform', 'spline').
-        :return: A tuple (sampled_points, sampled_usol), where:
-                - sampled_points is an array of shape (n, 2) with (x, t) pairs
-                - sampled_usol is an array of shape (n,) with corresponding solution values
+    def get_size(self) -> Tuple[int, ...]:
+        """ND size: (N_x1, N_x2, ..., N_t). For old code, 1D returns (Nx, Nt)."""
+        return self.usol.shape
+
+    def mesh(self, indexing: str = "ij") -> np.ndarray:
         """
-        total_points = len(self.x) * len(self.t)
-        
-        # Convert ratio to absolute count if n_samples is a float < 1
+        ND mesh: returns array of shape (prod(N_dims), n_dims).
+        1D legacy -> (Nx*Nt, 2)
+        2D space -> (Nx*Ny*Nt, 3)
+        """
+        grids = np.meshgrid(*(self.coords[v] for v in self._ordered_vars), indexing=indexing)
+        flat = [g.reshape(-1) for g in grids]
+        return np.stack(flat, axis=1)
+
+    def mesh_bounds(self, indexing: str = "ij") -> Tuple[np.ndarray, np.ndarray]:
+        m = self.mesh(indexing=indexing)
+        return m.min(0), m.max(0)
+
+    def get_boundaries(self) -> Dict[str, Tuple[float, float]]:
+        return {v: (float(self.coords[v].min()), float(self.coords[v].max())) for v in self._ordered_vars}
+
+    def get_domain(self) -> Optional[Dict[str, Tuple[float, float]]]:
+        return self.domain
+
+    def get_derivative(self, axis: str = "x") -> np.ndarray:
+        """
+        Legacy: axis in {'x','t'}.
+        ND: axis can be any variable name in coords (e.g. 'x','y','z','t').
+        Uses np.gradient along the corresponding array axis (time is last).
+        """
+        if axis == "t":
+            axis = self.time_var
+
+        if axis not in self._ordered_vars:
+            raise ValueError(f"Invalid axis '{axis}'. Available: {self._ordered_vars}")
+
+        ax = self._ordered_vars.index(axis)
+        # np.gradient can accept spacing; here we only do basic gradient (same as your original style)
+        return np.gradient(self.usol, axis=ax)
+
+    def get_range(
+            self,
+            x_range: Optional[Tuple[float, float]] = None,
+            t_range: Optional[Tuple[float, float]] = None,
+            ranges: Optional[Dict[str, Tuple[float, float]]] = None,
+    ) -> Dict[str, np.ndarray]:
+        """
+        Backward compatible:
+          - get_range(x_range=(..), t_range=(..)) for 1D
+        ND:
+          - get_range(ranges={'x':(..), 'y':(..), 't':(..)})
+        """
+        if ranges is None:
+            # legacy mode
+            if x_range is None or t_range is None:
+                raise ValueError("Provide either `ranges` or both `x_range` and `t_range`.")
+            if len(self._spatial_vars) != 1:
+                raise ValueError("Legacy (x_range,t_range) only works for 1D spatial datasets.")
+            ranges = {self._spatial_vars[0]: x_range, self.time_var: t_range}
+
+        # build slices
+        slicers = []
+        out_coords = {}
+        for v in self._ordered_vars:
+            if v not in ranges:
+                # if not specified, keep full
+                slicers.append(slice(None))
+                out_coords[v] = self.coords[v]
+                continue
+            lo, hi = ranges[v]
+            arr = self.coords[v]
+            i0, i1 = np.searchsorted(arr, [lo, hi])
+            slicers.append(slice(i0, i1))
+            out_coords[v] = arr[i0:i1]
+
+        sub_usol = self.usol[tuple(slicers)]
+        result = {"coords": out_coords, "usol": sub_usol}
+
+        # legacy keys for 1D
+        if len(self._spatial_vars) == 1:
+            result["x"] = out_coords[self._spatial_vars[0]]
+            result["t"] = out_coords[self.time_var]
+
+        return result
+
+    def sample(self, n_samples: Union[int, float], method: str = "random") -> Tuple[np.ndarray, np.ndarray]:
+        """
+        ND generalization:
+          - returns sampled_points shape (n, n_dims)
+          - returns sampled_usol shape (n, 1)
+
+        Methods:
+          - random: works for any ND
+          - uniform: works for any ND (approx: per-dimension grid)
+          - spline: ONLY supported for legacy 1D (x,t) for now (same behavior as your original)
+        """
+        shape = self.usol.shape
+        total_points = int(np.prod(shape))
+        n_dims = len(shape)
+
         if isinstance(n_samples, float) and 0 < n_samples < 1:
             n_samples = int(total_points * n_samples)
 
         if n_samples > total_points:
             raise ValueError(f"Requested {n_samples} samples, but only {total_points} points available.")
 
-        if method == 'random':
-            indices = np.random.choice(total_points, n_samples, replace=False)
-            x_samples, t_samples = np.unravel_index(indices, self.usol.shape)
-            sampled_points = np.column_stack((self.x[x_samples], self.t[t_samples]))
-            sampled_usol = self.usol[x_samples, t_samples]
+        if method == "random":
+            flat_idx = np.random.choice(total_points, int(n_samples), replace=False)
+            multi_idx = np.unravel_index(flat_idx, shape)  # tuple of arrays, length n_dims
 
-        elif method == 'uniform':
-            grid_size = int(np.sqrt(n_samples))
-            x_indices = np.linspace(0, len(self.x) - 1, grid_size, dtype=int)
-            t_indices = np.linspace(0, len(self.t) - 1, grid_size, dtype=int)
-            x_samples, t_samples = np.meshgrid(x_indices, t_indices)
-            sampled_points = np.column_stack((
-                self.x[x_samples.flatten()],
-                self.t[t_samples.flatten()]
-            ))
-            sampled_usol = self.usol[x_samples.flatten(), t_samples.flatten()]
+            pts_cols = []
+            for dim, v in enumerate(self._ordered_vars):
+                pts_cols.append(self.coords[v][multi_idx[dim]])
+            sampled_points = np.stack(pts_cols, axis=1)
+            sampled_usol = self.usol[multi_idx]
 
-        elif method == 'spline':
+            return sampled_points, sampled_usol.reshape(-1, 1)
+
+        if method == "uniform":
+            # choose grid sizes per dimension so product approx n_samples
+            # simple heuristic: equal root across dims
+            per_dim = int(round(n_samples ** (1.0 / n_dims)))
+            per_dim = max(per_dim, 1)
+
+            dim_indices = []
+            for v in self._ordered_vars:
+                n = len(self.coords[v])
+                dim_indices.append(np.linspace(0, n - 1, per_dim, dtype=int))
+
+            grids = np.meshgrid(*dim_indices, indexing="ij")
+            multi_idx = tuple(g.reshape(-1) for g in grids)
+
+            pts_cols = []
+            for dim, v in enumerate(self._ordered_vars):
+                pts_cols.append(self.coords[v][multi_idx[dim]])
+            sampled_points = np.stack(pts_cols, axis=1)
+            sampled_usol = self.usol[multi_idx].reshape(-1, 1)
+
+            # if overshoot, truncate
+            if sampled_points.shape[0] > n_samples:
+                sampled_points = sampled_points[: int(n_samples)]
+                sampled_usol = sampled_usol[: int(n_samples)]
+            return sampled_points, sampled_usol
+
+        if method == "spline":
+            # Not sure how to generalize spline sampling to ND easily.
+            # For now, only support legacy 1D (x,t) case as before.
+            if len(self._ordered_vars) != 2 or self._spatial_vars[0] != "x":
+                raise ValueError("spline sampling is only supported for 1D (x,t) datasets in this implementation.")
             grid_size = int(np.sqrt(n_samples))
             x_new = np.linspace(self.x.min(), self.x.max(), grid_size)
             t_new = np.linspace(self.t.min(), self.t.max(), grid_size)
@@ -410,72 +591,16 @@ class PDEDataset(MetaData):
             x_samples, t_samples = np.meshgrid(x_new, t_new)
             sampled_points = np.column_stack((x_samples.flatten(), t_samples.flatten()))
             sampled_usol = usol_new.flatten()
+            return sampled_points, sampled_usol.reshape(-1, 1)
 
-        else:
-            raise ValueError(f"Unsupported sampling method: {method}")
-
-        return sampled_points, sampled_usol.reshape(-1, 1)
-    
-    def mesh(self, indexing='ij') -> np.ndarray:
-        """
-        Returns a 2D coordinate grid where each row is a combination of (x, t).
-        Equivalent to np.meshgrid(x, t) but flattened into a 2D array.
-
-        :return: A 2D array of shape (len(x) * len(t), 2) where each row is (x, t).
-        """
-        X, T = np.meshgrid(self.x, self.t, indexing=indexing)
-        return np.column_stack([X.ravel(), T.ravel()])
-
-    def mesh_bounds(self, indexing='ij') -> np.ndarray:
-        X, T = np.meshgrid(self.x, self.t, indexing=indexing)
-        mesh_data = np.column_stack([X.ravel(), T.ravel()])
-        return mesh_data.min(0), mesh_data.max(0)
-    
-    def get_boundaries(self) -> Dict[str, Tuple[float, float]]:
-        """ Returns the minimum and maximum values for x and t. """
-        return {'x': (self.x.min(), self.x.max()), 't': (self.t.min(), self.t.max())}
-
-    def get_domain(self) -> Dict[str, Tuple[float, float]]:
-        """ Retrieves the domain definition. """
-        return self.domain
-
-    def get_derivative(self, axis: str = 'x') -> np.ndarray:
-        """
-        Computes the derivative of `usol` along the spatial or temporal axis.
-
-        :param axis: Direction of differentiation ('x' or 't').
-        :return: The computed derivative array.
-        """
-        if axis == 'x':
-            return np.gradient(self.usol, axis=0)
-        elif axis == 't':
-            return np.gradient(self.usol, axis=1)
-        else:
-            raise ValueError("Invalid axis name, must be 'x' or 't'.")
-
-    def get_range(self, x_range: Tuple[float, float], t_range: Tuple[float, float]) -> Dict[str, np.ndarray]:
-        """ 
-        Retrieves subsets of x, t, and the corresponding solution within the specified range.
-
-        :param x_range: Tuple representing the range of x values (min_x, max_x).
-        :param t_range: Tuple representing the range of t values (min_t, max_t).
-        :return: A dictionary containing subsets of x, t, and usol.
-        """
-        x_start, x_end = np.searchsorted(self.x, [x_range[0], x_range[1]])
-        t_start, t_end = np.searchsorted(self.t, [t_range[0], t_range[1]])
-
-        return {'x': self.x[x_start:x_end], 
-                't': self.t[t_start:t_end], 
-                'usol': self.usol[x_start:x_end, t_start:t_end]}
-
-    def get_size(self) -> Tuple[int, int]:
-        """ Returns the dimensions of the solution array (x dimension, t dimension). """
-        return self.usol.shape
+        raise ValueError(f"Unsupported sampling method: {method}")
 
     def plot_solution(self) -> None:
         """
         Generates a heatmap visualization of the solution `usol` over (x, t) dimensions.
         """
+        if self.usol.ndim != 2:
+            raise ValueError("plot_solution is only supported for 1D spatial datasets (2D usol).")
         plt.figure(figsize=(8, 6))
         plt.imshow(self.usol, aspect='auto', origin='lower',
                    extent=[self.t.min(), self.t.max(), self.x.min(), self.x.max()])

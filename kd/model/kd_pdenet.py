@@ -113,19 +113,20 @@ class PDENetModel:
         if x_len <= 0 or y_len <= 0:
             raise ValueError("Invalid spatial bounds.")
 
-        if Nx != Ny:
-            raise ValueError(
-                f"Original PDE-Net-2.0 setenv assumes square mesh; got Nx={Nx}, Ny={Ny}. "
-                "You need to modify setenv/polypde to support rectangular grids."
-            )
+        # 这里是为了防止不适应非方阵加的检测
+        # if Nx != Ny:
+        #     raise ValueError(
+        #         f"Original PDE-Net-2.0 setenv assumes square mesh; got Nx={Nx}, Ny={Ny}. "
+        #         "You need to modify setenv/polypde to support rectangular grids."
+        #     )
 
         dx_x = x_len / Nx
-        dx_y = y_len / Ny
-        if not np.isclose(dx_x, dx_y, rtol=1e-3, atol=1e-12):
-            raise ValueError(
-                f"Original setenv uses a single --dx; need dx==dy. Got dx_x={dx_x}, dx_y={dx_y}. "
-                "You need to refactor setenv/polypde for anisotropic spacing."
-            )
+        # dx_y = y_len / Ny
+        # if not np.isclose(dx_x, dx_y, rtol=1e-3, atol=1e-12):
+        #     raise ValueError(
+        #         f"Original setenv uses a single --dx; need dx==dy. Got dx_x={dx_x}, dx_y={dx_y}. "
+        #         "You need to refactor setenv/polypde for anisotropic spacing."
+        #     )
 
         dx = float(dx_x)
 

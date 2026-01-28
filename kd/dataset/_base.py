@@ -336,6 +336,29 @@ def load_csv_tlc(
         **dataset_kwargs,
     )
 
+def load_wake_equation(data_dir : str, file_names : List[str]):
+    U = []
+    shape = None
+    for file_name in file_names:
+        data_path = os.path.join(data_dir, file_name)
+        data = np.load(data_path).transpose([1, 2, 0])  # shape: (nt, nx, ny)
+        if shape is None:
+            shape = data.shape
+        else:
+            assert shape == data.shape, "All data files must have the same shape, but got {} and {}".format(shape, data.shape)
+        U.append(data)  # shape: (nt, nx, ny)
+    x = np.linspace(-5, 5, U[0].shape[0])
+    y = np.linspace(-5, 5, U[0].shape[1])
+    t = np.linspace(0, 20, U[0].shape[2])
+    coords = {"x": x, "y": y, "t": t}
+    usol = np.stack(U, axis=0)  # shape: (2, nx, ny, nt)
+    return GridPDEDataset(
+        equation_name="Wake",
+        pde_data={"coords": coords, "usol": usol},
+        domain={"x": (x.min(), x.max()), "y": (y.min(), y.max()), "t": (t.min(), t.max())},
+        epi=0.0
+    )
+
 
 class BaseDataLoader(ABC):
     """

@@ -1,12 +1,14 @@
 from typing import Optional
 
 from ._base import (GridPDEDataset,
+                    ScatterPDEDataset,
                     SymbolicRegressionDataset,
                     load_burgers_equation,
                     load_kdv_equation,
                     load_pde_dataset,
                     load_mat_file,
-                    load_csv_tlc)
+                    load_csv_tlc,
+                    load_wake_equation)
 from ._registry import (PDE_REGISTRY,
                         get_dataset_info,
                         list_available_datasets,
@@ -110,12 +112,15 @@ def load_pde_grid(name: str, **kwargs) -> GridPDEDataset:
 
 __all__ = [
     "GridPDEDataset",
+    "ScatterPDEDataset",
     "SymbolicRegressionDataset",
     "load_pde_grid",  # 新增统一接口
     "load_burgers_equation",
     "load_mat_file",
     "load_kdv_equation",
     "load_pde_dataset",
+    "load_csv_tlc",
+    "load_wake_equation",
     "list_available_datasets",  # 新增辅助函数
     "get_dataset_sym_true",  # 新增辅助函数
     "Burgers_equation_shock",

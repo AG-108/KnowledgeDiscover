@@ -1,32 +1,10 @@
-import os.path
-
 import numpy as np
-from kd.dataset import GridPDEDataset
+from kd.dataset import load_wake_equation
 from kd.model.kd_pdenet import PDENetModel
 
-def load_wake_equation(data_path) -> GridPDEDataset:
-    U = np.load("../kd/dataset/WDwake/TI8_U.npy")
-    V = np.load("../kd/dataset/WDwake/TI8_V.npy")
-    # for now, we crop the data to a square domain
-    N = min(U.shape[1], U.shape[2])
-    U = U[:, :N, :N]
-    V = V[:, :N, :N]
-    x = np.linspace(-5, 5, U.shape[1])
-    y = np.linspace(-5, 5, U.shape[2])
-    t = np.linspace(0, 20, U.shape[0])
-    coords = {"x": x, "y": y, "t": t}
-    usol = np.stack([U, V], axis=0).transpose([0, 2, 3, 1])  # shape: (2, nx, ny, nt)
-    return GridPDEDataset(
-        equation_name="Wake",
-        pde_data={"coords": coords, "usol": usol},
-        domain={"x": (x.min(), x.max()), "y": (y.min(), y.max()), "t": (t.min(), t.max())},
-        epi=0.0
-    )
+DATA_DIR = "../kd/dataset/WDwake"
 
-DATA_DIR = "../kd/dataset"
-DATA_PATH = os.path.join(DATA_DIR, "WDwake/TI8_U.npy")
-
-dataset = load_wake_equation(DATA_PATH)
+dataset = load_wake_equation(DATA_DIR, ["TI8_U.npy", "TI8_V.npy"])
 
 model = PDENetModel(
     derivative_order=3,

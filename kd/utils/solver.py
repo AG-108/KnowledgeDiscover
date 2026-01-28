@@ -3,7 +3,7 @@ import numpy as np
 class FiniteDifferenceOperator:
     def __init__(self, u, dx, dim):
         """
-        Initializes the class with the grid values, grid spacing, and dimension.
+        Initializes the class with the grids values, grids spacing, and dimension.
         :param u: Input array representing the function values.
         :param dx: Grid spacing.
         :param dim: Spatial dimension.

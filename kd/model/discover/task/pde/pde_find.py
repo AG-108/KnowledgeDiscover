@@ -264,8 +264,8 @@ def build_linear_system(u, dt, dx, D = 3, P = 3,time_diff = 'poly',space_diff = 
     Input:
         Required:
             u = data to be fit to a pde
-            dt = temporal grid spacing
-            dx = spatial grid spacing
+            dt = temporal grids spacing
+            dx = spatial grids spacing
         Optional:
             D = max derivative to include in rhs (default = 3)
             P = max power of u to include in rhs (default = 3)

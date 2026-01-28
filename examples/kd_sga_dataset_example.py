@@ -7,11 +7,11 @@ current_dir = os.path.dirname(os.path.abspath(__file__))
 kd_main_dir = os.path.abspath(os.path.join(current_dir, ".."))
 sys.path.append(kd_main_dir)
 
-from kd.dataset import load_pde
+from kd.dataset import load_pde_grid
 from kd.model.kd_sga import KD_SGA
 
 # 1. 通过统一入口加载数据
-pde_dataset = load_pde('chafee-infante')
+pde_dataset = load_pde_grid('chafee-infante')
 
 # 2. 初始化模型，与旧接口保持一致
 model = KD_SGA(sga_run=10, depth=3)

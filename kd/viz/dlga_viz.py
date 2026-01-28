@@ -108,9 +108,12 @@ def plot_residual_analysis(model, X_train, y_train, u_true, u_pred, output_dir: 
     # Left plot: Training points residuals
     plt.subplot(121)
     # Calculate training point predictions
+    device = next(model.Net.parameters()).device
+
     with torch.no_grad():
-        train_pred = model.Net(torch.tensor(X_train, dtype=torch.float32)).numpy().flatten()
-    # train_residuals = y_train - train_pred
+        x = torch.as_tensor(X_train, dtype=torch.float32, device=device)
+        train_pred = model.Net(x).detach().cpu().numpy().ravel()
+        # train_residuals = y_train - train_pred
     train_residuals = y_train.flatten() - train_pred.flatten()
     
     sc = plt.scatter(X_train[:, 1],  # Time coordinates
@@ -562,7 +565,7 @@ def plot_derivative_relationships(model, top_n_terms: int = 4, output_dir: str =
         print("Warning: Could not parse any valid terms from the solution to plot.")
         return
 
-    # --- Step 4: Dynamically create subplot grid and generate plots ---
+    # --- Step 4: Dynamically create subplot grids and generate plots ---
     num_plots = len(terms_to_plot)
     ncols = min(num_plots, 3)
     nrows = int(np.ceil(num_plots / ncols))

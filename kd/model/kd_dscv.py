@@ -1,7 +1,7 @@
 """Deep Reinforcement Learning for PDE Discovery.
 
 This module implements a deep reinforcement learning approach for discovering
-governing equations of PDEs. It supports both regular grid data and sparse
+governing equations of PDEs. It supports both regular grids data and sparse
 sampling, and can be combined with Physics-Informed Neural Networks (PINN).
 """
 
@@ -152,13 +152,13 @@ class KD_DSCV(BaseRL):
         self.setup()
 
     def import_dataset(self, dataset, *, sym_true=None, n_input_dim=None, dataset_name=None):
-        """Import data through a :class:`~kd.dataset.PDEDataset` instance.
+        """Import data through a :class:`~kd.dataset.GridPDEDataset` instance.
 
         This preserves向后兼容 by keeping :meth:`import_inner_data` untouched, while
         allowing外部调用者通过统一的 ``load_pde`` 管道提供数据。
 
         Args:
-            dataset: PDEDataset 对象。
+            dataset: GridPDEDataset 对象。
             sym_true: 可选地覆盖真实方程符号表达式。
             n_input_dim: 可选地指定空间维度数。
 
@@ -166,11 +166,11 @@ class KD_DSCV(BaseRL):
             KD_DSCV: 便于链式调用。
         """
 
-        from kd.dataset import PDEDataset  # 延迟导入以避免循环依赖
+        from kd.dataset import GridPDEDataset  # 延迟导入以避免循环依赖
         from .discover.adapter import DSCVRegularAdapter
 
-        if not isinstance(dataset, PDEDataset):
-            raise TypeError("dataset must be a PDEDataset instance")
+        if not isinstance(dataset, GridPDEDataset):
+            raise TypeError("dataset must be a GridPDEDataset instance")
 
         adapter = DSCVRegularAdapter(dataset, sym_true=sym_true, n_input_dim=n_input_dim)
         self.data_class = adapter
@@ -404,21 +404,21 @@ class KD_DSCV_SPR(KD_DSCV):
         random_state=None,
         dataset_name=None,
     ):
-        """Import sparse/PINN data via :class:`~kd.dataset.PDEDataset`.
+        """Import sparse/PINN data via :class:`~kd.dataset.GridPDEDataset`.
 
         Args:
-            dataset: PDEDataset 实例。
+            dataset: GridPDEDataset 实例。
             sample: 抽样点数量（优先级高于 ``sample_ratio``）。
             sample_ratio: 抽样比例 (0,1]，默认 0.1。
             colloc_num: collocation 采样数量，留空则保持默认。
             random_state: 随机种子，保证抽样可复现。
         """
 
-        from kd.dataset import PDEDataset
+        from kd.dataset import GridPDEDataset
         from .discover.adapter import DSCVSparseAdapter
 
-        if not isinstance(dataset, PDEDataset):
-            raise TypeError("dataset must be a PDEDataset instance")
+        if not isinstance(dataset, GridPDEDataset):
+            raise TypeError("dataset must be a GridPDEDataset instance")
 
         adapter = DSCVSparseAdapter(
             dataset,

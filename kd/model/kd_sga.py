@@ -100,19 +100,19 @@ class KD_SGA(BaseEstimator):
         solver_cls: Optional[Type] = None,
     ):
         """
-        新增接口：直接使用 :class:`~kd.dataset.PDEDataset` 执行 SGA.
+        新增接口：直接使用 :class:`~kd.dataset.GridPDEDataset` 执行 SGA.
 
         Args:
-            dataset: 由 ``kd.dataset.load_pde`` 返回的 PDEDataset 对象。
+            dataset: 由 ``kd.dataset.load_pde`` 返回的 GridPDEDataset 对象。
             problem_name: 可选，覆盖用于 SolverConfig 的问题名称。
             context_cls: 可选，注入自定义 ProblemContext 子类（测试用）。
             solver_cls: 可选，注入自定义 SGAPDE_Solver 子类（测试用）。
         """
-        from kd.dataset import PDEDataset  # 避免模块级循环依赖
+        from kd.dataset import GridPDEDataset  # 避免模块级循环依赖
         from .sga.adapter import SGADataAdapter
 
-        if not isinstance(dataset, PDEDataset):
-            raise TypeError("dataset 必须是 PDEDataset 实例")
+        if not isinstance(dataset, GridPDEDataset):
+            raise TypeError("dataset 必须是 GridPDEDataset 实例")
 
         adapter = SGADataAdapter(dataset)
         solver_kwargs: Dict[str, Any] = adapter.to_solver_kwargs()

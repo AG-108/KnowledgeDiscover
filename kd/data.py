@@ -5,7 +5,7 @@ This module provides classes for handling different types of PDE data:
     - Burgers: Burgers equation data
     - Kdv: Korteweg-de Vries equation data (512x201)
 
-The module supports both regular grid data (RegularData) and sparse sampling data (SparseData).
+The module supports both regular grids data (RegularData) and sparse sampling data (SparseData).
 """
 
 from abc import ABC, abstractmethod
@@ -87,7 +87,7 @@ class BaseDataHandler(ABC):
         return self.data
 
 class RegularData(BaseDataHandler):
-    """Handler for regular grid PDE data.
+    """Handler for regular grids PDE data.
     
     This class handles data from PDE solutions on regular grids, including:
         - chafee-infante (301x200)
@@ -120,7 +120,7 @@ class RegularData(BaseDataHandler):
             assert self.source in data_list, "Provided data is not included"
               
     def process_data(self):
-        """Process regular grid data."""
+        """Process regular grids data."""
         super().process_data()
         pass
     
@@ -187,7 +187,7 @@ class SparseData(BaseDataHandler):
     """Handler for sparsely sampled PDE data.
     
     This class handles data from sparse sampling points, typically used
-    when regular grid data is not available. It includes functionality
+    when regular grids data is not available. It includes functionality
     for train/validation splitting and collocation point sampling.
     
     Attributes:

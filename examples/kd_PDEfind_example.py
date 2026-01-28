@@ -1,17 +1,18 @@
 import numpy as np
 from kd.model.kd_pdefind import PDEFindModel
-from kd.dataset import PDEDataset, load_kdv_equation
+from kd.dataset import GridPDEDataset, load_kdv_equation
 
 data = load_kdv_equation()
 x = data.x
 t = data.t
 u = data.usol
 
-dataset = PDEDataset(
+dataset = GridPDEDataset(
     equation_name="KdV",
     pde_data={"x": x, "t": t, "usol": u},
     domain={"x": (x.min(), x.max()), "t": (t.min(), t.max())},
-    epi=0.0
+    epi=0.0,
+    legacy=True
 )
 
 model = PDEFindModel(
@@ -21,7 +22,7 @@ model = PDEFindModel(
     max_iter=500
 )
 
-# 模型训练（根据 PDEDataset 提供的 x,t,usol 拟合 PDE）
+# 模型训练（根据 GridPDEDataset 提供的 x,t,usol 拟合 PDE）
 model.fit(dataset)
 
 # 打印识别到的 PDE（u_t = ...）

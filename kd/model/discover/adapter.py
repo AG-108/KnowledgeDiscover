@@ -1,4 +1,4 @@
-"""Adapters bridging `PDEDataset` objects with the DISCOVER data pipeline."""
+"""Adapters bridging `GridPDEDataset` objects with the DISCOVER data pipeline."""
 
 from __future__ import annotations
 
@@ -13,19 +13,19 @@ from ..discover.task.pde.utils_fd import FiniteDiff
 
 @dataclass
 class DSCVRegularAdapter:
-    """Convert a :class:`~kd.dataset.PDEDataset` into DISCOVER regular-data format."""
+    """Convert a :class:`~kd.dataset.GridPDEDataset` into DISCOVER regular-data format."""
 
-    dataset: "PDEDataset"
+    dataset: "GridPDEDataset"
     sym_true: Optional[str] = None
     n_input_dim: Optional[int] = None
     enforce_uniform_dt: bool = True
     _data: Dict[str, Any] = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
-        from kd.dataset import PDEDataset  # local import to avoid circular deps
+        from kd.dataset import GridPDEDataset  # local import to avoid circular deps
 
-        if not isinstance(self.dataset, PDEDataset):
-            raise TypeError("DSCVRegularAdapter expects a PDEDataset instance")
+        if not isinstance(self.dataset, GridPDEDataset):
+            raise TypeError("DSCVRegularAdapter expects a GridPDEDataset instance")
 
         self._data = self._prepare()
 
@@ -38,18 +38,18 @@ class DSCVRegularAdapter:
 
         if u.shape != (x.shape[0], t.shape[0]):
             raise ValueError(
-                "PDEDataset usol shape {} does not match len(x)={} and len(t)={}".format(
+                "GridPDEDataset usol shape {} does not match len(x)={} and len(t)={}".format(
                     u.shape, x.shape[0], t.shape[0]
                 )
             )
 
         if t.size < 2:
-            raise ValueError("PDEDataset requires at least two temporal samples for DSCV adapter")
+            raise ValueError("GridPDEDataset requires at least two temporal samples for DSCV adapter")
 
-        # Ensure evenly spaced time grid when requested.
+        # Ensure evenly spaced time grids when requested.
         dt = np.diff(t)
         if self.enforce_uniform_dt and not np.allclose(dt, dt[0]):
-            raise ValueError("Time grid must be evenly spaced for finite-difference evaluation")
+            raise ValueError("Time grids must be evenly spaced for finite-difference evaluation")
         delta_t = float(dt[0])
 
         ut = np.zeros_like(u)
@@ -87,9 +87,9 @@ class DSCVRegularAdapter:
 
 @dataclass
 class DSCVSparseAdapter:
-    """Convert :class:`~kd.dataset.PDEDataset` samples into DISCOVER sparse-data format."""
+    """Convert :class:`~kd.dataset.GridPDEDataset` samples into DISCOVER sparse-data format."""
 
-    dataset: "PDEDataset"
+    dataset: "GridPDEDataset"
     sample: Optional[int] = None
     sample_ratio: float = 0.1
     colloc_num: Optional[int] = None
@@ -97,10 +97,10 @@ class DSCVSparseAdapter:
     _data: Dict[str, Any] = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
-        from kd.dataset import PDEDataset  # local import to avoid circular deps
+        from kd.dataset import GridPDEDataset  # local import to avoid circular deps
 
-        if not isinstance(self.dataset, PDEDataset):
-            raise TypeError("DSCVSparseAdapter expects a PDEDataset instance")
+        if not isinstance(self.dataset, GridPDEDataset):
+            raise TypeError("DSCVSparseAdapter expects a GridPDEDataset instance")
 
         self._data = self._prepare()
 
@@ -113,7 +113,7 @@ class DSCVSparseAdapter:
 
         if u.shape != (x.shape[0], t.shape[0]):
             raise ValueError(
-                "PDEDataset usol shape {} does not match len(x)={} and len(t)={}".format(
+                "GridPDEDataset usol shape {} does not match len(x)={} and len(t)={}".format(
                     u.shape, x.shape[0], t.shape[0]
                 )
             )

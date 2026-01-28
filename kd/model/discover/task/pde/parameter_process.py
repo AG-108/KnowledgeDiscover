@@ -10,11 +10,11 @@ def parametric_burgers_rhs(u, t, params):
     return np.real(deriv)
 
 
-# # Set size of grid
+# # Set size of grids
 # n = 256
 # m = 256
 
-# # Set up grid
+# # Set up grids
 # x = np.linspace(-8,8,n+1)[:-1];   dx = x[1]-x[0]
 # t = np.linspace(0,10,m);          dt = t[1]-t[0]
 # k = 2*np.pi*fftfreq(n, d = dx)

@@ -38,7 +38,7 @@ print("\nTraining DLGA model...")
 model.fit(X_train, y_train)
 
 print("\nGenerating predictions...")
-X_full = kdv_data.mesh()                            # 创建用于可视化的完整网格 / Create a full grid for visualization.
+X_full = kdv_data.mesh()                            # 创建用于可视化的完整网格 / Create a full grids for visualization.
 u_pred = model.predict(X_full)
 u_pred = u_pred.reshape(kdv_data.get_size())
 

@@ -98,7 +98,7 @@ def load_data(dataset, training=False):
         n_input_var = 1
 
     elif dataset == 'KS':
-        data = scipy.io.loadmat('./discover/task/pde/data/kuramoto_sivishinky.mat') # course temporal grid 
+        data = scipy.io.loadmat('./discover/task/pde/data/kuramoto_sivishinky.mat') # course temporal grids
         # import pdb;pdb.set_trace()
         t = np.real(data['t'].flatten()[:,None])
         x = np.real(data['x'].flatten()[:,None])
@@ -108,7 +108,7 @@ def load_data(dataset, training=False):
         n_input_var = 1
         
     elif dataset == 'KS_sine':
-        data = scipy.io.loadmat('./discover/task/pde/data/KS_Sine.mat') # course temporal grid 
+        data = scipy.io.loadmat('./discover/task/pde/data/KS_Sine.mat') # course temporal grids
         
         t = np.real(data['t'].flatten()[:,None])
         x = np.real(data['x'].flatten()[:,None])
@@ -118,7 +118,7 @@ def load_data(dataset, training=False):
         n_input_var = 1
 
     elif dataset == 'KS2':
-        data = scipy.io.loadmat('./discover/task/pde/data/KS.mat') # course temporal grid 
+        data = scipy.io.loadmat('./discover/task/pde/data/KS.mat') # course temporal grids
         # import pdb;pdb.set_trace()
         
         t = np.real(data['t'].flatten()[:,None])
@@ -291,7 +291,7 @@ def load_data_MD_NU(dataset, noise_level=0, data_amount = 1, training = False, c
     if "2D" in dataset:
         return load_data_2D(dataset,noise_level=0, data_amount = 1, training=False,cut_ratio =0.03)
     elif dataset == 'rd_MD_NU':
-        data = scipy.io.loadmat('./discover/task/pde/data/reaction_diffusion_standard.mat') # grid 256*256*201
+        data = scipy.io.loadmat('./discover/task/pde/data/reaction_diffusion_standard.mat') # grids 256*256*201
             
         t = np.real(data['t'].flatten()[:,None])
         x = np.real(data['x'].flatten()[:,None])
@@ -447,7 +447,7 @@ def load_param_data(dataset,noise_level=0, data_amount = 1, training=False,cut_r
         n = 256
         m = 256
 
-        # Set up grid
+        # Set up grids
         x = np.linspace(-8,8,n+1)[:-1];   dx = x[1]-x[0]
         t = np.linspace(0,10,m);          dt = t[1]-t[0]
         k = 2*np.pi*fftfreq(n, d = dx)

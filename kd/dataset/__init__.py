@@ -1,11 +1,12 @@
 from typing import Optional
 
-from ._base import (PDEDataset,
+from ._base import (GridPDEDataset,
                     SymbolicRegressionDataset,
                     load_burgers_equation,
                     load_kdv_equation,
                     load_pde_dataset,
-                    load_mat_file)
+                    load_mat_file,
+                    load_csv_tlc)
 from ._registry import (PDE_REGISTRY,
                         get_dataset_info,
                         list_available_datasets,
@@ -14,7 +15,7 @@ import numpy as np
 from importlib import resources
 
 
-def _tag_dataset(dataset: Optional[PDEDataset], name: str) -> Optional[PDEDataset]:
+def _tag_dataset(dataset: Optional[GridPDEDataset], name: str) -> Optional[GridPDEDataset]:
     """Attach registry metadata (registry_name / legacy_name) to dataset instances."""
     if dataset is None:
         return None
@@ -27,7 +28,7 @@ def _tag_dataset(dataset: Optional[PDEDataset], name: str) -> Optional[PDEDatase
     setattr(dataset, 'legacy_name', legacy_name)
     return dataset
 
-def load_pde(name: str, **kwargs) -> PDEDataset:
+def load_pde_grid(name: str, **kwargs) -> GridPDEDataset:
     """
     统一的PDE数据集加载入口
     
@@ -57,12 +58,13 @@ def load_pde(name: str, **kwargs) -> PDEDataset:
         if u.shape == (len(t), len(x)):
             u = u.T
 
-        dataset = PDEDataset(
+        dataset = GridPDEDataset(
             equation_name=name,
             pde_data=None,
             x=x, t=t, usol=u,
             domain=info.get('domain'),
-            epi=kwargs.get('epi', 1e-3)
+            epi=kwargs.get('epi', 1e-3),
+            legacy=True
         )
         return _tag_dataset(dataset, name)
     elif info.get('file', '').endswith('.npy'):
@@ -88,12 +90,13 @@ def load_pde(name: str, **kwargs) -> PDEDataset:
         x = np.linspace(x_bounds[0], x_bounds[1], nx)
         t = np.linspace(t_bounds[0], t_bounds[1], nt)
 
-        dataset = PDEDataset(
+        dataset = GridPDEDataset(
             equation_name=name,
             pde_data=None,
             x=x, t=t, usol=data,
             domain=domain,
-            epi=kwargs.get('epi', 1e-3)
+            epi=kwargs.get('epi', 1e-3),
+            legacy=True
         )
         return _tag_dataset(dataset, name)
     else:  # 单mat文件情况
@@ -106,9 +109,9 @@ def load_pde(name: str, **kwargs) -> PDEDataset:
         return _tag_dataset(dataset, name)
 
 __all__ = [
-    "PDEDataset",
+    "GridPDEDataset",
     "SymbolicRegressionDataset",
-    "load_pde",  # 新增统一接口
+    "load_pde_grid",  # 新增统一接口
     "load_burgers_equation",
     "load_mat_file",
     "load_kdv_equation",

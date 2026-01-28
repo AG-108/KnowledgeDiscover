@@ -6,6 +6,7 @@ import csv
 import itertools
 import os
 import zlib
+import re
 
 import numpy as np
 import pandas as pd
@@ -171,6 +172,171 @@ def load_numpy_data(file_path: str) -> Union[np.ndarray, dict]:
         raise ValueError(f"Unsupported file format: {file_path}")
 
 
+_TIME_COL_RE = re.compile(
+    r"""^\s*(?P<var>.*?)\s*@\s*t\s*=\s*(?P<t>[-+]?(\d+(\.\d*)?|\.\d+)([eE][-+]?\d+)?)\s*$"""
+)
+
+_VAR_CLEAN_RE = re.compile(r"\s+")
+
+
+def _clean_var_name(s: str) -> str:
+    s = s.strip()
+    s = _VAR_CLEAN_RE.sub(" ", s)
+    return s
+
+
+def load_csv_tlc(
+    csv_path: str,
+    *,
+    equation_name: str = "unknown",
+    spatial_vars: Optional[List[str]] = None,
+    time_var: str = "t",
+    domain: Optional[Dict[str, Tuple[float, float]]] = None,
+    epi: float = 0.0,
+    return_dataset: bool = False,
+    dataset_kwargs: Optional[Dict[str, Any]] = None,
+    force_3d_usol: bool = True,
+    encoding: Optional[str] = None,
+) -> Union[Dict[str, Any], "ScatterPDEDataset"]:
+    """
+    读取散点 PDE CSV 并整理为 ScatterPDEDataset 可接收的数据格式。
+
+    CSV 约定（与你描述一致）：
+      - 每行 = 一个空间点的观测（N 行）
+      - 前 d 列 = 空间坐标（d 维），列名任意（如 x,y 或 x0,x1）
+      - 后续列 = 以时间分组。每个时间有 m 个变量列
+        列名形如: "u (1) @ t=0.1"、"v @ t=0.1"、"p @ t=1e-3" 等
+
+    返回：
+      - 默认返回 dict，包含 points,t,usol,spatial_vars,time_var,state_vars
+      - return_dataset=True 时返回 ScatterPDEDataset 实例（需要你已定义该类）
+
+    参数：
+      - force_3d_usol=True：即使只有一个变量也返回 (N,T,1)，更统一
+    """
+    df = pd.read_csv(csv_path, encoding=encoding)
+
+    if df.shape[1] < 2:
+        raise ValueError(f"CSV 列数过少：{df.shape[1]}，至少应包含坐标列 + 数据列。")
+
+    cols = list(df.columns)
+
+    # 1) 找到“第一个时间数据列”的位置，从而切分坐标列与数据列
+    data_start = None
+    parsed = []  # list of (col_name, var_name, t_value)
+    for i, c in enumerate(cols):
+        m = _TIME_COL_RE.match(str(c))
+        if m:
+            data_start = i
+            break
+
+    if data_start is None:
+        raise ValueError(
+            "未找到任何形如 '... @ t=...' 的数据列名。请检查表头格式，例如：'u (1) @ t=0.1'。"
+        )
+
+    coord_cols = cols[:data_start]
+    data_cols = cols[data_start:]
+
+    if len(coord_cols) == 0:
+        raise ValueError("未检测到坐标列（前 n 列）。请确认 CSV 前几列是坐标，并且后续列名含 '@ t='。")
+
+    # 2) 解析所有数据列：提取 (var, t)
+    for c in data_cols:
+        mm = _TIME_COL_RE.match(str(c))
+        if not mm:
+            raise ValueError(
+                f"数据区列名不符合 '... @ t=...' 格式：{c!r}。"
+                f"（提示：坐标列必须全部在前面，数据列必须全部带 '@ t='）"
+            )
+        var = _clean_var_name(mm.group("var"))
+        t_val = float(mm.group("t"))
+        parsed.append((c, var, t_val))
+
+    # 3) 空间坐标 points
+    points = df[coord_cols].to_numpy(dtype=float)
+    N, d = points.shape
+
+    # spatial_vars：若没给就用坐标列名
+    if spatial_vars is None:
+        spatial_vars = [str(c) for c in coord_cols]
+    else:
+        if len(spatial_vars) != d:
+            raise ValueError(f"spatial_vars 长度 {len(spatial_vars)} 必须等于坐标维度 d={d}")
+
+    # 4) 变量与时间集合
+    var_names = sorted({v for _, v, _ in parsed})
+    t_values = sorted({t for _, _, t in parsed})
+
+    n_state = len(var_names)
+    T = len(t_values)
+
+    # 5) 检查每个 (t, var) 是否都存在，防止缺列/重复列
+    #    同时构建列索引映射： (t, var) -> column_name
+    mapping: Dict[Tuple[float, str], str] = {}
+    for col, var, t in parsed:
+        key = (t, var)
+        if key in mapping:
+            raise ValueError(f"检测到重复列：t={t}, var={var}，列名至少重复两次：{mapping[key]!r} 和 {col!r}")
+        mapping[key] = col
+
+    missing = []
+    for t in t_values:
+        for v in var_names:
+            if (t, v) not in mapping:
+                missing.append((t, v))
+    if missing:
+        # 只展示前几个，避免刷屏
+        preview = ", ".join([f"(t={tv}, var={vv})" for tv, vv in missing[:8]])
+        raise ValueError(f"缺少某些 (t,var) 列，示例：{preview}（共缺 {len(missing)} 个）")
+
+    # 6) 组装 usol: (N, T, n_state)
+    usol = np.empty((N, T, n_state), dtype=float)
+    for ti, t in enumerate(t_values):
+        for si, v in enumerate(var_names):
+            col = mapping[(t, v)]
+            usol[:, ti, si] = df[col].to_numpy(dtype=float)
+
+    t = np.asarray(t_values, dtype=float)
+
+    # 7) 若只一个变量且不强制 3D，可降为 (N,T)
+    if (not force_3d_usol) and n_state == 1:
+        usol_out: np.ndarray = usol[:, :, 0]
+    else:
+        usol_out = usol
+
+    payload: Dict[str, Any] = {
+        "equation_name": equation_name,
+        "points": points,
+        "t": t,
+        "usol": usol_out,
+        "spatial_vars": spatial_vars,
+        "time_var": time_var,
+        "state_vars": var_names,
+        "domain": domain,
+        "epi": float(epi),
+    }
+
+    if not return_dataset:
+        return payload
+
+    # 延迟导入/引用，避免你还没把类放进同一模块时出问题
+    if dataset_kwargs is None:
+        dataset_kwargs = {}
+
+    return ScatterPDEDataset(
+        equation_name=equation_name,
+        points=points,
+        t=t,
+        usol=usol_out,
+        domain=domain,
+        epi=float(epi),
+        spatial_vars=spatial_vars,
+        time_var=time_var,
+        **dataset_kwargs,
+    )
+
+
 class BaseDataLoader(ABC):
     """
     Abstract base class defining the interface for data loaders.
@@ -294,23 +460,31 @@ class MetaData(metaclass=MetaBase):
         pass
 
 
-class PDEDataset(MetaData):
+class GridPDEDataset(MetaData):
     """ 
     A class representing a Partial Differential Equation (PDE) dataset, providing data access 
     and analysis functionality.
+
+    Internal storage:
+      - self._usol: (n_response, N_x1, ..., N_t) with time last.
+    Public-facing:
+      - self.usol:
+          * legacy=True  -> (N_x1, ..., N_t)   (response dim hidden; requires n_response==1)
+          * legacy=False -> (n_response, N_x1, ..., N_t)
     """
-    
-    def __init__(self, 
+
+    def __init__(self,
                  equation_name: str,
                  pde_data: Optional[Dict[str, Any]],
                  domain: Optional[Dict[str, Tuple[float, float]]],
                  epi: float,
-                 x: Optional[np.ndarray] = None, 
-                 t: Optional[np.ndarray] = None, 
+                 x: Optional[np.ndarray] = None,
+                 t: Optional[np.ndarray] = None,
                  usol: Optional[np.ndarray] = None,
-                 descr: Optional[DatasetInfo] = None,
+                 descr: Optional["DatasetInfo"] = None,
                  coords: Optional[Dict[str, np.ndarray]] = None,
                  time_var: str = "t",
+                 legacy: bool = False,
                  ):
         """
         Initializes the PDE dataset, supporting two input methods:
@@ -320,50 +494,51 @@ class PDEDataset(MetaData):
         :param equation_name: Name of the PDE.
         :param descr: Metadata containing information about the PDE.
         :param pde_data: Optional dictionary containing 'x', 't', and 'usol' data.
-        :param x: Optional, spatial coordinate array.
-        :param t: Optional, temporal coordinate array.
+                        New style supports 'coords' + 'usol'.
+        :param x: Optional, spatial coordinate array (legacy).
+        :param t: Optional, temporal coordinate array (legacy).
         :param usol: Optional, solution array u(X, t).
         :param domain: Dictionary defining the domain {variable: (min_value, max_value)}.
         :param epi: Additional parameter.
         :param coords: Optional[recommended], dictionary of coordinate arrays for each variable.
         :param time_var: Name of the time variable in coords (default is 't').
+        :param legacy: If True, hide n_response dimension from public usol and enforce n_response==1.
         """
         super().__init__(equation_name)
-        
-        self.u = self.usol
+
         self.equation_name = equation_name
         self.domain = domain
         self.epi = epi
         self.descr = descr
         self.time_var = time_var
+        self.legacy = bool(legacy)
 
-        # ---- Load data into coords + usol (unified internal representation) ----
+        # ---- Load data into coords + _usol (unified internal representation) ----
         if pde_data is not None:
-            # Prefer new-style coords if present
             if "coords" in pde_data:
                 self.coords = {k: np.asarray(v, dtype=float).reshape(-1) for k, v in pde_data["coords"].items()}
-                self.usol = np.real(np.asarray(pde_data["usol"]))
+                self._usol = np.real(np.asarray(pde_data["usol"]))
             else:
                 # legacy dict: x,t,usol
                 self.coords = {
                     "x": np.asarray(pde_data.get("x"), dtype=float).reshape(-1),
                     self.time_var: np.asarray(pde_data.get("t"), dtype=float).reshape(-1),
                 }
-                self.usol = np.real(np.asarray(pde_data.get("usol")))
+                self._usol = np.real(np.asarray(pde_data.get("usol")))
         elif coords is not None and usol is not None:
             self.coords = {k: np.asarray(v, dtype=float).reshape(-1) for k, v in coords.items()}
-            self.usol = np.real(np.asarray(usol))
+            self._usol = np.real(np.asarray(usol))
         elif x is not None and t is not None and usol is not None:
             # legacy direct input
             self.coords = {
                 "x": np.asarray(x, dtype=float).reshape(-1),
                 self.time_var: np.asarray(t, dtype=float).reshape(-1),
             }
-            self.usol = np.real(np.asarray(usol))
+            self._usol = np.real(np.asarray(usol))
         else:
             raise ValueError("Provide either `pde_data`, or (`coords` & `usol`), or (`x`,`t`,`usol`).")
 
-        # ---- Validate coords and usol shape ----
+        # ---- Validate coords ----
         if self.time_var not in self.coords:
             raise ValueError(f"coords must contain time variable '{self.time_var}'")
 
@@ -372,17 +547,63 @@ class PDEDataset(MetaData):
         self._spatial_vars: List[str] = [v for v in self._vars if v != self.time_var]
         self._ordered_vars: List[str] = self._spatial_vars + [self.time_var]
 
-        # require usol dims match coords lengths
-        expected_shape = tuple(len(self.coords[v]) for v in self._ordered_vars)
-        if self.usol.shape != expected_shape:
+        # ---- Normalize _usol to (n_response, *field_shape) ----
+        expected_field_shape = tuple(len(self.coords[v]) for v in self._ordered_vars)
+
+        if self._usol.shape == expected_field_shape:
+            # backward compatible scalar response
+            self._usol = self._usol[np.newaxis, ...]
+        elif self._usol.ndim == len(expected_field_shape) + 1 and self._usol.shape[1:] == expected_field_shape:
+            pass
+        else:
             raise ValueError(
-                f"usol shape {self.usol.shape} does not match coords lengths {expected_shape} "
-                f"for vars {self._ordered_vars} (time last)."
+                f"usol shape {self._usol.shape} does not match coords lengths {expected_field_shape} "
+                f"or (n_response, {expected_field_shape}) for vars {self._ordered_vars} (time last)."
             )
 
-        # legacy aliases
+        self.n_response: int = int(self._usol.shape[0])
+
+        if self.legacy and self.n_response != 1:
+            raise ValueError(f"legacy=True requires n_response==1, got {self.n_response}")
+
+        # legacy alias (public-facing)
         self.u = self.usol
 
+    # -------------------------
+    # Public-facing usol property
+    # -------------------------
+    @property
+    def usol(self) -> np.ndarray:
+        """Public usol. In legacy mode, response dimension is hidden."""
+        return self._usol[0] if self.legacy else self._usol
+
+    @usol.setter
+    def usol(self, value: np.ndarray) -> None:
+        """Set usol; stores internally as _usol with response dim."""
+        arr = np.real(np.asarray(value))
+        expected_field_shape = tuple(len(self.coords[v]) for v in self._ordered_vars)
+
+        if arr.shape == expected_field_shape:
+            arr = arr[np.newaxis, ...]
+        elif arr.ndim == len(expected_field_shape) + 1 and arr.shape[1:] == expected_field_shape:
+            pass
+        else:
+            raise ValueError(
+                f"usol shape {arr.shape} does not match expected {expected_field_shape} "
+                f"or (n_response, {expected_field_shape})."
+            )
+
+        self._usol = arr
+        self.n_response = int(self._usol.shape[0])
+
+        if self.legacy and self.n_response != 1:
+            raise ValueError(f"legacy=True requires n_response==1, got {self.n_response}")
+
+        self.u = self.usol
+
+    # -------------------------
+    # Coords helpers
+    # -------------------------
     @property
     def t(self) -> np.ndarray:
         return self.coords[self.time_var]
@@ -401,13 +622,18 @@ class PDEDataset(MetaData):
     @property
     def vars(self) -> List[str]:
         return list(self._ordered_vars)
-        
-    def get_datapoint(self, *ids: int) -> Tuple[Tuple[float, ...], float]:
-        """
-        - 1D legacy: get_datapoint(x_id, t_id) -> ((x,t), u)
-        - ND: get_datapoint(i1, i2, ..., it) -> ((x1,x2,...,t), u)
 
-        Return shape is: (coords_tuple, u_value)
+    # -------------------------
+    # Core API
+    # -------------------------
+    def get_datapoint(self, *ids: int):
+        """
+        - 1D legacy: get_datapoint(x_id, t_id) -> ((x,t), u_scalar) when legacy=True
+        - ND: get_datapoint(i1, i2, ..., it)
+
+        Return:
+          - legacy=True  -> (coords_tuple, float)
+          - legacy=False -> (coords_tuple, u_vec) where u_vec has shape (n_response,)
         """
         if len(ids) == 1 and isinstance(ids[0], (tuple, list)):
             ids = tuple(ids[0])  # type: ignore
@@ -422,27 +648,43 @@ class PDEDataset(MetaData):
                 raise IndexError(f"Index out of range for '{v}': {ids[k]} not in [0, {n})")
 
         coord_vals = tuple(float(self.coords[v][ids[k]]) for k, v in enumerate(self._ordered_vars))
-        u_val = float(self.usol[ids])
-        return coord_vals, u_val
+
+        if self.legacy:
+            u_val = float(self._usol[(0,) + tuple(ids)])
+            return coord_vals, u_val
+
+        u_vec = self._usol[(slice(None),) + tuple(ids)]  # (n_response,)
+        return coord_vals, np.asarray(u_vec, dtype=float)
 
     def get_data(self) -> Dict[str, Any]:
-        """Backward-compatible: still returns x,t,usol when available; plus coords for ND."""
+        """
+        Backward-compatible:
+          - legacy=True: returns usol without response dim (old shape)
+          - legacy=False: returns usol with response dim
+
+        Always returns coords. Also returns x,t legacy keys when available.
+        """
         data = {"coords": self.coords, "usol": self.usol}
-        # legacy keys for 1D case
         if len(self._spatial_vars) >= 1 and self._spatial_vars[0] == "x":
             data["x"] = self.x
         data["t"] = self.t
+
+        # only expose these when not legacy to avoid surprising old code
+        if not self.legacy:
+            data["n_response"] = self.n_response
+
         return data
 
     def get_size(self) -> Tuple[int, ...]:
-        """ND size: (N_x1, N_x2, ..., N_t). For old code, 1D returns (Nx, Nt)."""
+        """
+        legacy=True  -> (N_x1, ..., N_t)
+        legacy=False -> (n_response, N_x1, ..., N_t)
+        """
         return self.usol.shape
 
     def mesh(self, indexing: str = "ij") -> np.ndarray:
         """
-        ND mesh: returns array of shape (prod(N_dims), n_dims).
-        1D legacy -> (Nx*Nt, 2)
-        2D space -> (Nx*Ny*Nt, 3)
+        ND mesh: returns array of shape (prod(N_dims), n_dims) over coords only.
         """
         grids = np.meshgrid(*(self.coords[v] for v in self._ordered_vars), indexing=indexing)
         flat = [g.reshape(-1) for g in grids]
@@ -462,7 +704,10 @@ class PDEDataset(MetaData):
         """
         Legacy: axis in {'x','t'}.
         ND: axis can be any variable name in coords (e.g. 'x','y','z','t').
-        Uses np.gradient along the corresponding array axis (time is last).
+
+        Returns:
+          - legacy=True  -> same shape as field (no response dim)
+          - legacy=False -> same shape as _usol (with response dim)
         """
         if axis == "t":
             axis = self.time_var
@@ -470,9 +715,9 @@ class PDEDataset(MetaData):
         if axis not in self._ordered_vars:
             raise ValueError(f"Invalid axis '{axis}'. Available: {self._ordered_vars}")
 
-        ax = self._ordered_vars.index(axis)
-        # np.gradient can accept spacing; here we only do basic gradient (same as your original style)
-        return np.gradient(self.usol, axis=ax)
+        ax = 1 + self._ordered_vars.index(axis)   # +1 because _usol has leading response dim
+        grad = np.gradient(self._usol, axis=ax)   # (n_response, ...)
+        return grad[0] if self.legacy else grad
 
     def get_range(
             self,
@@ -482,24 +727,25 @@ class PDEDataset(MetaData):
     ) -> Dict[str, np.ndarray]:
         """
         Backward compatible:
-          - get_range(x_range=(..), t_range=(..)) for 1D
+          - legacy 1D: get_range(x_range=(..), t_range=(..))
         ND:
           - get_range(ranges={'x':(..), 'y':(..), 't':(..)})
+
+        Output:
+          - legacy=True: usol returned without response dim
+          - legacy=False: usol returned with response dim
         """
         if ranges is None:
-            # legacy mode
             if x_range is None or t_range is None:
                 raise ValueError("Provide either `ranges` or both `x_range` and `t_range`.")
             if len(self._spatial_vars) != 1:
                 raise ValueError("Legacy (x_range,t_range) only works for 1D spatial datasets.")
             ranges = {self._spatial_vars[0]: x_range, self.time_var: t_range}
 
-        # build slices
         slicers = []
         out_coords = {}
         for v in self._ordered_vars:
             if v not in ranges:
-                # if not specified, keep full
                 slicers.append(slice(None))
                 out_coords[v] = self.coords[v]
                 continue
@@ -509,52 +755,63 @@ class PDEDataset(MetaData):
             slicers.append(slice(i0, i1))
             out_coords[v] = arr[i0:i1]
 
-        sub_usol = self.usol[tuple(slicers)]
-        result = {"coords": out_coords, "usol": sub_usol}
+        sub = self._usol[(slice(None),) + tuple(slicers)]  # (n_response, ...)
+        sub_out = sub[0] if self.legacy else sub
 
-        # legacy keys for 1D
+        result: Dict[str, Any] = {"coords": out_coords, "usol": sub_out}
+
         if len(self._spatial_vars) == 1:
             result["x"] = out_coords[self._spatial_vars[0]]
             result["t"] = out_coords[self.time_var]
+
+        if not self.legacy:
+            result["n_response"] = self.n_response
 
         return result
 
     def sample(self, n_samples: Union[int, float], method: str = "random") -> Tuple[np.ndarray, np.ndarray]:
         """
-        ND generalization:
-          - returns sampled_points shape (n, n_dims)
-          - returns sampled_usol shape (n, 1)
+        Returns:
+          - sampled_points: (n, n_dims) over coords (no response dim)
+          - sampled_usol:
+              legacy=True  -> (n, 1)
+              legacy=False -> (n, n_response)
 
         Methods:
-          - random: works for any ND
-          - uniform: works for any ND (approx: per-dimension grid)
-          - spline: ONLY supported for legacy 1D (x,t) for now (same behavior as your original)
+          - random, uniform: any ND
+          - spline: only legacy 1D (x,t) and n_response==1
         """
-        shape = self.usol.shape
-        total_points = int(np.prod(shape))
-        n_dims = len(shape)
+        field_shape = self._usol.shape[1:]  # (*dims)
+        total_points = int(np.prod(field_shape))
+        n_dims = len(field_shape)
 
         if isinstance(n_samples, float) and 0 < n_samples < 1:
             n_samples = int(total_points * n_samples)
+
+        n_samples = int(n_samples)
 
         if n_samples > total_points:
             raise ValueError(f"Requested {n_samples} samples, but only {total_points} points available.")
 
         if method == "random":
-            flat_idx = np.random.choice(total_points, int(n_samples), replace=False)
-            multi_idx = np.unravel_index(flat_idx, shape)  # tuple of arrays, length n_dims
+            flat_idx = np.random.choice(total_points, n_samples, replace=False)
+            multi_idx = np.unravel_index(flat_idx, field_shape)  # tuple length n_dims
 
             pts_cols = []
             for dim, v in enumerate(self._ordered_vars):
                 pts_cols.append(self.coords[v][multi_idx[dim]])
             sampled_points = np.stack(pts_cols, axis=1)
-            sampled_usol = self.usol[multi_idx]
 
-            return sampled_points, sampled_usol.reshape(-1, 1)
+            if self.legacy:
+                sampled_u = self._usol[(0,) + multi_idx]          # (n,)
+                sampled_usol = sampled_u.reshape(-1, 1)           # (n,1)
+            else:
+                sampled_u = self._usol[(slice(None),) + multi_idx]  # (n_response, n)
+                sampled_usol = np.moveaxis(sampled_u, 0, 1)          # (n, n_response)
+
+            return sampled_points, sampled_usol
 
         if method == "uniform":
-            # choose grid sizes per dimension so product approx n_samples
-            # simple heuristic: equal root across dims
             per_dim = int(round(n_samples ** (1.0 / n_dims)))
             per_dim = max(per_dim, 1)
 
@@ -570,39 +827,72 @@ class PDEDataset(MetaData):
             for dim, v in enumerate(self._ordered_vars):
                 pts_cols.append(self.coords[v][multi_idx[dim]])
             sampled_points = np.stack(pts_cols, axis=1)
-            sampled_usol = self.usol[multi_idx].reshape(-1, 1)
 
-            # if overshoot, truncate
+            if self.legacy:
+                sampled_u = self._usol[(0,) + multi_idx].reshape(-1, 1)  # (n,1)
+                sampled_usol = sampled_u
+            else:
+                sampled_u = self._usol[(slice(None),) + multi_idx]        # (n_response, n)
+                sampled_usol = np.moveaxis(sampled_u, 0, 1)               # (n, n_response)
+
             if sampled_points.shape[0] > n_samples:
-                sampled_points = sampled_points[: int(n_samples)]
-                sampled_usol = sampled_usol[: int(n_samples)]
+                sampled_points = sampled_points[:n_samples]
+                sampled_usol = sampled_usol[:n_samples]
+
             return sampled_points, sampled_usol
 
         if method == "spline":
-            # Not sure how to generalize spline sampling to ND easily.
-            # For now, only support legacy 1D (x,t) case as before.
-            if len(self._ordered_vars) != 2 or self._spatial_vars[0] != "x":
+            # Keep behavior consistent with old implementation: only 1D (x,t) and single response
+            if len(self._ordered_vars) != 2 or (len(self._spatial_vars) == 0 or self._spatial_vars[0] != "x"):
                 raise ValueError("spline sampling is only supported for 1D (x,t) datasets in this implementation.")
+            if self.n_response != 1:
+                raise ValueError("spline sampling currently only supports n_response=1.")
+            if not self.legacy:
+                # 你也可以允许 non-legacy，但返回 (n,1)/(n, n_response) 的口径容易混乱；这里保持简单
+                raise ValueError("spline sampling is only supported when legacy=True (to keep old behavior).")
+
             grid_size = int(np.sqrt(n_samples))
             x_new = np.linspace(self.x.min(), self.x.max(), grid_size)
             t_new = np.linspace(self.t.min(), self.t.max(), grid_size)
-            spline = interp2d(self.t, self.x, self.usol, kind='cubic')
+
+            spline = interp2d(self.t, self.x, self._usol[0], kind='cubic')
             usol_new = spline(t_new, x_new)
+
             x_samples, t_samples = np.meshgrid(x_new, t_new)
             sampled_points = np.column_stack((x_samples.flatten(), t_samples.flatten()))
-            sampled_usol = usol_new.flatten()
-            return sampled_points, sampled_usol.reshape(-1, 1)
+            sampled_usol = np.asarray(usol_new).reshape(-1, 1)  # (n,1)
+            return sampled_points, sampled_usol
 
         raise ValueError(f"Unsupported sampling method: {method}")
 
     def plot_solution(self) -> None:
         """
-        Generates a heatmap visualization of the solution `usol` over (x, t) dimensions.
+        Heatmap visualization for 1D spatial datasets:
+          - legacy=True: expects usol is 2D (Nx, Nt)
+          - legacy=False: only supported when n_response==1 and usol is (1, Nx, Nt)
         """
-        if self.usol.ndim != 2:
-            raise ValueError("plot_solution is only supported for 1D spatial datasets (2D usol).")
+        if self.legacy:
+            U = self.usol  # (Nx, Nt)
+            if U.ndim != 2:
+                raise ValueError("plot_solution is only supported for 1D spatial datasets (2D usol) in legacy mode.")
+            plt.figure(figsize=(8, 6))
+            plt.imshow(U, aspect='auto', origin='lower',
+                       extent=[self.t.min(), self.t.max(), self.x.min(), self.x.max()])
+            plt.colorbar(label='Solution u(x, t)')
+            plt.xlabel('Time (t)')
+            plt.ylabel('Space (x)')
+            plt.title(f"Solution of {self.equation_name}")
+            plt.show()
+            return
+
+        # non-legacy
+        if self.n_response != 1:
+            raise ValueError("plot_solution only supports n_response=1 when legacy=False.")
+        if self._usol.ndim != 3:
+            raise ValueError("plot_solution is only supported for 1D spatial datasets (usol shape (1, Nx, Nt)).")
+
         plt.figure(figsize=(8, 6))
-        plt.imshow(self.usol, aspect='auto', origin='lower',
+        plt.imshow(self._usol[0], aspect='auto', origin='lower',
                    extent=[self.t.min(), self.t.max(), self.x.min(), self.x.max()])
         plt.colorbar(label='Solution u(x, t)')
         plt.xlabel('Time (t)')
@@ -611,9 +901,324 @@ class PDEDataset(MetaData):
         plt.show()
 
     def __repr__(self) -> str:
-        """ Returns a string representation of the dataset. """
-        return (f"PDEDataset(equation='{self.equation_name}', size={self.get_size()}, "
+        return (f"GridPDEDataset(equation='{self.equation_name}', legacy={self.legacy}, "
+                f"n_response={self.n_response}, size={self.get_size()}, "
                 f"boundaries={self.get_boundaries()})")
+
+
+class ScatterPDEDataset(MetaData):
+    """
+    Scatter (unstructured) PDE dataset.
+
+    Internal representation:
+      - points: (N, d) spatial coordinates (scattered)
+      - t:      (T,) time coordinates
+      - usol:   (N, T) or (N, T, n_state)
+
+    Notes:
+      - Unlike GridPDEDataset, scattered points do NOT form separable coordinate axes.
+      - Therefore, no `coords` dict of per-axis 1D arrays is used.
+    """
+
+    def __init__(
+        self,
+        equation_name: str,
+        points: np.ndarray,
+        t: np.ndarray,
+        usol: np.ndarray,
+        *,
+        domain: Optional[Dict[str, Tuple[float, float]]] = None,
+        epi: float = 0.0,
+        descr: Optional["DatasetInfo"] = None,
+        spatial_vars: Optional[List[str]] = None,   # e.g. ["x","y"] or ["x","y","z"]
+        time_var: str = "t",
+        point_ids: Optional[np.ndarray] = None,     # optional IDs, shape (N,)
+    ):
+        super().__init__(equation_name)
+
+        self.equation_name = equation_name
+        self.domain = domain
+        self.epi = float(epi)
+        self.descr = descr
+
+        self.time_var = str(time_var)
+        self._spatial_vars = list(spatial_vars) if spatial_vars is not None else None
+
+        self.points = np.asarray(points, dtype=float)
+        self._t = np.asarray(t, dtype=float).reshape(-1)
+        self.usol = np.real(np.asarray(usol))
+
+        self.point_ids = None if point_ids is None else np.asarray(point_ids)
+
+        # ---- Validate shapes ----
+        if self.points.ndim != 2:
+            raise ValueError(f"`points` must be 2D array of shape (N, d). Got {self.points.shape}")
+
+        N, d = self.points.shape
+        T = len(self._t)
+
+        if self.usol.ndim == 2:
+            expected = (N, T)
+            if self.usol.shape != expected:
+                raise ValueError(f"`usol` shape {self.usol.shape} != {expected} for (N,T)")
+            self._n_state = 1
+        elif self.usol.ndim == 3:
+            expected = (N, T, self.usol.shape[2])
+            if self.usol.shape[0] != N or self.usol.shape[1] != T:
+                raise ValueError(
+                    f"`usol` first two dims must be (N,T)=({N},{T}), got {self.usol.shape}"
+                )
+            self._n_state = int(self.usol.shape[2])
+        else:
+            raise ValueError("`usol` must be 2D (N,T) or 3D (N,T,n_state).")
+
+        if self.point_ids is not None:
+            if self.point_ids.shape != (N,):
+                raise ValueError(f"`point_ids` must have shape (N,), got {self.point_ids.shape}")
+
+        # stable variable names
+        if self._spatial_vars is None:
+            # default names: x0, x1, ...
+            self._spatial_vars = [f"x{j}" for j in range(d)]
+        else:
+            if len(self._spatial_vars) != d:
+                raise ValueError(
+                    f"`spatial_vars` length {len(self._spatial_vars)} must match points dim d={d}"
+                )
+
+        # legacy-ish alias (与你 GridPDEDataset 保持一致的字段名习惯)
+        self.u = self.usol
+
+    # -----------------
+    # Properties
+    # -----------------
+    @property
+    def t(self) -> np.ndarray:
+        return self._t
+
+    @property
+    def spatial_dim(self) -> int:
+        return int(self.points.shape[1])
+
+    @property
+    def n_points(self) -> int:
+        return int(self.points.shape[0])
+
+    @property
+    def n_times(self) -> int:
+        return int(self._t.shape[0])
+
+    @property
+    def n_state(self) -> int:
+        return int(self._n_state)
+
+    @property
+    def spatial_vars(self) -> List[str]:
+        return list(self._spatial_vars)
+
+    @property
+    def vars(self) -> List[str]:
+        # 在散点场景里，“vars”更多是语义标签，而不是可 mesh 的坐标轴
+        return self.spatial_vars + [self.time_var]
+
+    # -----------------
+    # Core accessors
+    # -----------------
+    def get_datapoint(self, point_id: int, t_id: int, state: int = 0) -> Tuple[Tuple[float, ...], float]:
+        """
+        Returns:
+          - coords_tuple: (x1, x2, ..., xd, t)
+          - u_value: float
+        """
+        if not (0 <= point_id < self.n_points):
+            raise IndexError(f"point_id out of range: {point_id} not in [0,{self.n_points})")
+        if not (0 <= t_id < self.n_times):
+            raise IndexError(f"t_id out of range: {t_id} not in [0,{self.n_times})")
+        if not (0 <= state < self.n_state):
+            raise IndexError(f"state out of range: {state} not in [0,{self.n_state})")
+
+        coords = tuple(float(v) for v in self.points[point_id]) + (float(self._t[t_id]),)
+
+        if self.usol.ndim == 2:
+            u_val = float(self.usol[point_id, t_id])
+        else:
+            u_val = float(self.usol[point_id, t_id, state])
+
+        return coords, u_val
+
+    def get_data(self) -> Dict[str, Any]:
+        """
+        New-style scattered data dict.
+        """
+        return {
+            "points": self.points,          # (N, d)
+            "t": self._t,                   # (T,)
+            "usol": self.usol,              # (N, T) or (N,T,n_state)
+            "spatial_vars": self.spatial_vars,
+            "time_var": self.time_var,
+            "point_ids": self.point_ids,
+        }
+
+    def get_size(self) -> Tuple[int, ...]:
+        """
+        Returns (N, T) or (N, T, n_state).
+        """
+        return tuple(self.usol.shape)
+
+    # -----------------
+    # Geometry helpers
+    # -----------------
+    def mesh(self) -> np.ndarray:
+        """
+        Returns all (x..., t) pairs as a flat table:
+          shape: (N*T, d+1)
+
+        Order: time-major within each point:
+          rows for point 0 across all t, then point 1, ...
+        """
+        N, d = self.points.shape
+        T = self.n_times
+
+        X_rep = np.repeat(self.points, repeats=T, axis=0)          # (N*T, d)
+        t_tile = np.tile(self._t, reps=N).reshape(-1, 1)           # (N*T, 1)
+        return np.hstack([X_rep, t_tile])
+
+    def mesh_bounds(self) -> Tuple[np.ndarray, np.ndarray]:
+        m = self.mesh()
+        return m.min(axis=0), m.max(axis=0)
+
+    def get_boundaries(self) -> Dict[str, Tuple[float, float]]:
+        """
+        Returns bounding box for each spatial variable + time.
+        """
+        bounds: Dict[str, Tuple[float, float]] = {}
+        for j, name in enumerate(self._spatial_vars):
+            col = self.points[:, j]
+            bounds[name] = (float(col.min()), float(col.max()))
+        bounds[self.time_var] = (float(self._t.min()), float(self._t.max()))
+        return bounds
+
+    def get_domain(self) -> Optional[Dict[str, Tuple[float, float]]]:
+        return self.domain
+
+    # -----------------
+    # Derivatives(To be Implemented)
+    # -----------------
+    def get_derivative(self, axis: str = "t", state: int = 0) -> np.ndarray:
+        raise NotImplementedError("get_derivative not implemented for ScatterPDEDataset.")
+
+    # -----------------
+    # Subsetting & sampling
+    # -----------------
+    def get_range(
+        self,
+        *,
+        spatial_ranges: Optional[Dict[str, Tuple[float, float]]] = None,
+        t_range: Optional[Tuple[float, float]] = None,
+    ) -> Dict[str, Any]:
+        """
+        Subset by spatial bounding box + time interval.
+
+        spatial_ranges example:
+          {"x": (0,1), "y": (-1,1)}  or {"x0":(...), "x1":(...)} depending on spatial_vars
+
+        Returns a dict (not a new dataset instance) for flexibility.
+        """
+        N, d = self.points.shape
+
+        # spatial mask
+        mask = np.ones(N, dtype=bool)
+        if spatial_ranges is not None:
+            for name, (lo, hi) in spatial_ranges.items():
+                if name not in self._spatial_vars:
+                    raise ValueError(f"Unknown spatial var '{name}'. Available: {self._spatial_vars}")
+                j = self._spatial_vars.index(name)
+                col = self.points[:, j]
+                mask &= (col >= lo) & (col <= hi)
+
+        sub_points = self.points[mask]
+        sub_point_ids = None if self.point_ids is None else self.point_ids[mask]
+
+        # time mask
+        tmask = np.ones(self.n_times, dtype=bool)
+        if t_range is not None:
+            lo, hi = t_range
+            tmask = (self._t >= lo) & (self._t <= hi)
+
+        sub_t = self._t[tmask]
+
+        if self.usol.ndim == 2:
+            sub_usol = self.usol[mask][:, tmask]
+        else:
+            sub_usol = self.usol[mask][:, tmask, :]
+
+        return {
+            "points": sub_points,
+            "t": sub_t,
+            "usol": sub_usol,
+            "spatial_vars": self.spatial_vars,
+            "time_var": self.time_var,
+            "point_ids": sub_point_ids,
+        }
+
+    def sample(
+        self,
+        n_samples: Union[int, float],
+        *,
+        method: str = "random",
+        state: int = 0,
+        seed: Optional[int] = None,
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        Returns:
+          - sampled_points: (n, d+1) columns are [x..., t]
+          - sampled_usol:   (n, 1)
+
+        Sampling happens over the joint set of all (point, time) pairs.
+        """
+        if method != "random":
+            raise ValueError(f"Unsupported sampling method: {method} (only 'random' supported).")
+
+        if not (0 <= state < self.n_state):
+            raise IndexError(f"state out of range: {state} not in [0,{self.n_state})")
+
+        rng = np.random.default_rng(seed)
+
+        N = self.n_points
+        T = self.n_times
+        total = N * T
+
+        if isinstance(n_samples, float):
+            if not (0 < n_samples < 1):
+                raise ValueError("If n_samples is float, it must be in (0,1).")
+            n = int(round(total * n_samples))
+        else:
+            n = int(n_samples)
+
+        if n <= 0:
+            raise ValueError("n_samples must be positive.")
+        if n > total:
+            raise ValueError(f"Requested {n} samples, but only {total} (point,time) pairs exist.")
+
+        flat_idx = rng.choice(total, size=n, replace=False)
+        p_idx = flat_idx // T
+        t_idx = flat_idx % T
+
+        sampled_xt = np.hstack([self.points[p_idx], self._t[t_idx].reshape(-1, 1)])
+
+        if self.usol.ndim == 2:
+            y = self.usol[p_idx, t_idx]
+        else:
+            y = self.usol[p_idx, t_idx, state]
+
+        return sampled_xt, y.reshape(-1, 1)
+
+    def __repr__(self) -> str:
+        return (
+            f"ScatterPDEDataset(equation='{self.equation_name}', "
+            f"points={self.points.shape}, t={self._t.shape}, usol={self.usol.shape}, "
+            f"boundaries={self.get_boundaries()})"
+        )
     
 class SymbolicRegressionDataset(MetaData):
     """
@@ -907,7 +1512,7 @@ def load_burgers_equation():
 
     file_path = resources.files(DATA_MODULE) / "burgers2.mat"
     pde_data = load_mat_file(file_path)
-    return PDEDataset(
+    return GridPDEDataset(
         equation_name = 'burgers equation',
         descr = descr,
         pde_data = pde_data,
@@ -929,7 +1534,7 @@ def load_kdv_equation():
     file_path = resources.files(DATA_MODULE) / "KdV_equation.mat"
     pde_data = load_mat_file(file_path)
 
-    return PDEDataset(
+    return GridPDEDataset(
         equation_name = 'kdv equation',
         descr = descr,
         pde_data = None,
@@ -937,7 +1542,8 @@ def load_kdv_equation():
         t = pde_data['tt'],
         usol = pde_data['uu'],
         domain = {'x': (-16, 16), 't': (5, 35)},
-        epi = 1e-3
+        epi = 1e-3,
+        legacy=True
     )
 
 
@@ -966,7 +1572,7 @@ def load_pde_dataset(
         data_dir_module (str, optional): 存储数据文件的模块路径。默认为 "kd.dataset.data"。
 
     Returns:
-        一个功能完备的 PDEDataset 对象，可被所有 KD 模型使用。
+        一个功能完备的 GridPDEDataset 对象，可被所有 KD 模型使用。
     """
     try:
         # 1. 自动构建文件的完整路径
@@ -984,15 +1590,16 @@ def load_pde_dataset(
         if u_data.shape == (len(t_data), len(x_data)):
             u_data = u_data.T
 
-        # 4. 将所有信息送入 PDEDataset 进行标准化封装
-        dataset = PDEDataset(
+        # 4. 将所有信息送入 GridPDEDataset 进行标准化封装
+        dataset = GridPDEDataset(
             equation_name=equation_name,
             pde_data=None, 
             x=x_data,
             t=t_data,
             usol=u_data,
             domain=domain, 
-            epi=epi
+            epi=epi,
+            legacy=True
         )
         print(f"成功加载数据集: {equation_name}，文件: {filename}")
         return dataset

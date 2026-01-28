@@ -87,7 +87,7 @@ def plot_evolution(model, figsize=(10, 6)):
 
         ax.set_xlabel('Iteration Count')
         ax.set_ylabel('Reward Value')
-        ax.grid(True, linestyle='--', alpha=0.5)
+        ax.grids(True, linestyle='--', alpha=0.5)
         ax.legend(loc='best', frameon=False)
 
         plt.show()

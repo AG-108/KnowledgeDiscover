@@ -7,11 +7,11 @@ current_dir = os.path.dirname(os.path.abspath(__file__))
 kd_main_dir = os.path.abspath(os.path.join(current_dir, ".."))
 sys.path.append(kd_main_dir)
 
-from kd.dataset import load_pde
+from kd.dataset import load_pde_grid
 from kd.model.kd_dscv import KD_DSCV_SPR
 
 # 1. 加载数据集（示例使用 Burgers 方程）
-pde_dataset = load_pde('burgers')
+pde_dataset = load_pde_grid('burgers')
 
 # 2. 初始化 R-DISCOVER (Mode2) 模型
 model = KD_DSCV_SPR(
@@ -21,7 +21,7 @@ model = KD_DSCV_SPR(
     unary_operators=['n2_t'],
 )
 
-# 3. 使用新入口导入 PDEDataset。显式设置 random_state 以保证可重复
+# 3. 使用新入口导入 GridPDEDataset。显式设置 random_state 以保证可重复
 model.import_dataset(
     pde_dataset,
     sample_ratio=0.05,

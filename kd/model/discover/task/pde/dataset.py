@@ -116,18 +116,18 @@ def load_1d_data(dataset,
         x = np.real(data['x'].flatten()[:,None])
         Exact = np.real(data['usol']).T  # t first
     elif dataset == 'KS':
-        data = scipy.io.loadmat(_resolve_file('kuramoto_sivishinky.mat', './dso/task/pde/data')) # course temporal grid 
+        data = scipy.io.loadmat(_resolve_file('kuramoto_sivishinky.mat', './dso/task/pde/data')) # course temporal grids
         t = np.real(data['t'].flatten()[:,None])
         x = np.real(data['x'].flatten()[:,None])
         Exact = np.real(data['u']).T
         
     elif dataset == 'KS_sine': 
-        data = scipy.io.loadmat(_resolve_file('KS_Sine.mat', './dso/task/pde/data')) # course temporal grid    
+        data = scipy.io.loadmat(_resolve_file('KS_Sine.mat', './dso/task/pde/data')) # course temporal grids
         t = np.real(data['t'].flatten()[:,None])
         x = np.real(data['x'].flatten()[:,None])
         Exact = np.real(data['usol']).T
     elif dataset == 'KS2':
-        data = scipy.io.loadmat(_resolve_file('KS.mat', './dso/task/pde/data')) # course temporal grid    
+        data = scipy.io.loadmat(_resolve_file('KS.mat', './dso/task/pde/data')) # course temporal grids
         t = np.real(data['t'].flatten()[:,None])
         x = np.real(data['x'].flatten()[:,None])
         Exact = np.real(data['usol']).T
@@ -354,7 +354,7 @@ def load_2d2U_data(dataset,
         # sym_true = 'add,add,Diff2,u1,x1,Diff2,u1,x2,sub,u1,n3,u1'
 
     elif "rd" == dataset: 
-        data = scipy.io.loadmat('./dso/task/pde/data/reaction_diffusion_standard.mat') # grid 256*256*201
+        data = scipy.io.loadmat('./dso/task/pde/data/reaction_diffusion_standard.mat') # grids 256*256*201
             
         t = np.real(data['t'].flatten()[:,None])
         x = np.real(data['x'].flatten()[:,None])

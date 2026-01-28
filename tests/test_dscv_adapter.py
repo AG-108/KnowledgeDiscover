@@ -7,14 +7,14 @@ import pytest
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from kd.model.discover.task.pde.utils_fd import FiniteDiff
-from kd.dataset import get_dataset_sym_true, load_pde
+from kd.dataset import get_dataset_sym_true, load_pde_grid
 from kd.model.discover.adapter import DSCVRegularAdapter, DSCVSparseAdapter
 from kd.model.kd_dscv import KD_DSCV, KD_DSCV_SPR
 from kd.model.discover.searcher import Searcher
 
 
 def test_dscv_regular_adapter_generates_expected_fields():
-    dataset = load_pde('chafee-infante')
+    dataset = load_pde_grid('chafee-infante')
 
     adapter = DSCVRegularAdapter(dataset)
     data = adapter.get_data()
@@ -38,7 +38,7 @@ def test_dscv_regular_adapter_generates_expected_fields():
 
 
 def test_kd_dscv_import_dataset(monkeypatch):
-    dataset = load_pde('chafee-infante')
+    dataset = load_pde_grid('chafee-infante')
     model = KD_DSCV(n_iterations=1, n_samples_per_batch=10)
 
     calls = {}
@@ -58,7 +58,7 @@ def test_kd_dscv_import_dataset(monkeypatch):
 
 
 def test_dscv_sparse_adapter_shapes():
-    dataset = load_pde('burgers')
+    dataset = load_pde_grid('burgers')
 
     colloc_num = 512
     adapter = DSCVSparseAdapter(
@@ -81,7 +81,7 @@ def test_dscv_sparse_adapter_shapes():
 
 
 def test_kd_dscv_spr_import_dataset(monkeypatch):
-    dataset = load_pde('burgers')
+    dataset = load_pde_grid('burgers')
     model = KD_DSCV_SPR(n_iterations=1, n_samples_per_batch=10)
 
     calls = {}
@@ -102,7 +102,7 @@ def test_kd_dscv_spr_import_dataset(monkeypatch):
 
 
 def test_kd_dscv_train_smoke(monkeypatch):
-    dataset = load_pde('chafee-infante')
+    dataset = load_pde_grid('chafee-infante')
 
     model = KD_DSCV(n_iterations=1, n_samples_per_batch=10)
 
@@ -124,7 +124,7 @@ def test_kd_dscv_train_smoke(monkeypatch):
 
 
 def test_kd_dscv_spr_train_smoke(monkeypatch):
-    dataset = load_pde('burgers')
+    dataset = load_pde_grid('burgers')
 
     model = KD_DSCV_SPR(n_iterations=1, n_samples_per_batch=10)
 

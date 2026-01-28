@@ -2,10 +2,13 @@
 # - 面向对象封装一个 PDEFindModel 类
 #
 # 说明：
-# - 这里通过 PDEDataset.get_data() 获取 x, t, usol，并将其转换为 PySINDy 期望的格式
+# - 这里通过 GridPDEDataset.get_data() 获取 x, t, usol，并将其转换为 PySINDy 期望的格式
 # - 对于 PDE-FIND，我们拟合 u_t = Θ(u, u_x, u_xx, ...) ξ，因此不做“点值预测”，而是打印识别出的 PDE 结构
 # - predict 方法这里提供一个“时间外推”的简单接口：在已知 u(x, t0) 的情况下，用识别到的 PDE 做一步前向欧拉更新得到 u(x, t0+Δt)（示意）
 #   注意：这只是示例用途，真实场景请用更稳定的时间积分（如 RK4），或用 PySINDy 的 simulate 等方法
+# 目前这个实现只能支持处理1维数据
+# TODO：支持多维数据
+# 理论上来说散点也能做，但是很麻烦，后面再处理
 
 from typing import Any, Dict, Optional
 import numpy as np
@@ -16,7 +19,7 @@ class PDEFindModel:
     """
     使用 PySINDy 的 PDELibrary + STLSQ（STRidge风格）来进行 PDE-FIND（Algorithm 1）的面向对象封装。
     接口：
-      - fit(dataset): 从 PDEDataset 中读取 x, t, usol，构造候选库并拟合
+      - fit(dataset): 从 GridPDEDataset 中读取 x, t, usol，构造候选库并拟合
       - print_model(): 打印识别到的 PDE
       - predict(U0, dt): 给定某一时刻的空间场 U0(x)，做一次前向欧拉时间推进
     :param derivative_order: 包含到几阶空间导数（默认二阶：支持扩散）
@@ -53,7 +56,7 @@ class PDEFindModel:
 
     def fit(self, dataset: Any) -> None:
         """
-        从 PDEDataset 中读取数据并拟合 PDE。
+        从 GridPDEDataset 中读取数据并拟合 PDE。
         要求 dataset.get_data() 返回包含 'x', 't', 'usol' 的字典。
         """
         data: Dict[str, Any] = dataset.get_data()
@@ -126,7 +129,7 @@ class PDEFindModel:
         if self._model is None:
             raise RuntimeError("Model not fitted. Call fit() first.")
         if self._x is None:
-            raise RuntimeError("No spatial grid stored.")
+            raise RuntimeError("No spatial grids stored.")
         U0 = np.asarray(U0, dtype=float).flatten()
         nx = len(self._x)
         if U0.shape != (nx,):

@@ -6,7 +6,7 @@ import pytest
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from kd.dataset import load_pde
+from kd.dataset import load_pde_grid
 from kd.model.kd_sga import KD_SGA
 
 
@@ -26,7 +26,7 @@ class DummySolver:
 
 
 def test_fit_dataset_uses_adapter():
-    dataset = load_pde('chafee-infante')
+    dataset = load_pde_grid('chafee-infante')
 
     model = KD_SGA(sga_run=1, depth=1, width=1)
     result = model.fit_dataset(

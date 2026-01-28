@@ -1,4 +1,4 @@
-"""Adapters bridging `PDEDataset` with the SGA solver stack."""
+"""Adapters bridging `GridPDEDataset` with the SGA solver stack."""
 
 from __future__ import annotations
 
@@ -8,22 +8,22 @@ from typing import Dict, Any, TYPE_CHECKING
 import numpy as np
 
 if TYPE_CHECKING:  # pragma: no cover - purely for type checking
-    from kd.dataset import PDEDataset
+    from kd.dataset import GridPDEDataset
 
 
 @dataclass
 class SGADataAdapter:
-    """Translate a :class:`~kd.dataset.PDEDataset` into SolverConfig kwargs."""
+    """Translate a :class:`~kd.dataset.GridPDEDataset` into SolverConfig kwargs."""
 
-    dataset: "PDEDataset"
+    dataset: "GridPDEDataset"
 
     def to_solver_kwargs(self) -> Dict[str, Any]:
         """Return keyword arguments that prime ``SolverConfig`` for in-memory data."""
         # Delayed import keeps the dependency optional at runtime.
-        from kd.dataset import PDEDataset  # pylint: disable=import-error, cyclic-import
+        from kd.dataset import GridPDEDataset  # pylint: disable=import-error, cyclic-import
 
-        if not isinstance(self.dataset, PDEDataset):
-            raise TypeError("SGADataAdapter expects a PDEDataset instance")
+        if not isinstance(self.dataset, GridPDEDataset):
+            raise TypeError("SGADataAdapter expects a GridPDEDataset instance")
 
         x = np.asarray(self.dataset.x, dtype=float).flatten()
         t = np.asarray(self.dataset.t, dtype=float).flatten()

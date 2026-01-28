@@ -7,11 +7,11 @@ import numpy as np
 import pytest
 
 from kd.dataset import (
-    PDEDataset,
+    GridPDEDataset,
     get_dataset_info,
     get_dataset_sym_true,
     list_available_datasets,
-    load_pde,
+    load_pde_grid,
 )
 
 
@@ -28,8 +28,8 @@ def test_get_dataset_info_unknown_raises():
 
 
 def test_load_pde_chafee_infante_uses_npy_bundle():
-    dataset = load_pde('chafee-infante')
-    assert isinstance(dataset, PDEDataset)
+    dataset = load_pde_grid('chafee-infante')
+    assert isinstance(dataset, GridPDEDataset)
 
     data = dataset.get_data()
     assert data['usol'].ndim == 2
@@ -38,7 +38,7 @@ def test_load_pde_chafee_infante_uses_npy_bundle():
 
 
 def test_load_pde_divide_single_npy_builds_domain():
-    dataset = load_pde('PDE_divide')
+    dataset = load_pde_grid('PDE_divide')
     info = get_dataset_info('PDE_divide')
 
     assert dataset.usol.shape == info['shape']
@@ -51,6 +51,6 @@ def test_load_pde_divide_single_npy_builds_domain():
 def test_load_pde_fisher_mat_file():
     pytest.importorskip('scipy')
 
-    dataset = load_pde('fisher')
+    dataset = load_pde_grid('fisher')
     assert dataset.usol.shape == (len(dataset.x), len(dataset.t))
     assert get_dataset_sym_true('fisher') is not None

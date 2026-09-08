@@ -1,3 +1,10 @@
+import os
+import sys
+
+from _common import bootstrap_project_root
+
+project_root = bootstrap_project_root()
+
 import numpy as np
 from kd.model.kd_pdefind import PDEFindModel
 from kd.dataset import GridPDEDataset, load_kdv_equation

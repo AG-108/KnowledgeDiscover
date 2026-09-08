@@ -210,6 +210,7 @@ def make_task(task_type, **config_task):
     if task_type == "pde":
         from discover.task.pde.pde import PDETask
         task_class = PDETask
+
     elif task_type == "pde_pinn":
         from discover.task.pde.pde_pinn import PDEPINNTask
         task_class=PDEPINNTask
@@ -217,6 +218,10 @@ def make_task(task_type, **config_task):
     elif task_type == "pde_subgrid":
         from discover.task.pde.multi_task import PDESubgridTask
         task_class=PDESubgridTask
+
+    elif task_type == "symbolic_regression":
+        from discover.task.regression.symbolic_regression import SymbolicRegressionTask
+        task_class = SymbolicRegressionTask
     else:
         # Custom task import
         task_class = import_custom_source(task_type)

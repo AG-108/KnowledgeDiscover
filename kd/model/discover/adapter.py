@@ -36,6 +36,13 @@ class DSCVRegularAdapter:
         t = np.asarray(dataset.t, dtype=float)
         u = np.asarray(dataset.usol, dtype=float)
 
+        if u.ndim == 3 and u.shape[0] == 1:
+            u = u[0]
+        elif u.ndim == 3 and u.shape[-1] == 1:
+            u = u[..., 0]
+        if u.shape == (t.shape[0], x.shape[0]):
+            u = u.T
+
         if u.shape != (x.shape[0], t.shape[0]):
             raise ValueError(
                 "GridPDEDataset usol shape {} does not match len(x)={} and len(t)={}".format(
@@ -110,6 +117,13 @@ class DSCVSparseAdapter:
         x = np.asarray(dataset.x, dtype=float)
         t = np.asarray(dataset.t, dtype=float)
         u = np.asarray(dataset.usol, dtype=float)
+
+        if u.ndim == 3 and u.shape[0] == 1:
+            u = u[0]
+        elif u.ndim == 3 and u.shape[-1] == 1:
+            u = u[..., 0]
+        if u.shape == (t.shape[0], x.shape[0]):
+            u = u.T
 
         if u.shape != (x.shape[0], t.shape[0]):
             raise ValueError(

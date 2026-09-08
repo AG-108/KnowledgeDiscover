@@ -19,9 +19,6 @@ class MetaMetricsConfig:
         self.name = name
         self.dtype = dtype
 
-from abc import ABC, abstractmethod
-from typing import Any, Dict, Iterable, Optional, Tuple, Union
-
 Number = Union[int, float]
 ArrayLike = Any  # 实际可为 numpy.ndarray / torch.Tensor / list 等
 
@@ -29,7 +26,6 @@ class MetaMetrics(ABC):
     """
     预测性能评估抽象基类。
 
-    复制
     典型用法：
     - 批量：metrics(y_true, y_pred, sample_weight=...)
     - 流式：metrics.update(y_true_batch, y_pred_batch); ... ; value = metrics.compute()
@@ -99,13 +95,11 @@ class MetaMetrics(ABC):
         if y_true is None or y_pred is None:
             raise MetaMetricsError("y_true 和 y_pred 不能为空。")
 
-        # 允许 numpy / torch / list，尽量只做轻量检查
-        # 尝试获取长度
+        # 允许 numpy / torch / list，尽量只做轻量检查。
+        # 注意：y_true/y_pred 的长度一致性校验故意不在这里做——例如回归中
+        # y_true.shape=[N] 而 y_pred.shape=[N, 1] 这类可广播的情况因任务而异，
+        # 交给子类的 _update_impl 自行处理更合适。
         n_true = _safe_len(y_true)
-        n_pred = _safe_len(y_pred)
-        if n_true is not None and n_pred is not None and n_true != n_pred:
-            # 允许二维对齐（如回归 y_true shape [N] vs y_pred shape [N, 1]），放到子类里更合适。
-            pass
 
         if sample_weight is not None:
             n_w = _safe_len(sample_weight)
@@ -114,7 +108,6 @@ class MetaMetrics(ABC):
 
         # convert y_true and y_pred to self.config.dtype
         if self.config.dtype is not None:
-            import numpy as np
             y_true = np.asarray(y_true, dtype=self.config.dtype)
             y_pred = np.asarray(y_pred, dtype=self.config.dtype)
             if sample_weight is not None:
@@ -127,19 +120,42 @@ def _safe_len(x: Any) -> Optional[int]:
     except Exception:
         return None
 
-VanillaMetricsConfig = MetaMetricsConfig(
-    greater_is_better=False,
-    name="VanillaMetrics",
-    dtype="float64"
-)
+def _accumulate_squared_error(
+    y_true: ArrayLike,
+    y_pred: ArrayLike,
+    sample_weight: Optional[ArrayLike],
+) -> Tuple[float, float]:
+    """Shared building block for MSE and the information-criterion metrics
+    below: reduce one batch to (sum of weighted squared errors, sum of
+    weights), so callers only need to accumulate two running scalars.
+    """
+    y_true = np.asarray(y_true).flatten()
+    y_pred = np.asarray(y_pred).flatten()
+
+    if sample_weight is not None:
+        sample_weight = np.asarray(sample_weight).flatten()
+        if len(sample_weight) != len(y_true):
+            raise MetaMetricsError("sample_weight 长度需与 y_true 对齐。")
+    else:
+        sample_weight = np.ones_like(y_true)
+
+    squared_errors = (y_true - y_pred) ** 2
+    weighted_errors = squared_errors * sample_weight
+
+    return np.sum(weighted_errors), np.sum(sample_weight)
+
 
 class MSE(MetaMetrics):
-    def __init(self, config: Optional[MetaMetricsConfig] = VanillaMetricsConfig):
-        super().__init__(config)
+    """Mean squared error. Reference implementation for how to add a new metric:
+    subclass MetaMetrics and fill in _reset_impl / _update_impl / _compute_impl.
+    """
+
+    def __init__(self, config: Optional[MetaMetricsConfig] = None):
+        super().__init__(config or MetaMetricsConfig(greater_is_better=False, name="MSE", dtype="float64"))
 
     def _reset_impl(self) -> None:
         self._sum_squared_error = 0.0
-        self._count = 0
+        self._count = 0.0
 
     def _compute_impl(self) -> float:
         if self._count == 0:
@@ -147,29 +163,119 @@ class MSE(MetaMetrics):
         return self._sum_squared_error / self._count
 
     def _update_impl(self, y_true: ArrayLike, y_pred: ArrayLike, sample_weight: Optional[ArrayLike], **kwargs) -> None:
-        # 简单均方误差示例
-        import numpy as np
+        sse, w = _accumulate_squared_error(y_true, y_pred, sample_weight)
+        self._sum_squared_error += sse
+        self._count += w
 
-        y_true = np.asarray(y_true).flatten()
-        y_pred = np.asarray(y_pred).flatten()
 
-        if sample_weight is not None:
-            sample_weight = np.asarray(sample_weight).flatten()
-            if len(sample_weight) != len(y_true):
-                raise MetaMetricsError("sample_weight 长度需与 y_true 对齐。")
-        else:
-            sample_weight = np.ones_like(y_true)
+class _InformationCriterionBase(MetaMetrics):
+    """Shared base for AIC / BIC / ParsimonyInformationCriterion.
 
-        squared_errors = (y_true - y_pred) ** 2
-        weighted_errors = squared_errors * sample_weight
+    All three score a *fitted model* (not just raw predictions): they need
+    the model's residual fit (mean squared error over the data) plus one or
+    more terms that describe the model's own complexity. The fit part is
+    identical across all three and accumulates the same way MSE does, so it
+    lives here; each subclass only implements the complexity-penalty side of
+    its formula in `_compute_impl`.
 
-        self._sum_squared_error += np.sum(weighted_errors)
-        self._count += np.sum(sample_weight)
+    Complexity-related inputs (e.g. `num_params`, `complexity`,
+    `physics_penalty`) describe the candidate model being scored, not a
+    particular data batch, so they are fixed at construction time rather
+    than passed to `update()`.
 
-class AIC(MetaMetrics):
-    def __init__(self, num_params: int, likelyhood = None, config: Optional[MetaMetricsConfig] = None):
+    This class deliberately still leaves `_compute_impl` abstract, so it
+    cannot be instantiated directly -- only its subclasses can.
+    """
+
+    def _reset_impl(self) -> None:
+        self._sum_squared_error = 0.0
+        self._count = 0.0
+
+    def _update_impl(self, y_true: ArrayLike, y_pred: ArrayLike, sample_weight: Optional[ArrayLike], **kwargs) -> None:
+        sse, w = _accumulate_squared_error(y_true, y_pred, sample_weight)
+        self._sum_squared_error += sse
+        self._count += w
+
+    def _mse_and_n(self) -> Tuple[float, float]:
+        if self._count == 0:
+            raise MetaMetricsError("没有数据可计算指标，请先调用 update()。")
+        return self._sum_squared_error / self._count, self._count
+
+
+class AIC(_InformationCriterionBase):
+    """Akaike Information Criterion.
+
+    AIC = n * ln(MSE) + 2k
+
+    This is the usual Gaussian-likelihood AIC = n*ln(RSS/n) + 2k rewritten
+    with MSE = RSS/n. `num_params` (k) is the number of free parameters of
+    the model being scored (e.g. the number of nonzero coefficients in a
+    discovered equation) and is fixed for the lifetime of the metric
+    instance -- pass a new instance to score a different candidate model.
+    Lower is better.
+    """
+
+    def __init__(self, num_params: int, config: Optional[MetaMetricsConfig] = None):
         super().__init__(config or MetaMetricsConfig(greater_is_better=False, name="AIC", dtype="float64"))
         self.num_params = num_params
-        self.likelyhood = likelyhood
-        raise NotImplementedError("AIC指标尚未实现")
+
+    def _compute_impl(self) -> float:
+        mse, n = self._mse_and_n()
+        return float(n * np.log(mse) + 2 * self.num_params)
+
+
+class BIC(_InformationCriterionBase):
+    """Bayesian Information Criterion.
+
+    BIC = n * ln(MSE) + k * ln(n)
+
+    Same fit term as AIC, but penalizes the parameter count k more heavily
+    for larger sample sizes n. Lower is better.
+    """
+
+    def __init__(self, num_params: int, config: Optional[MetaMetricsConfig] = None):
+        super().__init__(config or MetaMetricsConfig(greater_is_better=False, name="BIC", dtype="float64"))
+        self.num_params = num_params
+
+    def _compute_impl(self) -> float:
+        mse, n = self._mse_and_n()
+        return float(n * np.log(mse) + self.num_params * np.log(n))
+
+
+class ParsimonyInformationCriterion(_InformationCriterionBase):
+    """Parsimony Information Criterion (PIC).
+
+    PIC = n * ln(MSE) + lambda_complexity * complexity + lambda_physics * physics_penalty
+
+    Same AIC/BIC-style fit term, but generalizes the penalty side beyond a
+    plain parameter count: `complexity` is a structural-complexity score for
+    the candidate model (e.g. expression-tree node count) and
+    `physics_penalty` is a separate, independently-weighted penalty for
+    violating physical constraints (e.g. dimensional consistency, known
+    conservation laws). Both are computed by the caller for the model being
+    scored and passed in fixed at construction time, same as `num_params`
+    for AIC/BIC. Lower is better.
+    """
+
+    def __init__(
+        self,
+        complexity: float,
+        physics_penalty: float = 0.0,
+        lambda_complexity: float = 1.0,
+        lambda_physics: float = 1.0,
+        config: Optional[MetaMetricsConfig] = None,
+    ):
+        super().__init__(config or MetaMetricsConfig(greater_is_better=False, name="PIC", dtype="float64"))
+        self.complexity = complexity
+        self.physics_penalty = physics_penalty
+        self.lambda_complexity = lambda_complexity
+        self.lambda_physics = lambda_physics
+
+    def _compute_impl(self) -> float:
+        mse, n = self._mse_and_n()
+        return float(
+            n * np.log(mse)
+            + self.lambda_complexity * self.complexity
+            + self.lambda_physics * self.physics_penalty
+        )
 

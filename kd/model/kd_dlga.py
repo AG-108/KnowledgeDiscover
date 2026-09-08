@@ -1,4 +1,5 @@
 # kd/model/kd_dlga.py (最终完善版)
+import logging
 import numpy as np
 import torch
 import random
@@ -23,7 +24,8 @@ class KD_DLGA(DLGA):
 
 
     def generate_meta_data(self, X):
-        X_tensor = torch.from_numpy(X.astype(np.float32)).to(self.device)
+        self.Net.to(self.device)
+        X_tensor = torch.as_tensor(np.asarray(X, dtype=np.float32), device=self.device)
         X_tensor.requires_grad_(True)
         self.Net.load_state_dict(
             torch.load(f"model_save/Net_{self.best_epoch}.pkl", map_location=self.device, weights_only=True)
@@ -39,15 +41,18 @@ class KD_DLGA(DLGA):
             try:
                 uxxx_grad = torch.autograd.grad(outputs=uxx.sum(), inputs=X_tensor, create_graph=True)[0]
                 uxxx = uxxx_grad[:, 0].reshape(-1, 1)
-            except Exception:
+            except Exception as e:
+                logging.warning("Failed to compute u_xxx via autograd, falling back to zeros: %s", e)
                 uxxx = torch.zeros_like(u)
-        except Exception:
+        except Exception as e:
+            logging.warning("Failed to compute u_xx/u_xxx via autograd, falling back to zeros: %s", e)
             uxx = torch.zeros_like(u)
             uxxx = torch.zeros_like(u)
         try:
             utt_grad = torch.autograd.grad(outputs=ut.sum(), inputs=X_tensor, create_graph=True)[0]
             utt = utt_grad[:, 1].reshape(-1, 1)
-        except Exception:
+        except Exception as e:
+            logging.warning("Failed to compute u_tt via autograd, falling back to zeros: %s", e)
             utt = torch.zeros_like(u)
         available_ops = {'u': u, 'u_x': ux, 'u_t': ut, 'u_xx': uxx, 'u_xxx': uxxx, 'u_tt': utt}
         # 1. Theta 矩阵的构建依然严格遵守 user_operators，这用于方程搜索
@@ -230,15 +235,23 @@ class KD_DLGA(DLGA):
         try:
             # 调用我们重写过的 evolution 方法
             Chrom, coef, fitness, name = self.evolution()
-            
+
+            if not Chrom or (isinstance(coef, np.ndarray) and coef.size == 0):
+                fallback_name = name if isinstance(name, str) else "u_t"
+                self.best_equation_ = f"{fallback_name}= (empty equation)"
+                self.equations_ = [self.best_equation_]
+                return self
+
             print("\nFinal solution debug info:")
             print(f"Chromosome length: {len(Chrom)}")
             print(f"Coefficient shape: {coef.shape}")
             print(f"Chromosome: {Chrom}")
             print(f"Coefficients: {coef}")
-            
+
             # 调用我们重写过的 convert_chrom_to_eq 方法
             equation = self.convert_chrom_to_eq(Chrom, name, coef)
+            self.best_equation_ = equation
+            self.equations_ = [equation]
             print(f"equation form: {equation}")
 
             # 检查 equation_renderer 是否可用
@@ -253,7 +266,7 @@ class KD_DLGA(DLGA):
                 )
             except ImportError:
                 print("\n[INFO] Equation renderer not found or failed to import. Skipping LaTeX generation.")
-            
+
         except Exception as e:
             print(f"Error in fit: {str(e)}")
             # 在出错时也打印有用的调试信息

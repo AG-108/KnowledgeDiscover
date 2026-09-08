@@ -1,8 +1,9 @@
 import os
 import sys
-current_dir = os.path.dirname(os.path.abspath(__file__))
-kd_main_dir = os.path.abspath(os.path.join(current_dir, ".."))
-sys.path.append(kd_main_dir)
+
+from _common import bootstrap_project_root
+
+project_root = bootstrap_project_root()
 
 
 # --- 依赖导入 / Dependency Imports ---

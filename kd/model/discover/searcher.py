@@ -289,9 +289,22 @@ class Searcher:
             p_r_best = p_candidate[best_ind]
             self.best_p = p_r_best
             # Return statistics of best Program
+        if self.best_p is None:
+            print("[WARN] No valid program found during search.")
+
+            return {
+                "r": None,
+                "program": None,
+                "expression": None,
+                "success": False,
+                "message": "No valid training samples. best_p is None."
+            }
+
         result = {
-            "r" : self.best_p.r_ridge,
+            "r": self.best_p.r_ridge,
+            "program": self.best_p,
         }
+
         # result.update(self.best_p.evaluate)
         result.update({
             "expression" : self.best_p.str_expression,

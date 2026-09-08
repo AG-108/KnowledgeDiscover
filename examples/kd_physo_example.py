@@ -1,12 +1,15 @@
-import os.path
+import os
+import sys
+
+from _common import bootstrap_project_root
+
+project_root = bootstrap_project_root()
 
 import numpy as np
-import matplotlib.pyplot as plt
 import torch
 
 import physo
 import physo.learn.monitoring as monitoring
-from sympy.unify.usympy import illegal
 
 from kd.dataset import SymbolicRegressionDataset
 
@@ -34,7 +37,7 @@ function_set = data['function_set']
 
 function_set = filter_out_illegal_ops(function_set)
 
-save_path = './physo_res'
+save_path = os.path.join(project_root, 'physo_res')
 
 if not os.path.exists(save_path):
     os.makedirs(save_path)

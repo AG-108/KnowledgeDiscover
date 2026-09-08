@@ -2,9 +2,10 @@ import numpy as np
 
 import sys
 import os
-current_dir = os.path.dirname(os.path.abspath(__file__))
-kd_main_dir = os.path.abspath(os.path.join(current_dir, ".."))
-sys.path.append(kd_main_dir)
+
+from _common import bootstrap_project_root
+
+project_root = bootstrap_project_root()
 
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 import warnings

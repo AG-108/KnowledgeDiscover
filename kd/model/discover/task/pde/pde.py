@@ -116,53 +116,77 @@ class PDETask(HierarchicalTask):
     def load_data(self, dataset):
         self.u = [dataset['u']]
         self.x = dataset['X']
-        self.ut = dataset['ut'].reshape(-1,1)
+
+        if dataset.get("keep_ut_shape", False):
+            self.ut = dataset["ut"]
+        else:
+            self.ut = dataset["ut"].reshape(-1, 1)
+
         if torch.is_tensor(self.ut):
-            self.ut = tensor2np(self.ut)        
+            self.ut = tensor2np(self.ut)
+
         self.sym_true = dataset.get('sym_true', '')
         self.n_input_var = dataset.get('n_input_dim', 1)
-        self.u_test,self.ut_test = dataset.get('u_test',None),dataset.get('ut_test', None)
+        self.u_test, self.ut_test = dataset.get('u_test', None), dataset.get('ut_test', None)
 
-        # Set the Library 
-        tokens = create_tokens(n_input_var=self.n_input_var,
-                               function_set=self.function_set,
-                               protected=self.protected,
-                               n_state_var=len(self.u),
-                               decision_tree_threshold_set=self.decision_tree_threshold_set,
-                               task_type='pde')
+        # Set the Library
+        tokens = create_tokens(
+            n_input_var=self.n_input_var,
+            function_set=self.function_set,
+            protected=self.protected,
+            n_state_var=len(self.u),
+            decision_tree_threshold_set=self.decision_tree_threshold_set,
+            task_type='pde'
+        )
         self.library = Library(tokens)
-            
-        # if '2D' in dataset:
-        #     load_class = load_data_2D 
-        # elif "para" in dataset:
-        #     load_class = load_param_data
-        # elif "MD_NU" in dataset: # multi input and multi-dimension
-        #     load_class = load_data_MD_NU
-        # else:
-        #     load_class = load_data    
-        
-        
-    def reward_function(self,p):
-        # 需要额外获取 y_right
-        y_hat, y_right, w = p.execute(self.u, self.x, self.ut)
-        n = len(w)
+
+    def reward_function(self, p):
+        try:
+            y_hat, y_right, w = p.execute(self.u, self.x, self.ut)
+        except Exception:
+            return self.invalid_reward, [0], None, None
+
         if p.invalid:
-            # print(p.tokens)
-            
-            return self.invalid_reward, [0], None, None # 也注意修改
-        
-        r = self.metric(self.ut, y_hat,n)
+            return self.invalid_reward, [0], None, None
 
-        return r, w, y_hat, y_right # 多拿俩返回值
+        try:
+            ut_metric = np.asarray(self.ut).reshape(-1, 1)
+            y_hat_metric = np.asarray(y_hat).reshape(-1, 1)
 
+            if ut_metric.shape != y_hat_metric.shape:
+                return self.invalid_reward, [0], y_hat, y_right
+
+            if not np.isfinite(y_hat_metric).all():
+                return self.invalid_reward, [0], y_hat, y_right
+
+            if w is None:
+                w = [0]
+
+            n = len(w)
+            r = self.metric(ut_metric, y_hat_metric, n)
+
+            if not np.isfinite(r):
+                r = self.invalid_reward
+
+            return float(r), w, y_hat, y_right
+
+        except Exception:
+            return self.invalid_reward, [0], None, None
 
     def mse_function(self,p):
         """
         task function utilized to calculate mse for coeffcients
         """
         y_hat, y_right, w = p.execute(self.u, self.x, self.ut)
-        diffs = y_hat-self.ut
-        loss = (np.mean(np.square(diffs))) 
+        ut_mse = np.asarray(self.ut).reshape(-1, 1)
+        y_hat_mse = np.asarray(y_hat).reshape(-1, 1)
+
+        if ut_mse.shape != y_hat_mse.shape:
+            return np.inf
+
+        diffs = y_hat_mse - ut_mse
+        loss = np.mean(np.square(diffs))
+
         return loss
 
 
@@ -178,14 +202,15 @@ class PDETask(HierarchicalTask):
             success = False
 
         else:
-            # NMSE on test data (used to report final error)
-            nmse_test = np.mean((self.ut - y_hat) ** 2)
+            ut_eval = np.asarray(self.ut).reshape(-1, 1)
+            y_hat_eval = np.asarray(y_hat).reshape(-1, 1)
 
-            # NMSE on noiseless test data (used to determine recovery)
-            # nmse_test_noiseless = np.mean((self.y_test_noiseless - y_hat) ** 2) / self.var_y_test_noiseless
-
-            # Success is defined by NMSE on noiseless test data below a threshold
-            success = nmse_test < self.threshold
+            if ut_eval.shape != y_hat_eval.shape:
+                nmse_test = None
+                success = False
+            else:
+                nmse_test = np.mean((ut_eval - y_hat_eval) ** 2)
+                success = nmse_test < self.threshold
 
         info = {
             "nmse_test" : nmse_test,

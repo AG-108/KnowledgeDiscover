@@ -50,11 +50,8 @@ class BaseDataHandler(ABC):
             ValueError: If source format is not supported
         """
         if isinstance(self.source, str):
-            try:
-                self.data = pd.read_csv(self.source)
-                print("Data loaded successfully from file.")
-            except Exception as e:
-                print(f"Error loading data: {e}")
+            self.data = pd.read_csv(self.source)
+            print("Data loaded successfully from file.")
         elif isinstance(self.source, pd.DataFrame):
             self.data = self.source.copy()
             print("Data loaded from user-provided DataFrame.")
@@ -101,24 +98,30 @@ class RegularData(BaseDataHandler):
         u (ndarray): Solution values
         ut (ndarray): Time derivatives
     """
-    
+
     def __init__(self, source):
         """Initialize regular data handler.
-        
+
         Args:
-            source (str): Name of the dataset to load
-            
-        Raises:
-            AssertionError: If dataset name not in supported list
+            source (str): Name of the dataset to load.
+                          It can be a predefined PDE dataset name,
+                          or a custom external dataset name.
         """
         super().__init__(source)
-        
+
         self.X = []
         self.sym_true = None
-        self.n_input_dim = 1  # default 1 spatial dimension
+        self.n_input_dim = 1  # default 1 input dimension
+
+        # Whether this source is one of the predefined PDE datasets.
+        # Examples:
+        #   Burgers          -> True
+        #   rubber_C40_313   -> False
+        self.is_inner_dataset = False
+
         if isinstance(self.source, str):
-            assert self.source in data_list, "Provided data is not included"
-              
+            self.is_inner_dataset = self.source in data_list
+
     def process_data(self):
         """Process regular grids data."""
         super().process_data()
@@ -178,10 +181,99 @@ class RegularData(BaseDataHandler):
             'n_input_dim': self.n_input_dim,
             'sym_true': self.sym_true
         }
-        
+
+    def load_regression_data(
+            self,
+            X,
+            y,
+            variable_names=None,
+            sym_true="",
+            n_input_dim=None,
+    ):
+        """
+        Load external regular regression data.
+
+        This method is used for non-PDE regular data, such as rubber
+        constitutive model discovery.
+
+        Target form:
+            y ≈ Θ(X) w
+
+        For filled rubber data:
+            X[:, 0] = lambda = 1 + nominal strain
+            X[:, 1] = C, optional
+            X[:, 2] = T, optional
+            y       = nominal stress
+
+        Parameters
+        ----------
+        X : np.ndarray
+            Input features, shape [n_samples, n_features].
+
+        y : np.ndarray
+            Target values, shape [n_samples] or [n_samples, 1].
+
+        variable_names : list[str], optional
+            Names of input variables, e.g. ["lambda"] or ["lambda", "C", "T"].
+
+        sym_true : str, optional
+            Optional known symbolic expression. Default is "".
+
+        n_input_dim : int, optional
+            Number of input variables. If None, inferred from X.shape[1].
+
+        Returns
+        -------
+        self : RegularData
+            Return self for chained calls.
+        """
+
+        X = np.asarray(X, dtype=float)
+        y = np.asarray(y, dtype=float).reshape(-1)
+
+        if X.ndim == 1:
+            X = X.reshape(-1, 1)
+
+        if X.shape[0] != y.shape[0]:
+            raise ValueError(
+                f"X and y must have the same number of samples, "
+                f"but got X.shape[0]={X.shape[0]} and y.shape[0]={y.shape[0]}."
+            )
+
+        if variable_names is None:
+            variable_names = [f"x{i + 1}" for i in range(X.shape[1])]
+
+        if len(variable_names) != X.shape[1]:
+            raise ValueError(
+                f"Length of variable_names must match number of features. "
+                f"Got len(variable_names)={len(variable_names)} and X.shape[1]={X.shape[1]}."
+            )
+
+        if n_input_dim is None:
+            n_input_dim = X.shape[1]
+
+        self.X = X
+        self.y = y
+        self.variable_names = variable_names
+        self.n_input_dim = n_input_dim
+        self.sym_true = sym_true
+
+        self.data = {
+            "X": self.X,
+            "y": self.y,
+            "variable_names": self.variable_names,
+            "n_input_dim": self.n_input_dim,
+            "sym_true": self.sym_true,
+            "data_type": "regression",
+        }
+
+        return self
+
     def info(self):
         """Print information about the loaded data."""
         print()
+
+
 
 class SparseData(BaseDataHandler):
     """Handler for sparsely sampled PDE data.
@@ -253,6 +345,3 @@ class SparseData(BaseDataHandler):
             'lb': lb,
             'ub': ub
         }
-        
-    
-

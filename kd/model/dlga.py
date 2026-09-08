@@ -125,16 +125,20 @@ class DLGA(BaseGa):
         np.random.shuffle(y)
 
         # Split data
-        X_train = X[0 : int(X.shape[0] * self.train_ratio)]
-        y_train = y[0 : int(X.shape[0] * self.train_ratio)]
-        X_valid = X[
-            int(X.shape[0] * self.train_ratio) : int(X.shape[0] * self.train_ratio)
-            + int(X.shape[0] * self.valid_ratio)
-        ]
-        y_valid = y[
-            int(X.shape[0] * self.train_ratio) : int(X.shape[0] * self.train_ratio)
-            + int(X.shape[0] * self.valid_ratio)
-        ]
+        train_end = max(1, int(X.shape[0] * self.train_ratio))
+        valid_start = train_end
+        valid_end = max(valid_start, min(X.shape[0], valid_start + max(1, int(X.shape[0] * self.valid_ratio))))
+
+        X_train = X[0:train_end]
+        y_train = y[0:train_end]
+        X_valid = X[valid_start:valid_end]
+        y_valid = y[valid_start:valid_end]
+
+        # If insufficient data remain for validation, fall back to training data
+        # so the optimization loop remains well-defined.
+        if X_valid.shape[0] == 0:
+            X_valid = X_train
+            y_valid = y_train
 
         # Convert to tensors
         X_train = torch.from_numpy(X_train.astype(np.float32)).to(self.device)
@@ -176,6 +180,11 @@ class DLGA(BaseGa):
 
             self.train_loss_history.append(float(loss))
             self.val_loss_history.append(float(loss_validate))
+
+        if not validate_error:
+            self.best_epoch = self.max_iter
+            torch.save(self.Net.state_dict(), f"model_save/Net_{self.best_epoch}.pkl")
+            return self.Net, self.best_epoch
 
         self.best_epoch = (validate_error.index(min(validate_error)) + 1) * 500
         return self.Net, self.best_epoch
@@ -519,16 +528,18 @@ class DLGA(BaseGa):
         # Evolution loop
         for iter in tqdm(range(self.n_generations)):
             # Save current best individual
-            pickle.dump(self.Chrom.copy()[0], open("result_save/best_save.pkl", "wb"))
+            with open("result_save/best_save.pkl", "wb") as f:
+                pickle.dump(self.Chrom.copy()[0], f)
             best = self.Chrom.copy()[0]
-            
+
             # Genetic operations
             DLGA.cross_over(self)
             DLGA.mutation(self)
             DLGA.delete_duplicates(self)
-            
+
             # Ensure elitism
-            best = pickle.load(open("result_save/best_save.pkl", "rb"))
+            with open("result_save/best_save.pkl", "rb") as f:
+                best = pickle.load(f)
             self.Chrom[0] = best
             
             # Selection and logging

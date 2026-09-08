@@ -4,7 +4,9 @@ Base IO code for all datasets
 import ast
 import csv
 import itertools
+import logging
 import os
+import pickle
 import zlib
 import re
 
@@ -628,6 +630,15 @@ class GridPDEDataset(MetaData):
     # Coords helpers
     # -------------------------
     @property
+    def coords_spatial(self) -> Dict[str, np.ndarray]:
+        return {k: self.coords[k] for k in self._spatial_vars}
+
+    # For better clarity, we provide coords_time as well
+    @property
+    def coords_time(self) -> np.ndarray:
+        return self.coords[self.time_var]
+
+    @property
     def t(self) -> np.ndarray:
         return self.coords[self.time_var]
 
@@ -1242,7 +1253,274 @@ class ScatterPDEDataset(MetaData):
             f"points={self.points.shape}, t={self._t.shape}, usol={self.usol.shape}, "
             f"boundaries={self.get_boundaries()})"
         )
-    
+
+
+class ODEDataset(MetaData):
+    """
+    A class representing an Ordinary Differential Equation (ODE) discovery dataset.
+
+    Stores one or more observed trajectories of a dynamical system: state
+    variables u(t) sampled over time, optionally paired with per-trajectory
+    static parameters (e.g. mass, diameter) and an identifying label.
+
+    Internal representation:
+      - self.trajectories: List[Dict] with keys:
+          "t"      -> (T_i,) ndarray
+          "state"  -> (n_state, T_i) ndarray
+          "params" -> Dict[str, float] or None (trajectory-level static covariates)
+          "id"     -> str or None
+
+    Unlike GridPDEDataset/ScatterPDEDataset, trajectories are NOT forced onto a
+    shared time grid or padded to equal length: real multi-trial ODE data (e.g.
+    repeated drop experiments) is commonly sampled at different rates/durations
+    per trial.
+    """
+
+    def __init__(self,
+                 equation_name: str,
+                 trajectories: List[Dict[str, Any]],
+                 state_vars: List[str],
+                 *,
+                 time_var: str = "t",
+                 param_names: Optional[List[str]] = None,
+                 domain: Optional[Dict[str, Tuple[float, float]]] = None,
+                 epi: float = 0.0,
+                 descr: Optional["DatasetInfo"] = None,
+                 ):
+        super().__init__(equation_name)
+
+        self.equation_name = equation_name
+        self.time_var = str(time_var)
+        self.domain = domain
+        self.epi = float(epi)
+        self.descr = descr
+
+        self._state_vars: List[str] = list(state_vars)
+        n_state = len(self._state_vars)
+
+        if len(trajectories) == 0:
+            raise ValueError("`trajectories` must contain at least one trajectory.")
+
+        cleaned: List[Dict[str, Any]] = []
+        param_key_set = set()
+        for i, traj in enumerate(trajectories):
+            t = np.asarray(traj["t"], dtype=float).reshape(-1)
+            state = np.asarray(traj["state"], dtype=float)
+            if state.ndim == 1:
+                state = state.reshape(1, -1)
+            if state.shape[0] != n_state:
+                raise ValueError(
+                    f"Trajectory {i} state has {state.shape[0]} rows, expected n_state={n_state}"
+                )
+            if state.shape[1] != t.shape[0]:
+                raise ValueError(
+                    f"Trajectory {i}: state.shape[1]={state.shape[1]} does not match len(t)={t.shape[0]}"
+                )
+            params = traj.get("params")
+            if params is not None:
+                param_key_set.update(params.keys())
+            cleaned.append({
+                "t": t,
+                "state": state,
+                "params": params,
+                "id": traj.get("id", f"traj{i}"),
+            })
+
+        self.trajectories = cleaned
+        self._param_names: List[str] = list(param_names) if param_names is not None else sorted(param_key_set)
+
+    # -------------------------
+    # Properties
+    # -------------------------
+    @property
+    def n_traj(self) -> int:
+        return len(self.trajectories)
+
+    @property
+    def n_state(self) -> int:
+        return len(self._state_vars)
+
+    @property
+    def state_vars(self) -> List[str]:
+        return list(self._state_vars)
+
+    @property
+    def param_names(self) -> List[str]:
+        return list(self._param_names)
+
+    # -------------------------
+    # Core accessors
+    # -------------------------
+    def get_datapoint(self, traj_id: int, t_id: int) -> Tuple[float, np.ndarray, Optional[Dict[str, float]]]:
+        """Returns (t_value, state_vector, params_dict_or_None) for one trajectory sample."""
+        traj = self.trajectories[traj_id]
+        t_val = float(traj["t"][t_id])
+        state_val = traj["state"][:, t_id].copy()
+        return t_val, state_val, traj["params"]
+
+    def get_data(self) -> Dict[str, Any]:
+        return {
+            "trajectories": self.trajectories,
+            "state_vars": self.state_vars,
+            "param_names": self.param_names,
+            "time_var": self.time_var,
+            "equation_name": self.equation_name,
+        }
+
+    def get_size(self) -> Tuple[int, int, List[int]]:
+        """Returns (n_traj, n_state, [T_i for each trajectory])."""
+        return (self.n_traj, self.n_state, [traj["t"].shape[0] for traj in self.trajectories])
+
+    def get_domain(self) -> Optional[Dict[str, Tuple[float, float]]]:
+        return self.domain
+
+    # -------------------------
+    # Derivatives
+    # -------------------------
+    def get_derivative(self, order: int = 1) -> List[np.ndarray]:
+        """
+        Returns a list (length n_traj) of (n_state, T_i) arrays: the `order`-th
+        time derivative of each trajectory's state, computed with np.gradient
+        (supports non-uniform time steps, which real multi-trial data often has).
+        """
+        if order < 1:
+            raise ValueError("order must be >= 1")
+
+        derivs = []
+        for traj in self.trajectories:
+            d = traj["state"]
+            for _ in range(order):
+                d = np.gradient(d, traj["t"], axis=1)
+            derivs.append(d)
+        return derivs
+
+    # -------------------------
+    # Bridge to (X, y) regression arrays
+    # -------------------------
+    def to_regression_arrays(
+        self,
+        target_state: Optional[Union[str, List[str]]] = None,
+        order: int = 1,
+        include_params: bool = True,
+    ) -> Tuple[np.ndarray, np.ndarray, List[str]]:
+        """
+        Flatten all (trajectory, time) samples into rows, producing a generic
+        (X, y) regression dataset:
+
+            X columns: state variables (+ static params if include_params and
+                       available), one row per (trajectory, time) sample.
+            y columns: the `order`-th time derivative of `target_state`
+                       (defaults to all state vars).
+
+        This lets ODE trajectory data be consumed directly by the existing
+        `SymbolicRegressionTask` (which only needs a generic {"X":..., "y":...}
+        dict), without requiring a dedicated ODE task.
+
+        Returns
+        -------
+        X : (N, n_state [+ n_params]) ndarray
+        y : (N, n_targets) ndarray
+        variable_names : names of X columns, in order
+        """
+        if target_state is None:
+            target_idx = list(range(self.n_state))
+        else:
+            names = [target_state] if isinstance(target_state, str) else list(target_state)
+            target_idx = [self._state_vars.index(n) for n in names]
+
+        derivs = self.get_derivative(order=order)
+
+        use_params = include_params and len(self._param_names) > 0
+
+        X_rows = []
+        y_rows = []
+        for traj, d in zip(self.trajectories, derivs):
+            state = traj["state"]  # (n_state, T)
+            T = state.shape[1]
+            state_cols = state.T  # (T, n_state)
+            if use_params:
+                params = traj["params"] or {}
+                param_cols = np.array(
+                    [[params.get(p, np.nan) for p in self._param_names]] * T
+                )
+                cols = np.hstack([state_cols, param_cols])
+            else:
+                cols = state_cols
+            X_rows.append(cols)
+            y_rows.append(d[target_idx, :].T)  # (T, n_targets)
+
+        X = np.vstack(X_rows)
+        y = np.vstack(y_rows)
+
+        variable_names = list(self._state_vars)
+        if use_params:
+            variable_names += list(self._param_names)
+
+        return X, y, variable_names
+
+    # -------------------------
+    # Sampling
+    # -------------------------
+    def sample(
+        self,
+        n_samples: Union[int, float],
+        *,
+        method: str = "random",
+        seed: Optional[int] = None,
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        Randomly sample (trajectory, time) pairs across all trajectories.
+
+        Returns
+        -------
+        sampled_t     : (n,) time values
+        sampled_state : (n, n_state) state values
+        """
+        if method != "random":
+            raise ValueError(f"Unsupported sampling method: {method} (only 'random' supported).")
+
+        rng = np.random.default_rng(seed)
+
+        all_traj_idx = []
+        all_t_idx = []
+        for ti, traj in enumerate(self.trajectories):
+            T = traj["t"].shape[0]
+            all_traj_idx.append(np.full(T, ti))
+            all_t_idx.append(np.arange(T))
+        all_traj_idx = np.concatenate(all_traj_idx)
+        all_t_idx = np.concatenate(all_t_idx)
+
+        total = all_traj_idx.shape[0]
+        if isinstance(n_samples, float):
+            if not (0 < n_samples < 1):
+                raise ValueError("If n_samples is float, it must be in (0,1).")
+            n = int(round(total * n_samples))
+        else:
+            n = int(n_samples)
+
+        if n <= 0:
+            raise ValueError("n_samples must be positive.")
+        if n > total:
+            raise ValueError(f"Requested {n} samples, but only {total} (trajectory,time) pairs exist.")
+
+        flat_idx = rng.choice(total, size=n, replace=False)
+        traj_sel = all_traj_idx[flat_idx]
+        t_sel = all_t_idx[flat_idx]
+
+        sampled_t = np.array([self.trajectories[ti]["t"][tid] for ti, tid in zip(traj_sel, t_sel)])
+        sampled_state = np.array([self.trajectories[ti]["state"][:, tid] for ti, tid in zip(traj_sel, t_sel)])
+
+        return sampled_t, sampled_state
+
+    def __repr__(self) -> str:
+        sizes = [traj["t"].shape[0] for traj in self.trajectories]
+        return (
+            f"ODEDataset(equation='{self.equation_name}', n_traj={self.n_traj}, "
+            f"state_vars={self.state_vars}, param_names={self.param_names}, "
+            f"traj_lengths={sizes})"
+        )
+
+
 class SymbolicRegressionDataset(MetaData):
     """
     Class used to generate (X, y) data from a named benchmark expression.
@@ -1467,6 +1745,9 @@ class SymbolicRegressionDataset(MetaData):
         for i in reversed(range(self.n_input_var)):
             s = s.replace(f"x{i + 1}", f"x[:, {i}]")
         #Return numpy expression
+        # `s` is built above purely from internal token substitution (never from
+        # external/user input), so eval() here only ever runs a controlled
+        # arithmetic expression string.
         return lambda x : eval(s)
 
     def save(self, logdir='./'):
@@ -1485,10 +1766,8 @@ class SymbolicRegressionDataset(MetaData):
                 delimiter=',', fmt='%1.5f'
             )
             return 'Saved dataset to               : {}\n'.format(save_path)
-        except:
-            import sys
-            e = sys.exc_info()[0]
-            print("WARNING: Could not save dataset: {}".format(e))
+        except Exception as e:
+            logging.warning("Could not save dataset: %s", e)
 
     def plot(self, logdir='./'):
         """Plot Dataset with underlying ground truth."""
@@ -1513,16 +1792,124 @@ class SymbolicRegressionDataset(MetaData):
                 os.makedirs(logdir, exist_ok=True)
                 plt.savefig(save_path)
                 print('Saved plot to                  : {}'.format(save_path))
-            except:
-                import sys
-                e = sys.exc_info()[0]
-                print("WARNING: Could not plot dataset: {}".format(e))
+            except Exception as e:
+                logging.warning("Could not plot dataset: %s", e)
             plt.close()
         else:
             print("WARNING: Plotting only supported for 2D datasets.")
-        
-        
-def load_burgers_equation():    
+
+
+class TabularRegressionDataset(MetaData):
+    """
+    Lightweight wrapper for real (X, y) tabular regression data with no time or
+    spatial axis (e.g. strain -> stress constitutive curves).
+
+    Unlike `SymbolicRegressionDataset` (which *generates* (X, y) from a named
+    benchmark expression), this class simply wraps already-collected real data.
+    Domain-specific parsing (e.g. extracting a condition such as strain rate or
+    temperature from a filename) belongs in the loader function that builds
+    X/y, not in this class.
+    """
+
+    def __init__(
+        self,
+        name: str,
+        X: np.ndarray,
+        y: np.ndarray,
+        *,
+        variable_names: Optional[List[str]] = None,
+        groups: Optional[np.ndarray] = None,
+        sym_true: str = "",
+        domain: Optional[Dict[str, Tuple[float, float]]] = None,
+        descr: Optional["DatasetInfo"] = None,
+    ):
+        super().__init__(name)
+
+        self.name = name
+        self.domain = domain
+        self.descr = descr
+        self.sym_true = sym_true
+
+        X = np.asarray(X, dtype=float)
+        if X.ndim == 1:
+            X = X.reshape(-1, 1)
+        y = np.asarray(y, dtype=float).reshape(-1)
+
+        if X.shape[0] != y.shape[0]:
+            raise ValueError(
+                f"X and y must have the same number of samples, "
+                f"got X.shape[0]={X.shape[0]} and y.shape[0]={y.shape[0]}."
+            )
+
+        self.X = X
+        self.y = y
+        self.n_input_dim = X.shape[1]
+
+        if variable_names is None:
+            variable_names = [f"x{i + 1}" for i in range(self.n_input_dim)]
+        elif len(variable_names) != self.n_input_dim:
+            raise ValueError(
+                f"len(variable_names)={len(variable_names)} must match X.shape[1]={self.n_input_dim}"
+            )
+        self.variable_names = list(variable_names)
+
+        self.groups = None if groups is None else np.asarray(groups)
+        if self.groups is not None and self.groups.shape[0] != X.shape[0]:
+            raise ValueError("`groups` must have the same length as X/y.")
+
+        # Populated by train_test_split(); default to using the full data for both.
+        self.X_train, self.y_train = self.X, self.y
+        self.X_test, self.y_test = self.X, self.y
+
+    def train_test_split(self, test_size: float = 0.2, seed: int = 0) -> None:
+        """Populate X_train/y_train/X_test/y_test with a random split."""
+        if not (0.0 < test_size < 1.0):
+            raise ValueError("test_size must be in (0,1).")
+
+        n = self.X.shape[0]
+        rng = np.random.default_rng(seed)
+        idx = rng.permutation(n)
+        n_test = max(1, int(round(n * test_size)))
+        test_idx, train_idx = idx[:n_test], idx[n_test:]
+
+        self.X_train, self.y_train = self.X[train_idx], self.y[train_idx]
+        self.X_test, self.y_test = self.X[test_idx], self.y[test_idx]
+
+    def get_data(self) -> Dict[str, Any]:
+        return {
+            "X": self.X,
+            "y": self.y,
+            "variable_names": self.variable_names,
+            "n_input_dim": self.n_input_dim,
+            "sym_true": self.sym_true,
+            "groups": self.groups,
+        }
+
+    def sample(self, n_samples: Union[int, float], *, seed: Optional[int] = None) -> Tuple[np.ndarray, np.ndarray]:
+        rng = np.random.default_rng(seed)
+        n_total = self.X.shape[0]
+
+        if isinstance(n_samples, float):
+            if not (0 < n_samples < 1):
+                raise ValueError("If n_samples is float, it must be in (0,1).")
+            n = int(round(n_total * n_samples))
+        else:
+            n = int(n_samples)
+
+        if n <= 0 or n > n_total:
+            raise ValueError(f"Requested {n} samples, but {n_total} available.")
+
+        idx = rng.choice(n_total, size=n, replace=False)
+        return self.X[idx], self.y[idx]
+
+    def __repr__(self) -> str:
+        return (
+            f"TabularRegressionDataset(name='{self.name}', X={self.X.shape}, y={self.y.shape}, "
+            f"variable_names={self.variable_names})"
+        )
+
+
+def load_burgers_equation():
     descr = DatasetInfo(
         description = """
         Dataset for high-viscosity Burgers equation 
@@ -1636,3 +2023,702 @@ def load_pde_dataset(
     except Exception as e:
         print(f"错误: 加载或处理文件时发生未知错误: {e}")
         return None
+
+
+# -------------------------
+# Ball-drop ODE discovery dataset
+# -------------------------
+
+_BALL_NAME_MAP = {
+    "Baseball": "baseball",
+    "Blue Basketball": "bluebasketball",
+    "Green Basketball": "greenbasketball",
+    "Volleyball": "volleyball",
+    "Bowling Ball": "bowlingball",
+    "Golf Ball": "golfball",
+    "Tennis Ball": "tennisball",
+    "Whiffle Ball 1": "wiffleball1",
+    "Whiffle Ball 2": "wiffleball2",
+    "Yellow Whiffle Ball": "yellowWiffle",
+    "Orange Whiffle Ball": "orangeWiffle",
+}
+
+
+def _load_ball_params(balls_txt_path: Path) -> Dict[str, Dict[str, float]]:
+    """Parse `balls.txt` into {ball_key: {"mass": kg, "diameter": m}}, skipping entries with missing ("??") values."""
+    params: Dict[str, Dict[str, float]] = {}
+    with balls_txt_path.open("r", encoding="utf-8") as f:
+        lines = f.readlines()
+
+    for line in lines[1:]:  # skip header row
+        parts = line.split()
+        if len(parts) < 3:
+            continue
+        name, weight_oz, circumference_cm = parts[0], parts[1], parts[2]
+        try:
+            weight_oz = float(weight_oz)
+            circumference_cm = float(circumference_cm)
+        except ValueError:
+            continue  # missing data marked as "??"
+
+        mass_kg = weight_oz * 0.0283495
+        circumference_m = circumference_cm / 100.0
+        diameter_m = circumference_m / np.pi
+        params[name] = {"mass": mass_kg, "diameter": diameter_m}
+
+    return params
+
+
+def load_ball_drop_dataset(
+    exclude: Tuple[str, ...] = ("Bowling Ball", "Volleyball"),
+    include_params: bool = True,
+) -> "ODEDataset":
+    """
+    Load the falling-ball ODE discovery dataset from
+    `discovery-of-physics-from-data/data/Ball_drops_data.xls` (+ `balls.txt`).
+
+    Each (ball, drop) pair becomes one trajectory with state variables
+    ["h", "v"] (height in m, velocity in m/s), optionally paired with static
+    per-trajectory parameters {"mass": kg, "diameter": m} parsed from
+    `balls.txt`.
+
+    Resource: de Silva et al., "Discovery of Physics From Data: Universal Laws
+    and Discrepancies", Frontiers in Artificial Intelligence (2020).
+    """
+    base_dir = Path(__file__).resolve().parent / "discovery-of-physics-from-data" / "data"
+    xls_path = base_dir / "Ball_drops_data.xls"
+    balls_txt_path = base_dir / "balls.txt"
+
+    if not xls_path.exists():
+        raise FileNotFoundError(f"Ball drop data file not found: {xls_path}")
+
+    ball_params = _load_ball_params(balls_txt_path) if include_params else {}
+
+    sheets = pd.read_excel(xls_path, sheet_name=None)
+
+    descr = DatasetInfo(
+        description="""
+        Falling-ball ODE discovery dataset: height & velocity vs time for
+        repeated drop experiments of various balls (baseball, basketballs,
+        golf ball, etc). state_vars = ["h" (m), "v" (m/s)]; optional
+        per-trajectory params {"mass" (kg), "diameter" (m)} parsed from ball
+        weight/circumference.
+        Resource: de Silva et al., Discovery of Physics From Data: Universal
+        Laws and Discrepancies, Frontiers in Artificial Intelligence (2020).
+        """
+    )
+
+    trajectories = []
+    for ball_name, df in sheets.items():
+        if ball_name in exclude:
+            continue
+
+        ball_key = _BALL_NAME_MAP.get(ball_name)
+        params = ball_params.get(ball_key) if (include_params and ball_key) else None
+        if include_params and params is None:
+            continue  # missing mass/diameter for this ball
+
+        for drop_id in sorted(df["Drop #"].unique()):
+            sub = df[df["Drop #"] == drop_id].sort_values("Time (s)")
+            t = sub["Time (s)"].to_numpy(dtype=float)
+            state = np.vstack([
+                sub["Height (m)"].to_numpy(dtype=float),
+                sub["Velocity (m/s)"].to_numpy(dtype=float),
+            ])
+            trajectories.append({
+                "t": t,
+                "state": state,
+                "params": params,
+                "id": f"{ball_name}-drop{int(drop_id)}",
+            })
+
+    if len(trajectories) == 0:
+        raise ValueError("No trajectories loaded; check `exclude` and balls.txt parsing.")
+
+    return ODEDataset(
+        equation_name="ball_drop",
+        trajectories=trajectories,
+        state_vars=["h", "v"],
+        param_names=["mass", "diameter"] if include_params else None,
+        descr=descr,
+    )
+
+
+# -------------------------
+# Filled-rubber constitutive regression dataset
+# -------------------------
+
+_RUBBER_FILENAME_RE = re.compile(r"^C(?P<compound>\d+)_(?P<temperature>\d+)\.xlsx$", re.IGNORECASE)
+
+
+def load_rubber_dataset(split: str = "train") -> "TabularRegressionDataset":
+    """
+    Load the filled-rubber constitutive-model regression dataset from
+    `Discovery_of_soild_consititutive/data/data_rubber/{train,test}/*.xlsx`.
+
+    Each file `C{compound}_{temperature}.xlsx` has columns "nominal
+    strain"/"nominal stress" for one (compound, temperature) condition.
+
+    Output schema (matches `kd.data.RegularData.load_regression_data`
+    docstring):
+        X = [lambda = 1 + nominal strain, compound, temperature]
+        y = nominal stress
+
+    Resource: "Beyond empirical models: Discovering constitutive laws in
+    solids with graph-based equation discovery".
+    """
+    if split not in ("train", "test"):
+        raise ValueError(f"split must be 'train' or 'test', got {split!r}")
+
+    data_dir = (
+        Path(__file__).resolve().parent
+        / "Discovery_of_soild_consititutive" / "data" / "data_rubber" / split
+    )
+    if not data_dir.exists():
+        raise FileNotFoundError(f"Rubber data directory not found: {data_dir}")
+
+    file_paths = sorted(data_dir.glob("*.xlsx"))
+    if len(file_paths) == 0:
+        raise FileNotFoundError(f"No .xlsx files found in {data_dir}")
+
+    X_rows = []
+    y_rows = []
+    groups = []
+    for file_path in file_paths:
+        m = _RUBBER_FILENAME_RE.match(file_path.name)
+        if not m:
+            continue
+        compound = float(m.group("compound"))
+        temperature = float(m.group("temperature"))
+
+        df = pd.read_excel(file_path)
+        strain = df["nominal strain"].to_numpy(dtype=float)
+        stress = df["nominal stress"].to_numpy(dtype=float)
+        valid = np.isfinite(strain) & np.isfinite(stress)
+        strain, stress = strain[valid], stress[valid]
+
+        lam = 1.0 + strain
+        n = lam.shape[0]
+        X_rows.append(np.column_stack([lam, np.full(n, compound), np.full(n, temperature)]))
+        y_rows.append(stress)
+        groups.extend([file_path.name] * n)
+
+    if len(X_rows) == 0:
+        raise ValueError(f"No files in {data_dir} matched the C<compound>_<temperature>.xlsx pattern.")
+
+    X = np.vstack(X_rows)
+    y = np.concatenate(y_rows)
+
+    descr = DatasetInfo(
+        description="""
+        Filled-rubber constitutive-model regression dataset (nominal stress
+        vs stretch ratio, parametric in compound and temperature).
+        X = [lambda=1+nominal strain, compound, temperature (K)], y = nominal
+        stress.
+        Resource: Beyond empirical models: Discovering constitutive laws in
+        solids with graph-based equation discovery.
+        """
+    )
+
+    return TabularRegressionDataset(
+        name=f"rubber_{split}",
+        X=X,
+        y=y,
+        variable_names=["lambda", "C", "T"],
+        groups=np.array(groups),
+        descr=descr,
+    )
+
+
+# -------------------------
+# CYT RANS turbulence-closure regression dataset
+# -------------------------
+
+_CYT_COLUMNS = [
+    "X", "Y", "U", "V", "Ru", "P", "Ux", "Uy", "Vx", "Vy", "Px", "Py", "T", "dis",
+    "Mut", "Txx", "Txz", "Tzz", "Ma", "AoA", "Re", "ydudy", "vc", "conv", "prod",
+    "diff", "destr", "Sup_var1", "Sup_var2", "Sup_var3", "Sup_var4", "Sup_var5",
+]
+
+_CYT_CASE_ALIASES = {
+    "flatplate": "FlatPlate_lk0.215andPplus",
+    "naca0012": "NACA0012_Re4e5_MLen_BEST",
+}
+
+_CYT_DEFAULT_FEATURE_COLUMNS = [
+    "U", "V", "Ru", "P", "Ux", "Uy", "Vx", "Vy", "Px", "Py", "T", "dis", "Ma", "AoA", "Re",
+]
+
+# Fortran free-format write can underflow the exponent field width for very
+# small magnitudes and silently drop the 'E' (e.g. "0.103578010-307" instead
+# of "0.103578010E-307"); repair that here.
+_CYT_FORTRAN_FLOAT_RE = re.compile(r"^([+-]?\d*\.\d+)([+-]\d{2,3})$")
+
+
+def _parse_fortran_float(tok: str) -> float:
+    try:
+        return float(tok)
+    except ValueError:
+        m = _CYT_FORTRAN_FLOAT_RE.match(tok)
+        if m:
+            return float(m.group(1) + "E" + m.group(2))
+        raise
+
+
+def _resolve_cyt_case_dir(case: str) -> Path:
+    case_dir_name = _CYT_CASE_ALIASES.get(case, case)
+    case_dir = Path(__file__).resolve().parent / "CYT" / case_dir_name
+    if not case_dir.exists():
+        raise FileNotFoundError(
+            f"CYT case not found: {case!r} (resolved to {case_dir}). "
+            f"Known aliases: {list(_CYT_CASE_ALIASES)}"
+        )
+    return case_dir
+
+
+def load_cyt_flowfeature_raw(case: str) -> Dict[str, np.ndarray]:
+    """
+    Parse `Output/FlowFeature.dat` for a CYT RANS-turbulence CFD case into a
+    dict of {column_name: (N,) ndarray}, one entry per mesh cell.
+
+    Each record in the file is a Fortran free-format write split across two
+    physical text lines (27 values on line 1, 5 on line 2 -- 32 columns
+    total); see `_CYT_COLUMNS` for the column order.
+
+    `case` may be a full CYT case directory name (e.g.
+    "FlatPlate_lk0.215andPplus") or a short alias ("flatplate", "naca0012").
+    """
+    case_dir = _resolve_cyt_case_dir(case)
+    file_path = case_dir / "Output" / "FlowFeature.dat"
+    if not file_path.exists():
+        raise FileNotFoundError(f"FlowFeature.dat not found: {file_path}")
+
+    with file_path.open("r", encoding="utf-8", errors="replace") as f:
+        header = f.readline().split()
+        if header != _CYT_COLUMNS:
+            raise ValueError(
+                f"Unexpected FlowFeature.dat header for case {case!r}: {header}"
+            )
+
+        rows = []
+        for line1 in f:
+            line2 = f.readline()
+            tokens = line1.split() + line2.split()
+            if len(tokens) != len(_CYT_COLUMNS):
+                raise ValueError(
+                    f"Malformed FlowFeature.dat record in {file_path} "
+                    f"(expected {len(_CYT_COLUMNS)} values, got {len(tokens)})"
+                )
+            rows.append([_parse_fortran_float(tok) for tok in tokens])
+
+    arr = np.asarray(rows, dtype=float)
+    return {name: arr[:, i] for i, name in enumerate(_CYT_COLUMNS)}
+
+
+def load_cyt_dataset(
+    case: str = "flatplate",
+    target: str = "Mut",
+    feature_columns: Optional[List[str]] = None,
+) -> "TabularRegressionDataset":
+    """
+    Load a CYT RANS turbulence-closure regression dataset.
+
+    Per-cell flow features (velocity, pressure, their gradients, wall
+    distance, Mach/AoA/Re) become X, and a turbulence-closure quantity
+    (default eddy viscosity "Mut") becomes y -- a constitutive-law discovery
+    problem ("given local flow invariants, discover the closure relation"),
+    analogous to `load_rubber_dataset`.
+
+    Parameters
+    ----------
+    case : str
+        CYT case name or alias ("flatplate" / "naca0012", or the full CYT
+        directory name).
+    target : str
+        Column name (see `_CYT_COLUMNS`) to use as the regression target y.
+        Default "Mut" (eddy viscosity). Other closure quantities such as
+        "Txx"/"Txz"/"Tzz" (Reynolds stress components) or "prod"/"diff"/
+        "destr" (turbulence budget terms) can be used instead.
+    feature_columns : list[str], optional
+        Column names to use as X. Defaults to velocity/density/pressure/
+        gradients/wall-distance/Ma/AoA/Re (excludes raw coordinates X,Y and
+        other closure-output columns).
+    """
+    columns = load_cyt_flowfeature_raw(case)
+
+    if target not in columns:
+        raise ValueError(f"Unknown target column {target!r}. Available: {_CYT_COLUMNS}")
+
+    feats = list(feature_columns) if feature_columns is not None else list(_CYT_DEFAULT_FEATURE_COLUMNS)
+    for feat in feats:
+        if feat not in columns:
+            raise ValueError(f"Unknown feature column {feat!r}. Available: {_CYT_COLUMNS}")
+
+    X = np.column_stack([columns[feat] for feat in feats])
+    y = columns[target]
+
+    case_dir_name = _CYT_CASE_ALIASES.get(case, case)
+
+    descr = DatasetInfo(
+        description=f"""
+        CYT RANS turbulence-closure dataset, case '{case_dir_name}'.
+        Per-cell flow features (from Output/FlowFeature.dat, {X.shape[0]}
+        cells) for turbulence closure / constitutive-law discovery:
+        X = {feats}, y = '{target}'.
+        """
+    )
+
+    return TabularRegressionDataset(
+        name=f"cyt_{case}",
+        X=X,
+        y=y,
+        variable_names=feats,
+        descr=descr,
+    )
+
+
+# -------------------------
+# Solid-constitutive strain-rate / hardening regression datasets
+# -------------------------
+
+_SOLID_DATA_DIR = Path(__file__).resolve().parent / "Discovery_of_soild_consititutive" / "data"
+
+# Fortran/Excel-authoring quirk: a strain-rate filename suffix like "1-e4"
+# (instead of the standard "1e-4") appears once in data_strain_stress; repair it.
+_SOLID_STRAIN_RATE_FIX_RE = re.compile(r"^(\d+(?:\.\d+)?)-e(\d+)$")
+
+
+def _parse_strain_rate_token(tok: str) -> float:
+    try:
+        return float(tok)
+    except ValueError:
+        m = _SOLID_STRAIN_RATE_FIX_RE.match(tok)
+        if m:
+            return float(m.group(1)) * (10.0 ** -int(m.group(2)))
+        raise ValueError(f"Cannot parse strain rate from filename token: {tok!r}")
+
+
+def load_solid_dif_dataset() -> "TabularRegressionDataset":
+    """
+    Load the Dynamic-Increase-Factor (DIF) vs strain-rate dataset from
+    `Discovery_of_soild_consititutive/data/data_DIF/*.xlsx` (63 files, one
+    material/loading-condition curve each, columns "strain rate"/"DIF",
+    compiled from 18 published studies).
+
+    X = [strain_rate], y = DIF, one row per (file, sample) pair; `groups`
+    holds the source filename so curves from different materials/studies can
+    be told apart (a single global X->y expression is not expected to fit
+    perfectly across materials, mirroring how the original repository code
+    fits each file's curve separately).
+
+    Resource: "Beyond empirical models: Discovering constitutive laws in
+    solids with graph-based equation discovery".
+    """
+    data_dir = _SOLID_DATA_DIR / "data_DIF"
+    if not data_dir.exists():
+        raise FileNotFoundError(f"data_DIF directory not found: {data_dir}")
+
+    file_paths = sorted(data_dir.glob("*.xlsx"))
+    if len(file_paths) == 0:
+        raise FileNotFoundError(f"No .xlsx files found in {data_dir}")
+
+    X_rows = []
+    y_rows = []
+    groups = []
+    for file_path in file_paths:
+        df = pd.read_excel(file_path)
+        strain_rate = df["strain rate"].to_numpy(dtype=float)
+        dif = df["DIF"].to_numpy(dtype=float)
+        valid = np.isfinite(strain_rate) & np.isfinite(dif)
+        strain_rate, dif = strain_rate[valid], dif[valid]
+
+        X_rows.append(strain_rate.reshape(-1, 1))
+        y_rows.append(dif)
+        groups.extend([file_path.stem] * strain_rate.shape[0])
+
+    X = np.vstack(X_rows)
+    y = np.concatenate(y_rows)
+
+    descr = DatasetInfo(
+        description="""
+        Dynamic Increase Factor (DIF) vs strain-rate dataset, compiled from
+        40 materials across 18 published studies.
+        X = [strain_rate (1/s)], y = DIF (dimensionless).
+        Resource: Beyond empirical models: Discovering constitutive laws in
+        solids with graph-based equation discovery.
+        """
+    )
+
+    return TabularRegressionDataset(
+        name="solid_dif",
+        X=X,
+        y=y,
+        variable_names=["strain_rate"],
+        groups=np.array(groups),
+        descr=descr,
+    )
+
+
+def load_solid_strain_stress_dataset() -> "TabularRegressionDataset":
+    """
+    Load the strain-hardening dataset from
+    `Discovery_of_soild_consititutive/data/data_strain_stress/*.xlsx` (64
+    files, columns "true plastic strain"/"true plastic stress"; the strain
+    rate for each file's curve is encoded in its filename, e.g.
+    "Chen_2017_4.8.xlsx" -> 4.8/s, "Gao(22MnB5)_2020_1-e4.xlsx" -> 1e-4/s).
+
+    X = [true_plastic_strain, strain_rate], y = true_plastic_stress, one row
+    per (file, sample) pair; `groups` holds the source filename.
+
+    Resource: "Beyond empirical models: Discovering constitutive laws in
+    solids with graph-based equation discovery".
+    """
+    data_dir = _SOLID_DATA_DIR / "data_strain_stress"
+    if not data_dir.exists():
+        raise FileNotFoundError(f"data_strain_stress directory not found: {data_dir}")
+
+    file_paths = sorted(data_dir.glob("*.xlsx"))
+    if len(file_paths) == 0:
+        raise FileNotFoundError(f"No .xlsx files found in {data_dir}")
+
+    X_rows = []
+    y_rows = []
+    groups = []
+    for file_path in file_paths:
+        rate_token = file_path.stem.rsplit("_", 1)[-1]
+        strain_rate = _parse_strain_rate_token(rate_token)
+
+        df = pd.read_excel(file_path)
+        strain = df["true plastic strain"].to_numpy(dtype=float)
+        stress = df["true plastic stress"].to_numpy(dtype=float)
+        valid = np.isfinite(strain) & np.isfinite(stress)
+        strain, stress = strain[valid], stress[valid]
+
+        n = strain.shape[0]
+        X_rows.append(np.column_stack([strain, np.full(n, strain_rate)]))
+        y_rows.append(stress)
+        groups.extend([file_path.stem] * n)
+
+    X = np.vstack(X_rows)
+    y = np.concatenate(y_rows)
+
+    descr = DatasetInfo(
+        description="""
+        Strain-hardening (true plastic stress vs true plastic strain)
+        dataset, parametric in strain rate (encoded per-file in the source
+        filename).
+        X = [true_plastic_strain, strain_rate (1/s)], y = true_plastic_stress.
+        Resource: Beyond empirical models: Discovering constitutive laws in
+        solids with graph-based equation discovery.
+        """
+    )
+
+    return TabularRegressionDataset(
+        name="solid_strain_stress",
+        X=X,
+        y=y,
+        variable_names=["strain", "strain_rate"],
+        groups=np.array(groups),
+        descr=descr,
+    )
+
+
+def load_solid_hardening_dataset() -> "TabularRegressionDataset":
+    """
+    Load the pre-combined strain-hardening + strain-rate-effect dataset from
+    `Discovery_of_soild_consititutive/data/saved_data_hardening_strain_rate/*.pkl`
+    (10 materials). Each pickle is a dict of parallel lists
+    {"strain": [...], "stress": [...], "strain_rate": [...], "DIF": [...]},
+    one entry per (material, rate) curve, with DIF already matched from the
+    corresponding data_DIF file -- the "integrated model" data used to
+    discover a combined stress = f(strain) * g(strain_rate) constitutive law.
+
+    X = [strain, strain_rate, DIF], y = stress, one row per (file, curve,
+    sample) triple; `groups` holds "{filename}_curve{i}".
+
+    Resource: "Beyond empirical models: Discovering constitutive laws in
+    solids with graph-based equation discovery".
+    """
+    data_dir = _SOLID_DATA_DIR / "saved_data_hardening_strain_rate"
+    if not data_dir.exists():
+        raise FileNotFoundError(f"saved_data_hardening_strain_rate directory not found: {data_dir}")
+
+    file_paths = sorted(data_dir.glob("*.pkl"))
+    if len(file_paths) == 0:
+        raise FileNotFoundError(f"No .pkl files found in {data_dir}")
+
+    X_rows = []
+    y_rows = []
+    groups = []
+    for file_path in file_paths:
+        with file_path.open("rb") as f:
+            data = pickle.load(f)
+
+        for i, (strain, stress, strain_rate, dif) in enumerate(
+            zip(data["strain"], data["stress"], data["strain_rate"], data["DIF"])
+        ):
+            strain = np.asarray(strain, dtype=float)
+            stress = np.asarray(stress, dtype=float)
+            n = strain.shape[0]
+
+            X_rows.append(np.column_stack([
+                strain, np.full(n, float(strain_rate)), np.full(n, float(dif)),
+            ]))
+            y_rows.append(stress)
+            groups.extend([f"{file_path.stem}_curve{i}"] * n)
+
+    X = np.vstack(X_rows)
+    y = np.concatenate(y_rows)
+
+    descr = DatasetInfo(
+        description="""
+        Pre-combined strain-hardening + strain-rate-effect ("integrated
+        model") dataset, with DIF pre-matched per (material, strain-rate)
+        curve from the corresponding data_DIF file.
+        X = [strain, strain_rate (1/s), DIF], y = true_plastic_stress.
+        Resource: Beyond empirical models: Discovering constitutive laws in
+        solids with graph-based equation discovery.
+        """
+    )
+
+    return TabularRegressionDataset(
+        name="solid_hardening",
+        X=X,
+        y=y,
+        variable_names=["strain", "strain_rate", "DIF"],
+        groups=np.array(groups),
+        descr=descr,
+    )
+
+
+# -------------------------
+# Viscous gravity current (VGS) proppant-transport PDE dataset
+# -------------------------
+
+_VGS_ROOT = Path(__file__).resolve().parent / "ViscousGravityCurrent" / "1_proppant_transport_discovery"
+
+_VGS_NX = 500
+_VGS_DX = 2e-2
+
+# Canonical raw-data file per (case, window). Determined by reading the
+# original pipeline's own `main.py` in each folder, since case I's
+# "0-100" window has THREE slightly different copies of `caseI.dat`
+# scattered across its numbered subfolders (likely re-exported at
+# different pipeline stages) -- the copy below is the one the pipeline's
+# own main.py actually loads for that window.
+_VGS_CASE_CONFIG = {
+    ("I", "0-100"): {
+        "file": _VGS_ROOT / "case I - 0-100 s" / "1. construct ANN surrogate" / "caseI.dat",
+        "t_arange": (0, 100, 0.2),
+        "t_coeff": 1.22625e-1,
+    },
+    ("I", "100-200"): {
+        "file": _VGS_ROOT / "case I - 100-200 s" / "caseI.dat",
+        "t_arange": (0, 100, 0.2),
+        "t_coeff": 1.22625e-1,
+    },
+    ("II", "0-1000"): {
+        "file": _VGS_ROOT / "case II - 0-1000 s" / "caseII.dat",
+        "t_arange": (0, 1000, 2),
+        "t_coeff": 3.310149e-3,
+    },
+    ("II", "1000-2000"): {
+        "file": _VGS_ROOT / "case II - 1000-2000 s" / "caseII.dat",
+        "t_arange": (0, 1000, 2),
+        "t_coeff": 3.310149e-3,
+    },
+}
+
+_VGS_CASE_ALIASES = {"I": "I", "1": "I", "II": "II", "2": "II"}
+_VGS_DEFAULT_WINDOW = {"I": "0-100", "II": "0-1000"}
+
+
+def load_vgs_dataset(case: str = "I", window: Optional[str] = None) -> "GridPDEDataset":
+    """
+    Load a viscous-gravity-current / proppant-transport PDE discovery
+    dataset from `ViscousGravityCurrent/1_proppant_transport_discovery/`.
+
+    The raw data is the free-surface height h(x, t) of a spreading
+    two-phase (proppant-laden slurry vs ambient fluid) gravity current,
+    extracted from a 2D Stokes/level-set simulation (see
+    `case I - 0-100 s/0. prepare numerical data/viscous_gravity_current.m`),
+    on a fixed 500 (space) x 500 (time) grid, x in [0, 9.98]. Values are
+    the raw, unnormalized interface height as written by the simulation
+    (roughly in [0.5, 49.5]); the original ML pipeline additionally divided
+    by 50 before feeding it to a neural surrogate, which this loader does
+    not do.
+
+    Two physical cases are available, each split into two time windows
+    (different segments of the same underlying simulation). The exposed
+    time axis is reset to start at 0 for each window, following the
+    original pipeline's own convention -- reasonable for autonomous PDE
+    discovery, where only relative time spacing matters, not absolute
+    offset:
+        case="I":  windows "0-100" (default) / "100-200"
+        case="II": windows "0-1000" (default) / "1000-2000"
+
+    No confirmed ground-truth governing equation (`sym_true`) exists
+    anywhere in the source repository -- this is left unset.
+
+    Parameters
+    ----------
+    case : str
+        "I" (or "1") / "II" (or "2").
+    window : str, optional
+        Time window for the chosen case (see above). Defaults to the
+        first/earlier window for that case.
+
+    Resource: DLGA-PDE (deep-learning + genetic-algorithm PDE discovery)
+    applied to viscous gravity currents / proppant transport.
+    """
+    case_key = _VGS_CASE_ALIASES.get(case, case)
+    if case_key not in _VGS_DEFAULT_WINDOW:
+        raise ValueError(f"Unknown VGS case: {case!r}. Available: {sorted(_VGS_DEFAULT_WINDOW)}")
+
+    if window is None:
+        window = _VGS_DEFAULT_WINDOW[case_key]
+
+    config = _VGS_CASE_CONFIG.get((case_key, window))
+    if config is None:
+        available = [w for (c, w) in _VGS_CASE_CONFIG if c == case_key]
+        raise ValueError(
+            f"Unknown window {window!r} for case {case_key!r}. Available windows: {available}"
+        )
+
+    file_path = config["file"]
+    if not file_path.exists():
+        raise FileNotFoundError(f"VGS raw data file not found: {file_path}")
+
+    raw = np.loadtxt(str(file_path))  # (nt, nx), Fortran/Python-order: rows=time, cols=space
+    usol = raw.T  # (nx, nt) to match GridPDEDataset's legacy convention
+
+    nx = usol.shape[0]
+    x = np.arange(0, nx, 1) * _VGS_DX
+
+    start, stop, step = config["t_arange"]
+    t = np.arange(start, stop, step) * config["t_coeff"]
+
+    descr = DatasetInfo(
+        description=f"""
+        Viscous gravity current / proppant transport PDE discovery dataset,
+        case {case_key}, window {window} (segment of the underlying
+        simulation). h(x, t): free-surface height of a spreading two-phase
+        gravity current, from a 2D Stokes/level-set simulation. x in
+        [0, {x.max():.4g}], t in [0, {t.max():.4g}] (locally reset per
+        window). No confirmed ground-truth sym_true available.
+        Resource: DLGA-PDE (deep-learning genetic-algorithm PDE discovery)
+        applied to viscous gravity currents / proppant transport.
+        """
+    )
+
+    return GridPDEDataset(
+        equation_name=f"vgs_case{case_key}_{window}",
+        pde_data=None,
+        x=x,
+        t=t,
+        usol=usol,
+        domain={"x": (float(x.min()), float(x.max())), "t": (float(t.min()), float(t.max()))},
+        epi=1e-3,
+        descr=descr,
+        legacy=True,
+    )

@@ -1,3 +1,10 @@
+import os
+import sys
+
+from _common import bootstrap_project_root
+
+project_root = bootstrap_project_root()
+
 from gplearn.genetic import SymbolicRegressor
 from kd.dataset import SymbolicRegressionDataset
 from kd.metrics import MSE

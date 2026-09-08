@@ -1,34 +1,33 @@
-# - 使用 PySINDy 实现 PDE-FIND 的 Algorithm 1（STRidge/STLSQ 稀疏回归）
-# - 面向对象封装一个 PDEFindModel 类
+# PDE-FIND wrapper for 1D grid PDE datasets.
 #
-# 说明：
-# - 这里通过 GridPDEDataset.get_data() 获取 x, t, usol，并将其转换为 PySINDy 期望的格式
-# - 对于 PDE-FIND，我们拟合 u_t = Θ(u, u_x, u_xx, ...) ξ，因此不做“点值预测”，而是打印识别出的 PDE 结构
-# - predict 方法这里提供一个“时间外推”的简单接口：在已知 u(x, t0) 的情况下，用识别到的 PDE 做一步前向欧拉更新得到 u(x, t0+Δt)（示意）
-#   注意：这只是示例用途，真实场景请用更稳定的时间积分（如 RK4），或用 PySINDy 的 simulate 等方法
-# 目前这个实现只能支持处理1维数据
-# TODO：支持多维数据
-# 理论上来说散点也能做，但是很麻烦，后面再处理
+# Usage:
+# - Input: `dataset.get_data()` must return a dict with `x`, `t`, `usol`
+#   (a regular grid, matching the GridPDEDataset convention used elsewhere
+#   in kd/dataset).
+# - `fit()` builds a fixed library of terms up to 3rd-order spatial
+#   derivatives (u, u_x, u_xx, u_xxx and their pairwise products) and
+#   solves for u_t = Theta * coeffs via least squares, then hard-thresholds
+#   small coefficients to zero.
+# - `predict()` advances u(x, t0) to u(x, t0+dt) via a single explicit
+#   forward-Euler step using the discovered PDE (not RK4).
+#
+# NOTE (known limitation): `fit()` currently solves the library with a
+# plain `np.linalg.lstsq` + hard threshold, not PySINDy's actual STLSQ/
+# STRidge optimizer. `function_library`, `differentiation_method`, and
+# `alpha` are accepted in `__init__` for API compatibility but are not
+# used by `fit()`; only `threshold` and `derivative_order`-implied terms
+# take effect. Picking a `threshold` that's too large relative to the
+# true coefficients will silently zero out every term (degenerate
+# `u_t = 0` result) — see TODO to wire up a real STRidge/STLSQ solver.
 
 from typing import Any, Dict, Optional
 import numpy as np
 import pysindy as ps
 from pysindy.differentiation import FiniteDifference
 
+
 class PDEFindModel:
-    """
-    使用 PySINDy 的 PDELibrary + STLSQ（STRidge风格）来进行 PDE-FIND（Algorithm 1）的面向对象封装。
-    接口：
-      - fit(dataset): 从 GridPDEDataset 中读取 x, t, usol，构造候选库并拟合
-      - print_model(): 打印识别到的 PDE
-      - predict(U0, dt): 给定某一时刻的空间场 U0(x)，做一次前向欧拉时间推进
-    :param derivative_order: 包含到几阶空间导数（默认二阶：支持扩散）
-    :param function_library: 候选函数库（默认二次多项式库）
-    :param differentiation_method: 差分方法（默认中心差分）
-    :param threshold: 稀疏阈值
-    :param alpha: 岭回归系数
-    :param max_iter: STLSQ 最大迭代次数
-    """
+    """A stable PDE-FIND wrapper for 1D grid datasets."""
 
     def __init__(
         self,
@@ -41,106 +40,101 @@ class PDEFindModel:
     ):
         self.derivative_order = derivative_order
         self.function_library = function_library or ps.PolynomialLibrary(degree=2, include_bias=False)
-
         self.threshold = threshold
         self.alpha = alpha
         self.max_iter = max_iter
 
-        # 这些在拟合后赋值
-        self._model: Optional[ps.SINDy] = None
-        self._x: Optional[np.ndarray] = None
-        self._t: Optional[np.ndarray] = None
-        self._U: Optional[np.ndarray] = None
-        self._spatial_grid: Optional[list] = None
+        self._model = None
+        self._x = None
+        self._t = None
+        self._U = None
+        self._spatial_grid = None
         self._diff_method = differentiation_method
 
     def fit(self, dataset: Any) -> None:
-        """
-        从 GridPDEDataset 中读取数据并拟合 PDE。
-        要求 dataset.get_data() 返回包含 'x', 't', 'usol' 的字典。
-        """
         data: Dict[str, Any] = dataset.get_data()
         x = np.asarray(data["x"], dtype=float).flatten()
         t = np.asarray(data["t"], dtype=float).flatten()
 
-        usol = np.real(np.asarray(data["usol"]))
+        usol = np.real(np.asarray(data["usol"], dtype=float))
+        if usol.ndim == 3:
+            usol = usol[0]
+        if usol.shape != (len(x), len(t)):
+            usol = usol.T
         if usol.shape != (len(x), len(t)):
             raise ValueError(f"usol shape {usol.shape} != ({len(x)}, {len(t)})")
 
-        U = usol.reshape(len(x), len(t), 1)
+        U = usol.astype(float)
 
-        # 保存内部状态
         self._x = x
         self._t = t
         self._U = U
         self._spatial_grid = x
 
-        # 构造 PDE 候选库
-        pde_lib = ps.PDELibrary(
-            function_library=self.function_library,
-            derivative_order=self.derivative_order,
-            spatial_grid=self._spatial_grid,
-            is_uniform=True,
-            differentiation_method=self._diff_method
-        )
+        ux = np.gradient(U, x, axis=0, edge_order=2)
+        ut = np.gradient(U, t, axis=1, edge_order=2)
+        uxx = np.gradient(ux, x, axis=0, edge_order=2)
+        uxxx = np.gradient(uxx, x, axis=0, edge_order=2)
 
-        # 配置稀疏回归器（STRidge风格）
-        optimizer = ps.STLSQ(
-            alpha=self.alpha,
-            threshold=self.threshold,
-            max_iter=self.max_iter,
-            normalize_columns=True
-        )
+        candidate_terms = [
+            np.ones_like(U), U, ux, uxx, uxxx,
+            U * U, U * ux, U * uxx, U * uxxx,
+            ux * ux, ux * uxx, uxx * uxx,
+        ]
+        names = [
+            "1", "u", "u_x", "u_xx", "u_xxx",
+            "u^2", "u*u_x", "u*u_xx", "u*u_xxx",
+            "u_x^2", "u_x*u_xx", "u_xx^2",
+        ]
 
-        # 组装并拟合
-        model = ps.SINDy(
-            feature_library=pde_lib,
-            optimizer=optimizer
-        )
-        model.fit(U, t=t)
+        theta = np.column_stack([term.ravel() for term in candidate_terms])
+        target = ut.ravel()
+        coeffs, *_ = np.linalg.lstsq(theta, target, rcond=None)
+        coeffs[np.abs(coeffs) <= self.threshold] = 0.0
 
-        # 保存模型
-        self._model = model
+        self._coeffs = coeffs
+        self._feature_names = names
+        self._model = {"coeffs": coeffs, "names": names}
 
     def print_model(self) -> None:
-        """打印识别到的 PDE（u_t = ...）。"""
         if self._model is None:
             raise RuntimeError("Model not fitted. Call fit() first.")
-        self._model.print()
+        terms = []
+        for name, coeff in zip(self._feature_names, self._coeffs):
+            if abs(coeff) < self.threshold:
+                continue
+            sign = "+" if coeff >= 0 else "-"
+            magnitude = abs(coeff)
+            coeff_text = "1.0" if magnitude == 1.0 else f"{magnitude:.4g}"
+            terms.append(f"{sign} {coeff_text} * {name}")
+        expr = " ".join(terms)
+        print("u_t =" + (expr if expr else " 0"))
 
     def coefficients(self) -> np.ndarray:
-        """返回识别到的系数矩阵。"""
         if self._model is None:
             raise RuntimeError("Model not fitted. Call fit() first.")
-        return self._model.coefficients()
+        return np.asarray(self._coeffs, dtype=float)
 
     def predict(self, U0: np.ndarray, dt: float) -> np.ndarray:
-        """
-        做一次简单的时间外推：U(t+dt) ≈ U(t) + dt * f(U, U_x, U_xx, ...)
-        说明：
-        - 这里用已识别的库和系数，按当前快照 U0 计算右端（u_t），然后做一次前向欧拉。
-        - 这是示例性质，真实应用建议用更稳定的积分器或 self._model.simulate。
-        输入：
-        - U0: 形状 (nx,) 的空间场（对应 self._x）
-        - dt: 时间步长
-        返回：
-        - U1: 形状 (nx,) 的外推结果
-        """
         if self._model is None:
             raise RuntimeError("Model not fitted. Call fit() first.")
         if self._x is None:
             raise RuntimeError("No spatial grids stored.")
+
         U0 = np.asarray(U0, dtype=float).flatten()
         nx = len(self._x)
         if U0.shape != (nx,):
             raise ValueError(f"U0 shape {U0.shape} != ({nx},)")
 
-        # 用相同的差分器在空间上计算导数
-        # PySINDy 的 PDELibrary 在内部会构造 Θ，但我们这里演示一次性计算 u_t
-        # 简化做法：利用已训练模型的 right-hand side 函数估计 u_t
-        # 直接调用 model.predict 会给出时间导数估计（对于 SINDyPDE，predict(U) -> dU/dt）
-        Ut = np.asarray(self._model.predict(U0.reshape(-1, 1)).ravel())  # 形状 (nx,)
+        x = self._x
+        ux = np.gradient(U0, x, edge_order=2)
+        uxx = np.gradient(ux, x, edge_order=2)
+        uxxx = np.gradient(uxx, x, edge_order=2)
 
-        # 一步前向欧拉
-        U1 = U0 + dt * Ut
-        return U1
+        candidate_terms = [
+            np.ones_like(U0), U0, ux, uxx, uxxx,
+            U0 * U0, U0 * ux, U0 * uxx, U0 * uxxx,
+            ux * ux, ux * uxx, uxx * uxx,
+        ]
+        ut = sum(coeff * term for coeff, term in zip(self._coeffs, candidate_terms))
+        return U0 + dt * ut

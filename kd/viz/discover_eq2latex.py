@@ -1,8 +1,13 @@
 import sympy
 from sympy.parsing.sympy_parser import parse_expr
 
-# FIXME: 这里可能有问题
-# 理想情况下，这个列表应该从 Program.library 动态获取或作为参数传入
+# Known limitation: this is a fixed default symbol table (single state
+# variable `u1`, up to 3 spatial dims `x1..x3`, plus `c`). Callers can
+# override it per-call via `discover_program_to_latex(custom_deeprl_symbols=...)`,
+# but if a Program uses more state/input variables than this default and no
+# override is passed, sympy.parse_expr will fail to resolve the extra symbol
+# names. Ideally this table would be derived automatically from
+# `Program.library` instead of hardcoded here.
 DEEPRL_SYMBOLS_FOR_SYMPY = {
     name: sympy.Symbol(name) for name in ['u1', 'x1', 'x2', 'x3', 'c'] # 'c' 代表可能的常数符号
 }

@@ -4,7 +4,7 @@ import sys
 import numpy as np
 import pytest
 
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from kd.dataset import load_pde_grid
 from kd.model.kd_sga import KD_SGA
@@ -20,13 +20,13 @@ class DummySolver:
         self.config = config
 
     def run(self, context):
-        # 确认上下文中包含配置
+        # Confirm that the fitted context retains its configuration.
         assert context.config is self.config
         return "u_t = 0", 0.0
 
 
 def test_fit_dataset_uses_adapter():
-    dataset = load_pde_grid('chafee-infante')
+    dataset = load_pde_grid("chafee-infante")
 
     model = KD_SGA(sga_run=1, depth=1, width=1)
     result = model.fit_dataset(

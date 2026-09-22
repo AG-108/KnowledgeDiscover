@@ -33,9 +33,7 @@ class Attrdict(dict):
         try:
             return self[item]  # Attempt to retrieve the item using key access
         except KeyError:
-            raise AttributeError(
-                f"'{type(self).__name__}' object has no attribute '{item}'"
-            )
+            raise AttributeError(f"'{type(self).__name__}' object has no attribute '{item}'")
 
     def __setattr__(self, key, value):
         """
@@ -51,9 +49,7 @@ class Attrdict(dict):
         try:
             del self[item]
         except KeyError:
-            raise AttributeError(
-                f"'{type(self).__name__}' object has no attribute '{item}'"
-            )
+            raise AttributeError(f"'{type(self).__name__}' object has no attribute '{item}'")
 
     def __dir__(self):
         """

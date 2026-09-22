@@ -1,0 +1,17 @@
+{
+  "name": "deepmod",
+  "device": "cpu",
+  "model": {
+    "batch_size": 256,
+    "epochs": 3,
+    "learning_rate": 0.001
+  },
+  "profiles": {
+    "full": {
+      "model": {
+        "epochs": 20,
+        "hidden_layers": [50, 50, 50, 50, 1]
+      }
+    }
+  }
+}

@@ -1,15 +1,11 @@
-from . import dlga_viz
 # from ...examples import dlga_kdv
-from . import dscv_viz
-from . import equation_renderer
-from . import dlga_eq2latex
-from . import discover_eq2latex
+from . import discover_eq2latex, dlga_eq2latex, dlga_viz, dscv_viz, equation_renderer
 
 __all__ = [
-    'dlga_viz',
-    'dlga_kdv',
-    'dscv_viz',
-    'equation_renderer',
-    'dlga_eq2latex',
-    'discover_eq2latex',
+    "dlga_viz",
+    "dlga_kdv",
+    "dscv_viz",
+    "equation_renderer",
+    "dlga_eq2latex",
+    "discover_eq2latex",
 ]

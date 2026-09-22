@@ -1,0 +1,20 @@
+{
+  "name": "dso",
+  "device": "cpu",
+  "model": {
+    "n_samples": 4000,
+    "batch_size": 200,
+    "function_set": ["add", "sub", "mul", "div", "sin", "cos", "const"],
+    "max_length": 24,
+    "learning_rate": 0.005,
+    "verbose": false
+  },
+  "profiles": {
+    "full": {
+      "model": {
+        "n_samples": 2000000,
+        "batch_size": 1000
+      }
+    }
+  }
+}

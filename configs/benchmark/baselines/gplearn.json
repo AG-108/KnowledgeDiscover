@@ -1,0 +1,18 @@
+{
+  "name": "gplearn",
+  "device": "cpu",
+  "model": {
+    "population_size": 100,
+    "generations": 2,
+    "function_set": ["add", "sub", "mul", "div", "sin", "cos"],
+    "verbose": 0
+  },
+  "profiles": {
+    "full": {
+      "model": {
+        "population_size": 1000,
+        "generations": 20
+      }
+    }
+  }
+}

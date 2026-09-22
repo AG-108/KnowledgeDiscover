@@ -1,0 +1,9 @@
+{
+  "profile": "smoke",
+  "models": ["sindy", "integral_weak_pde"],
+  "datasets": ["ode_core_*", "burgers", "kdv", "chafee-infante"],
+  "seeds": [0, 1, 2, 3, 4],
+  "timeout": 300,
+  "output_dir": "results/core_v2",
+  "overrides": {"models": {}, "datasets": {}, "run": {}}
+}

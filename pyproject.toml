@@ -6,15 +6,83 @@ readme = "README.md"
 requires-python = ">=3.8"
 license = "MIT"
 authors = [
-  { name="Your Name", email="your@email.com" }
+  { name = "Your Name", email = "your@email.com" }
 ]
 
-dependencies = [
+dependencies = []
+
+[project.optional-dependencies]
+dev = [
+  "black==24.8.0",
+  "pytest>=8",
+  "ruff==0.12.12",
 ]
+operon = ["pyoperon==0.6.1; python_version >= '3.10'"]
 
 [build-system]
 requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.package-data]
-"kd.dataset" = ["data/*.mat", "data/*.csv", "data/*.npy", "data/*.txt"]
+"kd.dataset" = [
+  "data/*.mat",
+  "data/*.csv",
+  "data/*.npy",
+  "data/*.txt",
+  "CYT/README.md",
+  "CYT/*/Output/FlowFeature.dat",
+  "ViscousGravityCurrent/README.md",
+  "ViscousGravityCurrent/data/*.dat",
+  "Discovery_of_soild_consititutive/LICENSE",
+  "Discovery_of_soild_consititutive/README.md",
+  "Discovery_of_soild_consititutive/data/data_DIF/*.xlsx",
+  "Discovery_of_soild_consititutive/data/data_rubber/train/*.xlsx",
+  "Discovery_of_soild_consititutive/data/data_rubber/test/*.xlsx",
+  "Discovery_of_soild_consititutive/data/data_strain_stress/*.xlsx",
+  "Discovery_of_soild_consititutive/data/saved_data_hardening_strain_rate/*.pkl",
+]
+"kd.model.llmsr" = ["LICENSE", "UPSTREAM.md"]
+
+[tool.black]
+line-length = 100
+target-version = ["py38"]
+extend-exclude = '''
+/(
+  archive
+  | kd/dataset/(CYT|DeepSymbolicOptimization|Discover_Green_function|Discovery_of_soild_consititutive|EqGPT|SymbolicGPT|ViscousGravityCurrent|discovery-of-physics-from-data)
+  | kd/model/(PDENet2|discover|dso|eqgpt|sga|symbolicgpt)
+)/
+'''
+
+[tool.ruff]
+line-length = 100
+target-version = "py38"
+extend-exclude = [
+  "archive",
+  "kd/dataset/CYT",
+  "kd/dataset/DeepSymbolicOptimization",
+  "kd/dataset/Discover_Green_function",
+  "kd/dataset/Discovery_of_soild_consititutive",
+  "kd/dataset/EqGPT",
+  "kd/dataset/SymbolicGPT",
+  "kd/dataset/ViscousGravityCurrent",
+  "kd/dataset/discovery-of-physics-from-data",
+  "kd/model/PDENet2",
+  "kd/model/discover",
+  "kd/model/dso",
+  "kd/model/eqgpt",
+  "kd/model/sga",
+  "kd/model/symbolicgpt",
+]
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I"]
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["F401"]
+"examples/*.py" = ["E402"]
+"kd/dataset/__init__.py" = ["E402"]
+"kd/model/kd_pdenet.py" = ["E402"]
+"tests/test_kd_dso.py" = ["E402"]
+"tests/test_kd_eqgpt.py" = ["E402"]
+"tests/test_kd_symbolicgpt.py" = ["E402"]

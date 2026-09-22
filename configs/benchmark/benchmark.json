@@ -1,0 +1,68 @@
+{
+  "baseline_config_dir": "configs/benchmark/baselines",
+  "profile": "smoke",
+  "tasks": ["sr", "ode", "pde"],
+  "models": ["*"],
+  "datasets": ["*"],
+  "seeds": [0],
+  "output_dir": "results/benchmark",
+  "timeout": null,
+  "resume": false,
+  "devices": {
+    "dscv": "cpu",
+    "spr": "cpu",
+    "sga": "cpu",
+    "dlga": "cpu",
+    "deepmod": "cpu",
+    "pdefind": "cpu",
+    "pdenet": "cpu",
+    "weakform": "cpu",
+    "eqgpt": "cpu",
+    "dso": "cpu",
+    "symbolicgpt": "cpu",
+    "gplearn": "cpu",
+    "physo": "cpu",
+    "pysr": "cpu",
+    "sindy": "cpu",
+    "pysindy": "cpu",
+    "llmsr": "cpu",
+    "pyoperon": "cpu"
+  },
+  "profiles": {
+    "smoke": {
+      "run": {
+        "test_size": 0.2,
+        "max_train_samples": 2000,
+        "dscv_epochs": 2,
+        "colloc_num": 256,
+        "sample_ratio": 0.05,
+        "spr_pretrain_epochs": 50,
+        "spr_pinn_epochs": 20,
+        "spr_iterations": 1,
+        "dlga_samples": 200,
+        "dlga_population": 20,
+        "dlga_generations": 2
+      }
+    },
+    "full": {
+      "run": {
+        "test_size": 0.2,
+        "max_train_samples": null,
+        "dscv_epochs": 50,
+        "colloc_num": 256,
+        "sample_ratio": 0.05,
+        "spr_pretrain_epochs": 200000,
+        "spr_pinn_epochs": 1000,
+        "spr_iterations": 2,
+        "dlga_samples": 0.1,
+        "dlga_population": 400,
+        "dlga_generations": 100
+      }
+    }
+  },
+  "overrides": {
+    "models": {},
+    "datasets": {},
+    "run": {}
+  }
+}

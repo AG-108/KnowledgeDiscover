@@ -1,0 +1,35 @@
+{
+  "name": "dscv",
+  "device": "cpu",
+  "model": {
+    "n_iterations": 5,
+    "n_samples_per_batch": 80
+  },
+  "profiles": {
+    "full": {
+      "model": {
+        "n_iterations": 10,
+        "n_samples_per_batch": 100,
+        "config_out": {
+          "controller": {
+            "max_length": 32,
+            "summary": false
+          },
+          "prior": {
+            "length": {
+              "min_": 3,
+              "max_": 32,
+              "on": true
+            }
+          },
+          "training": {
+            "save_summary": false
+          }
+        }
+      },
+      "run": {
+        "dscv_epochs": 10
+      }
+    }
+  }
+}

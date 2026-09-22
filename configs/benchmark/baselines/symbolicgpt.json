@@ -1,0 +1,28 @@
+{
+  "name": "symbolicgpt",
+  "device": "cpu",
+  "model": {
+    "embedding_size": 32,
+    "n_layer": 2,
+    "n_head": 2,
+    "pretrain_corpus_size": 300,
+    "pretrain_epochs": 15,
+    "op_list": ["add", "sub", "mul", "div", "sin", "cos", "pow"],
+    "batch_size": 32,
+    "num_candidates": 20,
+    "candidate_batch_size": 16,
+    "cache_dataset_tensors": true,
+    "verbose": false
+  },
+  "profiles": {
+    "full": {
+      "model": {
+        "pretrain_corpus_size": 3000,
+        "pretrain_epochs": 50,
+        "num_candidates": 100,
+        "candidate_batch_size": 32,
+        "dataloader_workers": 2
+      }
+    }
+  }
+}

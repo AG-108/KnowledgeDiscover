@@ -1,6 +1,12 @@
 
 # KD
 
+统一运行 symbolic regression、ODE discovery 和 PDE discovery：
+`python run_benchmark.py --dry-run` 查看全量实验清单；
+总配置位于 `configs/benchmark/benchmark.json`，各 baseline 参数位于 `configs/benchmark/baselines/`；
+运行方式、baseline/dataset 覆盖和评估协议见 [benchmark 使用说明](docs/benchmark.md)，
+完整的逐组合预检结果见 [兼容性报告](docs/compatibility_report.md)。
+
 ## 项目简介
 
 **KD** 是一个面向科学计算与机器学习的开源框架，专注于偏微分方程（PDE）符号发现、数据驱动建模与高质量可视化。框架集成了强化学习、遗传算法、物理信息神经网络（PINN）等多种符号回归方法，支持灵活的数据加载、算子扩展和多维度可视化，适用于科研、工程和教学场景。
@@ -127,3 +133,10 @@ Conda 能够更好地管理复杂的科学计算包及其非 Python 依赖，是
 - https://github.com/sympy/sympy
 - https://github.com/lululxvi/deepxde
 - https://github.com/MilesCranmer/PySR
+- https://github.com/deep-symbolic-mathematics/LLM-SR
+- https://github.com/heal-research/pyoperon
+
+## 开发与代码风格
+
+项目统一使用 Black 和 Ruff。格式化命令、注释规范及第三方源码排除范围见
+[代码风格说明](docs/code_style.md)。

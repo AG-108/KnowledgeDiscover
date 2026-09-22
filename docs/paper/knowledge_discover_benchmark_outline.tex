@@ -1,0 +1,626 @@
+% English manuscript framework, grounded in the current repository.
+% Compile with: pdflatex knowledge_discover_benchmark_outline.tex (twice).
+% Self-contained: external figures and a bibliography database are not required.
+% Evidence: run_benchmark.py, docs/benchmark_metrics.md,
+% configs/benchmark/, kd/dataset/_catalog.py, kd/dataset/_registry.py.
+% This is a writing framework, not a report of completed benchmark experiments.
+\documentclass[11pt,a4paper]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage{amsmath,amssymb}
+\usepackage{tabularx,array}
+\IfFileExists{booktabs.sty}{\usepackage{booktabs}}{%
+  \newcommand{\toprule}{\hline}
+  \newcommand{\midrule}{\hline}
+  \newcommand{\bottomrule}{\hline}}
+\usepackage{xcolor}
+\newcolumntype{Y}{>{\raggedright\arraybackslash}X}
+\setlength{\emergencystretch}{2em}
+\definecolor{draftblue}{RGB}{25,75,135}
+\newcommand{\todo}[1]{\par\smallskip\noindent{\color{draftblue}\textbf{[TO COMPLETE]} #1}\par\smallskip}
+\newcommand{\uncertain}[1]{\par\smallskip\noindent{\color{draftblue}\textbf{[TO VERIFY]} #1}\par\smallskip}
+\newcommand{\planned}[1]{\par\smallskip\noindent{\color{draftblue}\textbf{[PROPOSED EXPERIMENT]} #1}\par\smallskip}
+\newcommand{\pending}{\textit{TBD}}
+\newcommand{\code}[1]{\texttt{\detokenize{#1}}}
+\newcommand{\figureplaceholder}[2]{%
+  \fbox{\begin{minipage}[c][#1][c]{0.94\linewidth}
+    \centering\small\textbf{Figure to be supplied}\par\medskip
+    \begin{minipage}{0.9\linewidth}\raggedright #2\end{minipage}
+  \end{minipage}}}
+\title{KnowledgeDiscover: A Unified Benchmark for Symbolic Regression\\
+and Discovery of Ordinary and Partial Differential Equations\\
+\large Working manuscript framework}
+\author{\pending{}: Authors and affiliations}
+\date{\pending{}: Submission date and venue}
+
+\begin{document}
+\maketitle
+\begin{abstract}
+Recovering interpretable mathematical relationships from observations requires
+evaluation beyond predictive accuracy. A discovered expression may predict well
+without recovering the underlying structure, while an apparently correct
+differential equation may produce unstable forecasts. We present
+KnowledgeDiscover, a unified evaluation framework spanning symbolic regression
+(SR), ordinary differential equation (ODE) discovery, and partial differential
+equation (PDE) discovery. The framework combines task-specific data adapters,
+explicit holdout protocols, isolated execution, and measurements of prediction,
+symbolic recovery, dynamical consistency, and computational cost. Its current
+runner registers 13 baseline adapters with task-dependent applicability.
+SR and ODE evaluation includes normalized prediction error, coefficient of
+determination, expression complexity, and algebraic recovery when references
+are available. PDE evaluation separates exact support recovery, coefficient
+accuracy, held-out equation residuals, and multi-step rollout error.
+\textbf{[RESULTS TO INSERT: final dataset and instance counts, evaluated methods,
+number of seeds, and two or three quantitative findings with uncertainty.]}
+\textbf{[CONCLUSION TO INSERT: an evidence-supported implication for selecting
+equation-discovery methods.]}
+\end{abstract}
+
+\noindent\textbf{Keywords:} symbolic regression; equation discovery; scientific
+machine learning; reproducible benchmarking; symbolic recovery.
+
+\section{Introduction}
+\label{sec:introduction}
+\subsection{Motivation}
+Describe the scientific objective: infer compact, interpretable relationships
+from measurements of static responses, trajectories, or spatiotemporal fields.
+Explain why test-set accuracy alone does not establish recovery of a governing
+law, and why runtime, failures, and data requirements affect practical utility.
+Use one concrete motivating example linking a static constitutive relation,
+an ODE, and a PDE without implying that all methods solve all three tasks.
+
+\todo{Insert the target application and audience. Add verified citations for
+scientific equation discovery and the limitations of prediction-only evaluation.}
+
+\subsection{Evaluation gaps and research questions}
+Position the paper around the following questions; these are questions to be
+tested, not conclusions already supported by experiments.
+\begin{enumerate}
+\renewcommand{\labelenumi}{RQ\arabic{enumi}.}
+  \item How do predictive accuracy and symbolic recovery agree or disagree
+  across SR, ODE, and PDE tasks?
+  \item For PDEs, how are exact support recovery, coefficient error, held-out
+  residuals, and rollout accuracy related?
+  \item How do measurement noise, sampling density, and distribution shifts
+  change the relative performance of applicable methods?
+  \item What tradeoffs arise among accuracy, expression complexity, execution
+  reliability, runtime, and memory use?
+\end{enumerate}
+
+\subsection{Contributions and scope}
+Frame the intended contributions as (i) a shared execution and reporting
+infrastructure with task-specific adapters; (ii) a transparent evaluation
+protocol that separates numerical fit, structural recovery, and dynamical
+behavior; and (iii) a reproducible comparative study with explicit coverage
+and failure accounting.
+\uncertain{Establish novelty through related-work comparison before using
+claims such as ``first,'' ``largest,'' or ``comprehensive.'' The contribution
+is presently a benchmark and integration effort, not a new discovery algorithm.
+Do not claim the empirical contribution until the full experiments are complete.}
+
+\section{Related Work}
+\label{sec:related}
+\subsection{Symbolic regression and scientific discovery}
+Discuss genetic programming, reinforcement-learning-guided search,
+transformer-based expression generation, and physics-constrained symbolic
+regression. Distinguish architectural ideas from the specific implementations
+evaluated here.
+\subsection{ODE and PDE identification}
+Discuss sparse library regression, derivative estimation, neural surrogate
+methods, symbolic search, and learned evolution operators. Explain the distinct
+roles of discovering equations and predicting trajectories or fields.
+\subsection{Existing benchmarks}
+Compare task coverage, data provenance, ground-truth availability, split rules,
+metric definitions, compute accounting, and reproducibility artifacts.
+
+\begin{table}[htbp]
+\centering\small
+\caption{Related-benchmark comparison template. Every external entry requires
+a verified citation and protocol inspection; blanks are not negative findings.}
+\label{tab:related}
+\begin{tabularx}{\linewidth}{lYYYY}
+\toprule
+Benchmark & Tasks/data & Recovery definition & Holdout protocol & Cost/failures \\
+\midrule
+\pending{} benchmark A & \pending & \pending & \pending & \pending \\
+\pending{} benchmark B & \pending & \pending & \pending & \pending \\
+\pending{} benchmark C & \pending & \pending & \pending & \pending \\
+KnowledgeDiscover & SR/ODE/PDE & Task-specific & See Sec.~\ref{sec:protocol} & Logged \\
+\bottomrule
+\end{tabularx}
+\end{table}
+\todo{Add verified primary references for each evaluated method, dataset, and
+comparison benchmark. No external bibliographic entries have been invented for
+this draft; complete the bibliography before submission.}
+
+\section{Benchmark Design}
+\label{sec:design}
+\subsection{Problem formulation}
+For SR, estimate an expression $\hat f$ from observations
+$y_i=f^\star(\mathbf{x}_i)+\epsilon_i$.
+For ODE discovery, estimate each component of
+\begin{equation}
+  \dot{\mathbf{z}}(t)=\mathbf{f}^\star(\mathbf{z}(t),\mathbf{p}),
+\end{equation}
+using state and parameter features and derivative targets constructed by the
+adapter. For PDE discovery, consider equations representable as
+\begin{equation}
+  \partial_t u=F^\star(u,\nabla u,\nabla^2u,\ldots,\mathbf{x}).
+\end{equation}
+These equations describe the evaluation setting, not universal support for all
+ODEs, coupled PDE systems, geometries, or boundary conditions. Multiple scalar
+targets may produce multiple result rows within one execution case.
+
+\subsection{Data inventory and reference fidelity}
+The runner draws from the unified dataset registry, a symbolic-expression CSV
+catalog, and a wave-breaking adapter. Candidate sources include synthetic SR
+families, material-response regression, ball-drop trajectories, packaged PDE
+fields, TLC time-series data, wake data, viscous-gravity-current data, and a
+generated PDE family. Registry membership does not establish successful loading,
+method compatibility, or inclusion in the final study.
+Classify references as coefficient-bearing equations, structure-only equations,
+or unavailable ground truth. Keep experimental observations separate from
+simulations and generated expressions.
+
+\begin{table}[htbp]
+\centering\small
+\caption{Dataset inventory to finalize from the frozen experiment manifest.
+Counts refer to distinct tasks/instances, not simply registered names.}
+\label{tab:datasets}
+\begin{tabularx}{\linewidth}{>{\raggedright\arraybackslash}p{0.27\linewidth}YYYY}
+\toprule
+Task/source examples & Instances; targets & Size; domain & Reference & Split; provenance \\
+\midrule
+SR: Koza, Keijzer, other CSV families & \pending & \pending & Expressions & Provided split; \pending \\
+SR: rubber, CYT, solid-response data & \pending & \pending & Verify per dataset & Official, group, or random \\
+ODE: ball drop & \pending & \pending & Verify component equations & Whole trajectories \\
+PDE: Burgers, KdV, Chafee--Infante & \pending & \pending & Coefficient-bearing & Temporal block \\
+PDE: TLC, wake, wave breaking, VGS & \pending & \pending & Verify per dataset & Temporal block \\
+PDE: generated sinus family & \pending & \pending & Verify metadata & Temporal block \\
+\bottomrule
+\end{tabularx}
+\end{table}
+\todo{For every included dataset, specify source citation, license, checksums,
+units, dimensions, spatial and temporal resolution, sample/trajectory counts,
+noise characteristics, boundary/initial conditions, and preprocessing. Deduplicate
+aliases and related instances. The rubber train/test pair is one experiment.}
+\uncertain{The catalog explicitly excludes a broken advection--diffusion loader
+and unsupported steady-state TLC files. Audit generated-instance seeds and
+independence across splits; finalize all counts after loading and eligibility checks.}
+
+\subsection{Baseline adapters and applicability}
+Table~\ref{tab:methods} describes the current runner, not completed experiment
+coverage. Each adapter's operators, features, initialization, units, search
+budget, and stopping rule must be documented for the publication.
+
+\begin{table}[htbp]
+\centering\small
+\caption{Registered baseline adapters and implementation scope. GPU support
+refers to supported components, not necessarily the entire search.}
+\label{tab:methods}
+\begin{tabularx}{\linewidth}{llY}
+\toprule
+Adapter ID & Registered tasks & Implementation note \\
+\midrule
+\code{dscv} & SR, ODE, PDE & DISCOVER adapter; current device interface is CPU. \\
+\code{spr} & PDE & DISCOVER/SPR integration; PINN component supports CUDA. \\
+\code{sga} & PDE & SGA integration; CPU in current runner. \\
+\code{dlga} & PDE & Neural derivatives support CUDA; genetic search includes CPU work. \\
+\code{deepmod} & PDE & DeepMoD neural and sparse-model components. \\
+\code{pdefind} & PDE & PDE-FIND adapter using numerical regression. \\
+\code{pdenet} & PDE & PDE-Net adapter with a model-based evolution predictor. \\
+\code{weakform} & PDE & Currently finite differences plus thresholded least squares;
+not an integral weak-form or WSINDy implementation. \\
+\code{eqgpt} & PDE & EqGPT adapter with CUDA support. \\
+\code{dso} & SR, ODE & PyTorch-based DSO integration; document departure from upstream. \\
+\code{symbolicgpt} & SR, ODE & Transformer-based symbolic-regression adapter. \\
+\code{gplearn} & SR, ODE & CPU genetic-programming regressor. \\
+\code{physo} & SR, ODE & PhySO integration with selectable device. \\
+\bottomrule
+\end{tabularx}
+\end{table}
+\uncertain{SISSO++ v1.2.6 was installed and smoke-tested separately, but is not
+registered in the inspected runner. Its inclusion requires an adapter, a baseline
+configuration, applicable task definitions, and evaluation tests. Keep it out of
+the reported 13 adapters until that work is complete. PySINDy installation alone
+likewise does not establish a separately evaluated baseline.}
+\todo{Resolve display names and upstream citations. Label the current
+\code{weakform} adapter as a finite-difference least-squares baseline in results.
+Audit pretrained checkpoints, training corpora, and test-set overlap for all
+learned priors. Specify which physics or dimensional information each method receives.}
+
+\subsection{Execution and reproducibility infrastructure}
+The runner builds model--dataset--seed cases, imports methods on demand, executes
+cases in separate worker processes and working directories, and records resolved
+parameters and devices. It supports timeout handling, partial results, and
+configuration-aware resumption. Current scheduling is sequential at the case
+level. Status values distinguish successful execution, errors, timeouts, and skips.
+Artifacts include a manifest, case configurations and logs, raw result rows,
+and task--method aggregates.
+
+\begin{figure}[htbp]
+\centering
+\figureplaceholder{4cm}{Draw the actual workflow: dataset catalog and references
+$\rightarrow$ task adapters and splits $\rightarrow$ model--dataset--seed manifest
+$\rightarrow$ isolated workers $\rightarrow$ expression/prediction normalization
+$\rightarrow$ task metrics and resource measurements $\rightarrow$ raw and aggregate
+reports. Show missing-reference and unsupported-adapter branches explicitly.}
+\caption{Planned architecture figure for the benchmark.}
+\label{fig:architecture}
+\end{figure}
+
+\section{Evaluation Protocol}
+\label{sec:protocol}
+\subsection{Train/test separation}
+\paragraph{SR.} Synthetic expression benchmarks use their provided benchmark
+splits. Rubber data use their official paired split. Other regression datasets
+use group holdout when group IDs exist and random holdout otherwise. Training
+subsampling is seed-controlled and applies only to training examples.
+\paragraph{ODE.} Entire trajectories are assigned to train or test before
+conversion to regression arrays. First-order derivative targets are generated
+separately for each subset, and boundary derivative estimates are discarded.
+Current ODE scores concern derivative prediction, not integrated trajectory error.
+\paragraph{PDE.} For $n_t\geq5$ frames and holdout fraction $\rho$, the current
+adapter sets
+\begin{equation}
+ n_{\mathrm{test}}=\min\{n_t-3,\max\{2,\operatorname{round}(\rho n_t)\}\},
+ \qquad k=n_t-n_{\mathrm{test}}.
+\end{equation}
+With zero-based indexing, training uses frames $0,\ldots,k-1$ and testing uses
+$k,\ldots,n_t-1$. The evaluation view includes frame $k-1$ as a rollout initial
+condition, but this frame is excluded from test-error scoring.
+
+\begin{figure}[htbp]
+\centering
+\figureplaceholder{3.4cm}{Three panels: (a) SR official/group holdout; (b) complete
+ODE trajectories in disjoint subsets; (c) PDE training prefix, final training
+frame used as the initial condition, and future test block. Label derivative
+stencil boundaries and distinguish observed test fields for residual evaluation
+from predicted states for rollout evaluation.}
+\caption{Planned split-protocol figure.}
+\label{fig:splits}
+\end{figure}
+\todo{Audit all adapters for preprocessing fitted on training data only,
+derivative stencils, normalization, and internal validation. Establish a validation
+split or training-only tuning protocol before selecting publication hyperparameters.
+Do not select configurations using the held-out test scores.}
+
+\subsection{SR and ODE metrics}
+Let $\sigma_y^2=N^{-1}\sum_i(y_i-\bar y)^2$ on the test targets. Report
+\begin{equation}
+ \mathrm{NRMSE}=\frac{\sqrt{N^{-1}\sum_i(\hat y_i-y_i)^2}}{\sigma_y},
+ \qquad R^2=1-\frac{\sum_i(\hat y_i-y_i)^2}{\sum_i(y_i-\bar y)^2}.
+\end{equation}
+For ODE tasks, $y$ is a derivative component. Constant targets require explicit
+degenerate-case handling: the current NRMSE is zero for an exact fit and unavailable
+for a nonzero error on a constant target; $R^2$ is unavailable for any constant target.
+Expression complexity is the number of variable, numeric, function, and operator
+tokens in the emitted RHS before algebraic simplification. It is a lexical proxy,
+not a proven representation-invariant measure of minimal description length.
+
+For parseable expressions with trustworthy ground truth, algebraic recovery is
+\begin{equation}
+ I_{\mathrm{alg}}=\mathbb{1}\{\operatorname{simplify}(\hat f-f^\star)=0\}.
+\end{equation}
+Unavailable references and parsing failures yield unavailable scores. The
+recovery rate averages evaluable indicators and must be accompanied by their count.
+\uncertain{Symbolic simplification depends on parser conventions, variable
+mapping, domain assumptions, and floating-point constants. Document these and
+any numerical-equivalence supplement; do not silently substitute approximate
+numerical agreement for this algebraic criterion.}
+
+\subsection{PDE structure and coefficient metrics}
+Normalize supported equations to an explicit RHS. Expand additive terms,
+combine equivalent term keys, and remove coefficients with magnitude at most
+$10^{-12}$, matching the current implementation. Let $S^\star$ and $\hat S$
+be reference and discovered supports. Report
+\begin{align}
+ I_{\mathrm{support}} &= \mathbb{1}\{\hat S=S^\star\}, \\
+ J &= \frac{|\hat S\cap S^\star|}{|\hat S\cup S^\star|}, &
+ P &= \frac{|\hat S\cap S^\star|}{|\hat S|}, &
+ R &= \frac{|\hat S\cap S^\star|}{|S^\star|}.
+\end{align}
+The implementation assigns $J=1$ when both supports are empty, and zero precision
+or recall when their respective denominators are empty.
+The output field \code{exact_symbolic_recovery} corresponds to
+$I_{\mathrm{support}}$. In the paper, call it \emph{exact symbolic support recovery}
+to distinguish it from coefficient-exact algebraic recovery. It ignores coefficient
+magnitudes and signs after support extraction; even an incorrect coefficient sign
+can therefore coexist with perfect support recovery.
+
+When reliable numerical coefficients are available, align coefficients on
+$\hat S\cup S^\star$, insert zeros for absent terms, and compute
+\begin{equation}
+ E_c=\frac{\|\hat{\mathbf c}-\mathbf c^\star\|_2}{\|\mathbf c^\star\|_2}.
+\end{equation}
+Do not compute $E_c$ from structure-only prefix strings. Coefficient-bearing
+references currently exist in the runner for Burgers, KdV, and Chafee--Infante.
+\todo{Verify those references against the precise packaged data generators,
+including signs, units, nondimensionalization, and coordinate transformations.
+State the support threshold and test its sensitivity before publication.}
+
+\subsection{PDE equation residuals and multi-step rollout}
+On observed held-out fields, evaluate
+\begin{equation}
+ r=\widehat{\partial_tu}-\hat F(u,\widehat{\nabla u},\ldots),
+ \qquad E_{\mathrm{res}}=\frac{\sqrt{\operatorname{mean}(r^2)}}
+ {\operatorname{std}(\widehat{\partial_tu})}.
+\end{equation}
+The evaluator uses grid-based finite differences, including repeated spatial
+differentiation. A small residual measures agreement with those derivative
+estimates; it is not independent evidence of physical correctness.
+
+Initialize rollout at $\hat u_{k-1}=u_{k-1}$ and predict the complete held-out
+time block without resetting to observed intermediate states. A compatible
+model predictor is used when available; otherwise, the current fallback is
+explicit Euler applied to a parseable RHS. Report rollout NRMSE, $R^2$, MSE,
+step count, horizon, and integrator. Scoring pools held-out field values according
+to the current evaluator.
+\uncertain{Integrator stability and boundary treatment can dominate rollout
+error, especially for stiff or dispersive PDEs. The current predictor-versus-Euler
+comparison is not solver-controlled. Validate on the reference RHS and report
+integrator-stratified results; a common converged solver is a proposed extension.
+Unsupported or non-finite evaluations must be reported with their reasons.}
+
+\subsection{Reliability, compute, and aggregation}
+Execution success is distinct from scientific recovery. For a task--method group
+with $N_{\mathrm{rows}}$ emitted rows, the current report computes
+\begin{equation}
+ p_{\mathrm{ok}}=\frac{N_{\mathrm{ok}}}{N_{\mathrm{rows}}},
+ \qquad p_{\mathrm{timeout}}=\frac{N_{\mathrm{timeout}}}{N_{\mathrm{rows}}}.
+\end{equation}
+Errors and skips remain in these denominators. Runtime records training and
+evaluation wall time at the instance/target level; case timeouts act at the worker
+level. Peak CPU memory measures sampled worker-process-tree RSS when possible;
+GPU memory measures the CUDA allocator peak, not total device memory.
+
+Current metric means use available numeric values. Consequently, coverage and
+evaluable counts are essential: unavailable values are not zero errors, and an
+\code{ok} row need not contain every scientific metric. Report raw-status counts,
+metric-specific coverage, and conditional recovery rates together.
+\planned{Add dataset-balanced summaries and dataset-level bootstrap intervals,
+with seeds nested within datasets, after defining the eligible comparison cohort.
+Supplement current row-level rates with case-level rates and an attempted-run
+recovery rate that treats failed attempts on reference-known eligible tasks as
+failures. Mark these as additional analyses, not existing runner outputs.
+Treat timeouts as censored runtime observations rather than completed fits.}
+
+\section{Experimental Setup}
+\label{sec:setup}
+\subsection{Study matrix and budgets}
+Freeze dataset instances, seeds, applicability rules, operator libraries,
+hyperparameters, and compute budgets before collecting final test results.
+The default configuration currently selects the smoke profile, seed 0, CPU
+devices, a 0.2 holdout fraction, and no global timeout. The full profile increases
+method-specific budgets but does not claim reproduction of the original papers.
+
+\begin{table}[htbp]
+\centering\small
+\caption{Publication experiment settings. Environment setup is known; final
+benchmark settings require confirmation and must match the released manifest.}
+\label{tab:setup}
+\begin{tabularx}{\linewidth}{lY}
+\toprule
+Item & Value/status \\
+\midrule
+Dataset inventory and reference tier & \pending{}: Table~\ref{tab:datasets}, hashes, inclusion rules \\
+Seeds and repeat counts & \pending{}: choose before final runs; current default is one seed \\
+Holdout and validation & Default test fraction 0.2; publication validation protocol \pending \\
+Per-method budgets / timeout & \pending{}: include sample/epoch/search limits and wall-clock cap \\
+CPU resources & Prior container provision: 8 CPU quota; CPU model and final allocation \pending \\
+Memory & Prior container provision: 60 GiB limit; final run allocation \pending \\
+GPU & Prior validated environment: NVIDIA RTX 4090; per-method assignment \pending \\
+Software & Ubuntu 22.04, Python 3.9.23, PyTorch 2.5.1+cu121,
+CUDA Toolkit 12.1.1; final lockfile/commit \pending \\
+Thread settings & OpenMP/OpenBLAS default to 1; audit other workers and thread pools \\
+Checkpoint provenance & \pending{}: pretrained/from-scratch status and training-data overlap \\
+\bottomrule
+\end{tabularx}
+\end{table}
+\uncertain{Installation checks, CUDA kernel checks, and a tiny SISSO++ fit verify
+the environment only. They are not accuracy or efficiency evidence for the final
+benchmark. Reconfirm hardware and software on the actual experiment session.}
+
+\subsection{Main study and controlled extensions}
+\planned{Run the finalized clean-data study across all eligible task--method
+pairs and multiple seeds. Then add a predeclared subset for noise, sample-density,
+and generalization experiments. Select levels and repetitions after a pilot,
+without consulting the final test scores.}
+\todo{Specify a noise model, e.g., additive noise scaled by the training-field
+standard deviation; state whether test observations remain clean. Define whether
+noise precedes derivative estimation. Specify trajectory/initial-condition shifts
+and spatial or temporal subsampling without destroying task identifiability.}
+
+\section{Results and Analysis}
+\label{sec:results}
+\todo{This section intentionally contains no rankings or numerical claims.
+Populate it only from a frozen full-run manifest and its logs. Replace every
+TBD and report uncertainty and evaluable counts.}
+
+\subsection{RQ1: Prediction and algebraic recovery in SR and ODE}
+Discuss each task separately, distinguishing synthetic reference-known problems
+from empirical regression and reference-unknown ODEs. Test whether error and
+complexity improvements correspond to increased algebraic recovery.
+\begin{table}[htbp]
+\centering\small
+\caption{SR/ODE result template. Expand to one row per applicable method and
+task; attach an evaluable count to each metric and specify the aggregation unit.}
+\label{tab:sr-ode}
+\begin{tabularx}{\linewidth}{llYYYYY}
+\toprule
+Task & Method & NRMSE $\downarrow$ & $R^2$ $\uparrow$ & Complexity $\downarrow$ & Recovery $\uparrow$ & Evaluable / eligible \\
+\midrule
+SR & \pending & \pending & \pending & \pending & \pending & \pending \\
+ODE & \pending & \pending & \pending & \pending & \pending & \pending \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\subsection{RQ2: PDE structure, coefficients, and dynamics}
+Analyze structural mistakes, coefficient errors given correct support, and
+rollout failures separately. Do not equate exact support recovery with complete
+equation recovery. Stratify rollout comparisons by integrator and ground-truth tier.
+\begin{table}[htbp]
+\centering\small
+\caption{PDE result template. Use multiple panels or landscape layout for the
+final table; report precision/recall and metric-specific counts in the supplement.}
+\label{tab:pde-results}
+\begin{tabularx}{\linewidth}{lYYYYY}
+\toprule
+Method & Residual NRMSE $\downarrow$ & Coefficient error $\downarrow$ & Support Jaccard $\uparrow$ & Exact support rate $\uparrow$ & Rollout NRMSE $\downarrow$ \\
+\midrule
+\pending{} method A & \pending & \pending & \pending & \pending & \pending \\
+\pending{} method B & \pending & \pending & \pending & \pending & \pending \\
+Reference RHS control & \pending & Not applicable & Not applicable & Not applicable & \pending \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\begin{figure}[htbp]
+\centering
+\figureplaceholder{4cm}{Panels: exact support rate versus coefficient error;
+held-out residual versus rollout error; representative true and discovered PDEs.
+Label sample counts and integrators. Include examples of correct support with
+wrong coefficients, low residual with unstable rollout, and full agreement only
+if such cases occur in the measured results.}
+\caption{Planned analysis of distinct PDE discovery outcomes.}
+\label{fig:pde-outcomes}
+\end{figure}
+
+\subsection{RQ3: Robustness and generalization}
+\begin{figure}[htbp]
+\centering
+\figureplaceholder{4cm}{Use noise level and training-data fraction as separate
+horizontal axes. Plot NRMSE, exact recovery, and execution success with dataset-level
+uncertainty. Add an initial-condition or out-of-domain panel only if that experiment
+is implemented. Keep task and reference tiers separate.}
+\caption{Planned robustness study; experiments and perturbation levels remain to be specified.}
+\label{fig:robustness}
+\end{figure}
+\todo{Describe observed trends, exceptions, and derivative-estimation sensitivity.
+Separate interpolation results from true extrapolation; temporal holdout alone
+does not establish generalization to unseen governing equations.}
+
+\subsection{RQ4: Reliability and computational cost}
+\begin{table}[htbp]
+\centering\small
+\caption{Compute and reliability template, repeated by task and hardware cohort.
+Include errors/skips and completed versus censored runtime counts in final reporting.}
+\label{tab:cost}
+\begin{tabularx}{\linewidth}{lYYYYY}
+\toprule
+Method & Success rate & Timeout rate & Runtime (s) & Peak RSS (MB) & Peak GPU (MB) \\
+\midrule
+\pending{} method A & \pending & \pending & \pending & \pending & \pending \\
+\pending{} method B & \pending & \pending & \pending & \pending & \pending \\
+\bottomrule
+\end{tabularx}
+\end{table}
+\begin{figure}[htbp]
+\centering
+\figureplaceholder{3.8cm}{Accuracy--runtime and accuracy--complexity Pareto plots
+within matched task/hardware cohorts, plus stacked status proportions. Mark
+timeouts and unsupported combinations; avoid plotting unavailable metrics as
+zero. Do not aggregate SR, ODE, and PDE into an unexplained universal score.}
+\caption{Planned cost, complexity, and reliability comparison.}
+\label{fig:cost}
+\end{figure}
+
+\subsection{Ablations and qualitative case studies}
+\planned{Prioritize three checks: (1) derivative-estimation and support-threshold
+sensitivity; (2) reference-RHS and common-solver rollout controls; (3) compute-budget
+sensitivity. Optionally quantify random-point versus trajectory/time-block holdout
+as a leakage diagnostic, not as an alternative main ranking.}
+\begin{table}[htbp]
+\centering\small
+\caption{Equation case-study template. Select examples by a documented rule
+covering both successes and failures, with numerical metrics and units.}
+\label{tab:equations}
+\begin{tabularx}{\linewidth}{lYYYY}
+\toprule
+Dataset/method & Reference & Discovered equation & Scores & Interpretation \\
+\midrule
+\pending{} SR/ODE case & \pending & \pending & \pending & \pending \\
+\pending{} PDE recovery & \pending & \pending & \pending & \pending \\
+\pending{} PDE failure & \pending & \pending & \pending & \pending \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\section{Discussion and Limitations}
+Discuss what the results support about method selection for a given task,
+data quality, reference availability, and compute budget. Address incomplete
+adapter coverage, implementation differences from upstream methods, limited
+ODE diversity, correlated dataset instances, missing physical units, and possible
+pretraining contamination. Discuss derivative noise and numerical integration
+as confounders, and parser-dependent recovery and lexical complexity as metric
+limitations. Acknowledge that rollout evaluation for coupled fields and general
+boundary conditions may require additional adapters.
+\todo{Replace prospective discussion with claims tied to specific tables and
+figures. State which limitations remain after the publication experiments. Include
+the PhySO CUDA/multiprocessing constraint if it affects the measured configuration.}
+
+\section{Conclusion}
+Summarize the released evaluation framework and the empirical answers to the
+research questions, using only completed evidence. Explain why prediction,
+structural recovery, coefficient accuracy, and dynamical behavior should be
+reported together. End with the most useful supported implication for scientific
+users and a concrete remaining evaluation gap.
+\todo{Insert two or three quantitative takeaways after the final analysis.
+Do not infer benchmark superiority from environment or adapter smoke tests.}
+
+\section*{Data and Code Availability}
+\todo{Insert the repository/archive URL, release tag and commit, dataset licenses
+and access instructions, environment lockfiles, container recipe or image digest,
+raw manifests/logs/results, and scripts that generate all publication figures and
+tables. Distinguish redistributable data from externally downloaded resources.}
+\section*{Acknowledgments}
+\todo{Authors, funding, computational resources, and upstream software/data credits.}
+\section*{References}
+\todo{Replace this section with a verified bibliography. Add primary sources
+for all methods in Table~\ref{tab:methods}, every included dataset, related
+benchmarks, and the numerical procedures discussed in the protocol.}
+
+\appendix
+\section{Complete Dataset and Eligibility Manifest}
+Supply the full dataset--method matrix with load status, task dimensions,
+response channels, reference tier, eligibility decision, and exclusion reason.
+Report counts of datasets, instances, targets, seeds, scheduled cases, and emitted
+rows separately. Preserve official splits and group/trajectory identities.
+
+\section{Resolved Baseline Configurations}
+Archive every baseline JSON plus resolved overrides. Record operator grammars,
+candidate libraries, sparsity thresholds, neural architectures, optimization
+settings, stopping rules, devices, and upstream/custom modifications. Document
+physical priors, checkpoints, and any tuning search with its validation budget.
+
+\section{Metric Implementation and Edge Cases}
+Provide parser conventions, variable aliases, support threshold, coefficient
+alignment, empty-support rules, constant-target handling, and missing-value
+semantics. Document derivative stencils, boundary behavior, allowed RHS operators,
+rollout initialization, integrators, time steps, and divergence handling. Explain
+why \code{exact_recovery} and \code{exact_symbolic_recovery} have different meanings.
+
+\section{Statistical Reporting and Failure Audit}
+Publish per-dataset/per-seed values and metric-specific denominators alongside
+aggregates. Separate unsupported inputs, loading failures, fitting failures,
+parsing failures, metric failures, and timeouts. Describe bootstrap or other
+uncertainty procedures if implemented, including resampling unit and seed.
+
+\section{Reproduction and Completion Checklist}
+\begin{enumerate}
+  \item Freeze the final scientific scope, verified references, dataset licenses,
+  and method/instance eligibility matrix.
+  \item Finalize validation, seeds, compute limits, device assignments, and
+  measurement conventions; archive the resolved manifest and environment.
+  \item Verify task adapters, reference equations, numerical evaluators, and
+  symbolic metric edge cases before running the main study.
+  \item Run the main study and declared robustness/ablation experiments;
+  preserve all failures and raw outputs.
+  \item Generate the eight tables and five figures reserved in this framework
+  from analysis scripts, adding confidence intervals and coverage counts.
+  \item Replace all TO COMPLETE, TO VERIFY, PROPOSED EXPERIMENT, and TBD markers;
+  reconcile the abstract, results, discussion, and conclusion with the evidence.
+\end{enumerate}
+\end{document}

@@ -10,5 +10,3 @@ model = KD_DSCV()
 model.fit(burgers_dataset)
 
 model.plot()
-
-

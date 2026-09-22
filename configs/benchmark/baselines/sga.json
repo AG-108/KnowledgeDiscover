@@ -1,0 +1,20 @@
+{
+  "name": "sga",
+  "device": "cpu",
+  "model": {
+    "sga_run": 2,
+    "num": 10,
+    "depth": 2,
+    "width": 2
+  },
+  "profiles": {
+    "full": {
+      "model": {
+        "sga_run": 100,
+        "num": 20,
+        "depth": 4,
+        "width": 5
+      }
+    }
+  }
+}

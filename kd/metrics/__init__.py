@@ -1,5 +1,6 @@
-from typing import Any, Dict, Iterable, Optional, Tuple, Union
 from abc import ABC, abstractmethod
+from typing import Any, Dict, Iterable, Optional, Tuple, Union
+import warnings
 
 import numpy as np
 
@@ -7,70 +8,64 @@ import numpy as np
 class MetaMetricsError(Exception):
     pass
 
+
 class MetaMetricsConfig:
-    """
-    通用指标配置。
-    - greater_is_better: 指标值越大是否代表越好。
-    - name: 指标名称（可选）。
-    - dtype: 内部计算的数据类型（可选，如 'float64'）。
-    """
+    """Configure a metric name, numeric dtype, and optimization direction."""
+
     def __init__(self, greater_is_better: bool = True, name: str = None, dtype: str = None):
         self.greater_is_better = greater_is_better
         self.name = name
         self.dtype = dtype
 
+
 Number = Union[int, float]
-ArrayLike = Any  # 实际可为 numpy.ndarray / torch.Tensor / list 等
+ArrayLike = Any  # Accept NumPy arrays, torch tensors, and ordinary sequences.
+
 
 class MetaMetrics(ABC):
-    """
-    预测性能评估抽象基类。
-
-    典型用法：
-    - 批量：metrics(y_true, y_pred, sample_weight=...)
-    - 流式：metrics.update(y_true_batch, y_pred_batch); ... ; value = metrics.compute()
-
-    约定：
-    - y_true, y_pred 形状兼容（由子类在 _check_and_normalize_inputs 中具体校验）
-    - 可选的 sample_weight 与 y_true 同长度（或可广播）
-    """
+    """Define the shared batch and streaming interface for prediction metrics."""
 
     def __init__(self, config: Optional[MetaMetricsConfig] = None):
         self.config = config or MetaMetricsConfig()
         self._is_fitted = False
         self.reset()
 
-    def update(self, y_true: ArrayLike, y_pred: ArrayLike, sample_weight: Optional[ArrayLike] = None, **kwargs) -> None:
-        """
-        累积一批新数据。可多次调用，最终通过 compute() 得到指标。
-        """
+    def update(
+        self,
+        y_true: ArrayLike,
+        y_pred: ArrayLike,
+        sample_weight: Optional[ArrayLike] = None,
+        **kwargs,
+    ) -> None:
+        """Accumulate one batch of observations."""
         y_true_n, y_pred_n, w_n = self._check_and_normalize_inputs(y_true, y_pred, sample_weight)
         self._update_impl(y_true_n, y_pred_n, w_n, **kwargs)
 
     def compute(self) -> Union[Number, Dict[str, Number]]:
-        """
-        计算并返回指标值（或多指标字典）。要求幂等，不应改变内部状态。
-        """
+        """Return the metric value without mutating accumulated state."""
         return self._compute_impl()
 
     def reset(self) -> None:
-        """
-        清空内部累计状态。
-        """
+        """Clear all accumulated metric state."""
         self._reset_impl()
 
-    def __call__(self, y_true: ArrayLike, y_pred: ArrayLike, sample_weight: Optional[ArrayLike] = None, **kwargs) -> \
-    Union[Number, Dict[str, Number]]:
-        """
-        便捷一次性计算：reset -> update -> compute。
-        """
+    def __call__(
+        self,
+        y_true: ArrayLike,
+        y_pred: ArrayLike,
+        sample_weight: Optional[ArrayLike] = None,
+        **kwargs,
+    ) -> Union[Number, Dict[str, Number]]:
+        """Compute the metric for one complete input pair."""
         self.reset()
         self.update(y_true, y_pred, sample_weight, **kwargs)
         return self.compute()
 
-    # ============ 需子类实现的核心抽象 ============
+    # Subclasses implement the accumulation contract below.
     @abstractmethod
-    def _update_impl(self, y_true: ArrayLike, y_pred: ArrayLike, sample_weight: Optional[ArrayLike], **kwargs) -> None:
+    def _update_impl(
+        self, y_true: ArrayLike, y_pred: ArrayLike, sample_weight: Optional[ArrayLike], **kwargs
+    ) -> None:
         pass
 
     @abstractmethod
@@ -81,24 +76,18 @@ class MetaMetrics(ABC):
     def _reset_impl(self) -> None:
         pass
 
-    # ============ 输入校验与规范化 ============
+    # Shared lightweight input validation.
     def _check_and_normalize_inputs(
-        self,
-        y_true: ArrayLike,
-        y_pred: ArrayLike,
-        sample_weight: Optional[ArrayLike] = None
+        self, y_true: ArrayLike, y_pred: ArrayLike, sample_weight: Optional[ArrayLike] = None
     ) -> Tuple[ArrayLike, ArrayLike, Optional[ArrayLike]]:
-        """
-        统一入口的基础校验与轻量规范化。
-        子类可 override 以实现更严格的任务特定检查（例如分类标签空间、概率范围等）。
-        """
+        """Perform lightweight validation shared by all metric implementations."""
         if y_true is None or y_pred is None:
             raise MetaMetricsError("y_true 和 y_pred 不能为空。")
 
-        # 允许 numpy / torch / list，尽量只做轻量检查。
-        # 注意：y_true/y_pred 的长度一致性校验故意不在这里做——例如回归中
-        # y_true.shape=[N] 而 y_pred.shape=[N, 1] 这类可广播的情况因任务而异，
-        # 交给子类的 _update_impl 自行处理更合适。
+        # Accept NumPy, torch, and sequence inputs without forcing a conversion.
+        # Shape compatibility is task-specific; regression may compare (N,) with (N, 1).
+        # Subclasses therefore decide which broadcasting rules are valid.
+        # _update_impl performs the final task-specific validation.
         n_true = _safe_len(y_true)
 
         if sample_weight is not None:
@@ -114,11 +103,13 @@ class MetaMetrics(ABC):
                 sample_weight = np.asarray(sample_weight, dtype=self.config.dtype)
         return y_true, y_pred, sample_weight
 
+
 def _safe_len(x: Any) -> Optional[int]:
     try:
-        return len(x)  # numpy/torch/list 均可
+        return len(x)  # All supported containers implement len().
     except Exception:
         return None
+
 
 def _accumulate_squared_error(
     y_true: ArrayLike,
@@ -151,7 +142,9 @@ class MSE(MetaMetrics):
     """
 
     def __init__(self, config: Optional[MetaMetricsConfig] = None):
-        super().__init__(config or MetaMetricsConfig(greater_is_better=False, name="MSE", dtype="float64"))
+        super().__init__(
+            config or MetaMetricsConfig(greater_is_better=False, name="MSE", dtype="float64")
+        )
 
     def _reset_impl(self) -> None:
         self._sum_squared_error = 0.0
@@ -162,7 +155,9 @@ class MSE(MetaMetrics):
             raise MetaMetricsError("没有数据可计算指标，请先调用 update()。")
         return self._sum_squared_error / self._count
 
-    def _update_impl(self, y_true: ArrayLike, y_pred: ArrayLike, sample_weight: Optional[ArrayLike], **kwargs) -> None:
+    def _update_impl(
+        self, y_true: ArrayLike, y_pred: ArrayLike, sample_weight: Optional[ArrayLike], **kwargs
+    ) -> None:
         sse, w = _accumulate_squared_error(y_true, y_pred, sample_weight)
         self._sum_squared_error += sse
         self._count += w
@@ -191,7 +186,9 @@ class _InformationCriterionBase(MetaMetrics):
         self._sum_squared_error = 0.0
         self._count = 0.0
 
-    def _update_impl(self, y_true: ArrayLike, y_pred: ArrayLike, sample_weight: Optional[ArrayLike], **kwargs) -> None:
+    def _update_impl(
+        self, y_true: ArrayLike, y_pred: ArrayLike, sample_weight: Optional[ArrayLike], **kwargs
+    ) -> None:
         sse, w = _accumulate_squared_error(y_true, y_pred, sample_weight)
         self._sum_squared_error += sse
         self._count += w
@@ -216,7 +213,9 @@ class AIC(_InformationCriterionBase):
     """
 
     def __init__(self, num_params: int, config: Optional[MetaMetricsConfig] = None):
-        super().__init__(config or MetaMetricsConfig(greater_is_better=False, name="AIC", dtype="float64"))
+        super().__init__(
+            config or MetaMetricsConfig(greater_is_better=False, name="AIC", dtype="float64")
+        )
         self.num_params = num_params
 
     def _compute_impl(self) -> float:
@@ -234,7 +233,9 @@ class BIC(_InformationCriterionBase):
     """
 
     def __init__(self, num_params: int, config: Optional[MetaMetricsConfig] = None):
-        super().__init__(config or MetaMetricsConfig(greater_is_better=False, name="BIC", dtype="float64"))
+        super().__init__(
+            config or MetaMetricsConfig(greater_is_better=False, name="BIC", dtype="float64")
+        )
         self.num_params = num_params
 
     def _compute_impl(self) -> float:
@@ -242,8 +243,8 @@ class BIC(_InformationCriterionBase):
         return float(n * np.log(mse) + self.num_params * np.log(n))
 
 
-class ParsimonyInformationCriterion(_InformationCriterionBase):
-    """Parsimony Information Criterion (PIC).
+class AdditiveParsimonyScore(_InformationCriterionBase):
+    """Legacy custom additive fit/complexity/physics score (not Xu et al. PIC).
 
     PIC = n * ln(MSE) + lambda_complexity * complexity + lambda_physics * physics_penalty
 
@@ -265,7 +266,9 @@ class ParsimonyInformationCriterion(_InformationCriterionBase):
         lambda_physics: float = 1.0,
         config: Optional[MetaMetricsConfig] = None,
     ):
-        super().__init__(config or MetaMetricsConfig(greater_is_better=False, name="PIC", dtype="float64"))
+        super().__init__(
+            config or MetaMetricsConfig(greater_is_better=False, name="additive_parsimony_v1", dtype="float64")
+        )
         self.complexity = complexity
         self.physics_penalty = physics_penalty
         self.lambda_complexity = lambda_complexity
@@ -279,3 +282,43 @@ class ParsimonyInformationCriterion(_InformationCriterionBase):
             + self.lambda_physics * self.physics_penalty
         )
 
+
+class ParsimonyInformationCriterion(AdditiveParsimonyScore):
+    """Deprecated compatibility alias for :class:`AdditiveParsimonyScore`.
+
+    This historical class is not the physics-informed information criterion
+    of Xu et al. (2022). Use ``PhysicsInformedInformationCriterion`` for that.
+    """
+
+    def __init__(self, *args, **kwargs):
+        warnings.warn(
+            "ParsimonyInformationCriterion is the legacy additive_parsimony_v1 score, "
+            "not Xu et al.'s PIC; use AdditiveParsimonyScore or "
+            "PhysicsInformedInformationCriterion explicitly.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        super().__init__(*args, **kwargs)
+
+
+from .physics_informed import (  # noqa: E402
+    PIC_IMPLEMENTATION_VERSION,
+    CoefficientStability,
+    PICError,
+    PICResult,
+    PINNTrainingRequest,
+    PINNTrainingResult,
+    PhysicsInformedInformationCriterion,
+    PreparedPICReference,
+    coefficient_stability,
+    fit_tls_coefficients,
+    normalized_rmse,
+)
+
+from .pic_torch import (  # noqa: E402
+    SUPPORTED_TERMS,
+    TorchPICConfig,
+    TorchPICPrepared,
+    evaluate_torch_pic,
+    prepare_torch_pic_reference,
+)

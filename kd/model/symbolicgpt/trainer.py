@@ -39,6 +39,7 @@ class TrainerConfig:
     # checkpoint settings
     ckpt_path = None
     num_workers = 0  # for DataLoader
+    show_progress = False
 
     def __init__(self, **kwargs):
         for k, v in kwargs.items():
@@ -67,26 +68,37 @@ class Trainer:
             is_train = split == 'train'
             model.train(is_train)
             data = self.train_dataset if is_train else self.test_dataset
-            loader = DataLoader(data, shuffle=True, pin_memory=True,
-                                batch_size=config.batch_size,
-                                num_workers=config.num_workers)
+            use_pinned_memory = self.device.type == "cuda"
+            loader = DataLoader(
+                data,
+                shuffle=True,
+                pin_memory=use_pinned_memory,
+                batch_size=config.batch_size,
+                num_workers=config.num_workers,
+                persistent_workers=config.num_workers > 0,
+            )
 
             losses = []
-            pbar = tqdm(enumerate(loader), total=len(loader)) if is_train else enumerate(loader)
+            pbar = (
+                tqdm(enumerate(loader), total=len(loader))
+                if is_train and config.show_progress
+                else enumerate(loader)
+            )
             for it, (x, y, p, v) in pbar:
 
-                x = x.to(self.device)  # input equation
-                y = y.to(self.device)  # output equation
-                p = p.to(self.device)  # points
-                v = v.to(self.device)  # number of variables
+                x = x.to(self.device, non_blocking=use_pinned_memory)  # input equation
+                y = y.to(self.device, non_blocking=use_pinned_memory)  # output equation
+                p = p.to(self.device, non_blocking=use_pinned_memory)  # points
+                v = v.to(self.device, non_blocking=use_pinned_memory)  # number of variables
 
                 with torch.set_grad_enabled(is_train):
                     logits, loss = model(x, y, p, v)
                     loss = loss.mean()
-                    losses.append(loss.item())
+                    if not is_train:
+                        losses.append(loss.item())
 
                 if is_train:
-                    model.zero_grad()
+                    optimizer.zero_grad(set_to_none=True)
                     loss.backward()
                     torch.nn.utils.clip_grad_norm_(model.parameters(), config.grad_norm_clip)
                     optimizer.step()
@@ -105,7 +117,10 @@ class Trainer:
                         lr = config.learning_rate
 
                     if isinstance(pbar, tqdm):
-                        pbar.set_description(f"epoch {epoch+1} iter {it}: train loss {loss.item():.5f}. lr {lr:e}")
+                        pbar.set_description(
+                            f"epoch {epoch+1} iter {it}: "
+                            f"train loss {loss.detach().item():.5f}. lr {lr:e}"
+                        )
 
             if not is_train:
                 test_loss = float(np.mean(losses))

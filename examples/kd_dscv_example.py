@@ -1,34 +1,29 @@
-import numpy as np
-
-import sys
 import os
-import re
 import pickle
 
-from _common import bootstrap_project_root, point_cloud_to_regular_grid, build_wave_dataset_for_dscv
+import numpy as np
+from _common import bootstrap_project_root, build_wave_dataset_for_dscv, point_cloud_to_regular_grid
 
 project_root = bootstrap_project_root()
 
-import scipy
-import pandas as pd
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
+
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"
 import warnings
-warnings.filterwarnings("ignore", category=FutureWarning, module='numpy.*')
-warnings.filterwarnings("ignore", category=UserWarning, module='tensorflow.*')
-from kd.model import KD_DSCV
+
+warnings.filterwarnings("ignore", category=FutureWarning, module="numpy.*")
+warnings.filterwarnings("ignore", category=UserWarning, module="tensorflow.*")
 from kd.data import RegularData
-from kd.viz.dscv_viz import *
-from kd.viz.discover_eq2latex import discover_program_to_latex
-from kd.viz.equation_renderer import render_latex_to_image
+from kd.model import KD_DSCV
+
 
 def attach_regression_data_to_model(
-        model,
-        X,
-        y,
-        variable_names=None,
-        dataset_name="regression_dataset",
-        task_type="symbolic_regression",
-        sym_true="",
+    model,
+    X,
+    y,
+    variable_names=None,
+    dataset_name="regression_dataset",
+    task_type="symbolic_regression",
+    sym_true="",
 ):
     """
     Attach ordinary regression data to KD_DSCV without modifying KD_DSCV class.
@@ -60,26 +55,26 @@ def attach_regression_data_to_model(
     model.config_task["dataset"] = dataset_name
 
     if model.out_path is not None:
-        model.out_path = os.path.join(
-            model.out_path,
-            f"discover_{dataset_name}_{model.seed}.csv"
-        )
+        model.out_path = os.path.join(model.out_path, f"discover_{dataset_name}_{model.seed}.csv")
 
     model.setup()
 
     return model
 
+
 exp_name = "wave_breaking"  # "sc_rubber" or "wave_breaking"
 
-if exp_name == 'sc_rubber':
+if exp_name == "sc_rubber":
+
     def load_rubber_excel_dataset(
-            data_dir,
-            include_conditions=True,
-            normalize_conditions=True,
-            single_file=None,
+        data_dir,
+        include_conditions=True,
+        normalize_conditions=True,
+        single_file=None,
     ):
         import os
         import re
+
         import numpy as np
         import pandas as pd
 
@@ -123,11 +118,13 @@ if exp_name == 'sc_rubber':
                     T_feature = T_value
                     variable_names = ["lambda", "C", "T"]
 
-                X_file = np.column_stack([
-                    lam,
-                    np.full_like(lam, C_feature),
-                    np.full_like(lam, T_feature),
-                ])
+                X_file = np.column_stack(
+                    [
+                        lam,
+                        np.full_like(lam, C_feature),
+                        np.full_like(lam, T_feature),
+                    ]
+                )
             else:
                 X_file = lam.reshape(-1, 1)
                 variable_names = ["lambda"]
@@ -135,16 +132,18 @@ if exp_name == 'sc_rubber':
             X_list.append(X_file)
             y_list.append(stress.reshape(-1, 1))
 
-            curve_info.append({
-                "filename": filename,
-                "C": C_value,
-                "T": T_value,
-                "n_points": len(lam),
-                "lambda_min": float(np.min(lam)),
-                "lambda_max": float(np.max(lam)),
-                "stress_min": float(np.min(stress)),
-                "stress_max": float(np.max(stress)),
-            })
+            curve_info.append(
+                {
+                    "filename": filename,
+                    "C": C_value,
+                    "T": T_value,
+                    "n_points": len(lam),
+                    "lambda_min": float(np.min(lam)),
+                    "lambda_max": float(np.max(lam)),
+                    "stress_min": float(np.min(stress)),
+                    "stress_max": float(np.max(stress)),
+                }
+            )
 
         if len(X_list) == 0:
             raise RuntimeError(f"No valid .xlsx files found in {data_dir}")
@@ -157,7 +156,9 @@ if exp_name == 'sc_rubber':
     np.random.seed(42)
 
     X, y, variable_names, curve_info = load_rubber_excel_dataset(
-        data_dir=os.path.join(project_root, "kd/dataset/Discovery_of_soild_consititutive-main/data/data_rubber/train"),
+        data_dir=os.path.join(
+            project_root, "kd/dataset/Discovery_of_soild_consititutive-main/data/data_rubber/train"
+        ),
         include_conditions=True,
         single_file=None,
     )
@@ -234,7 +235,6 @@ elif exp_name == "wave_breaking":
     print("u min/max:", dataset["u"].min(), dataset["u"].max())
     print("ut min/max:", dataset["ut"].min(), dataset["ut"].max())
 
-
     class DictData:
         def __init__(self, dataset):
             self.dataset = dataset
@@ -242,8 +242,7 @@ elif exp_name == "wave_breaking":
         def get_data(self):
             return self.dataset
 
-
-    # 4. Build model.
+    # Build the discovery model.
     model = KD_DSCV(
         binary_operators=["add", "sub", "mul"],
         unary_operators=["n2"],
@@ -260,7 +259,7 @@ elif exp_name == "wave_breaking":
     model.config_task["metric"] = "pde_reward"
     model.config_task["metric_params"] = [0.01]
 
-    # 5. Setup and smoke test.
+    # Initialize the model and inspect the prepared task data.
     model.setup()
 
     from kd.model.discover.program import Program
@@ -270,7 +269,7 @@ elif exp_name == "wave_breaking":
     print("task ut shape:", Program.task.ut.shape)
     print("n_input_var:", Program.task.n_input_var)
 
-    # 6. Train lightly.
+    # Run a short training job for this example.
     step_output = model.train(n_epochs=10, verbose=True)
 
     print(step_output)

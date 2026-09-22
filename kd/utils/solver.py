@@ -1,5 +1,6 @@
 import numpy as np
 
+
 class FiniteDifferenceOperator:
     def __init__(self, u, dx, dim):
         """
@@ -18,17 +19,34 @@ class FiniteDifferenceOperator:
         """
         Computes the first-order derivative.
         """
-        self.ux[1:self.n-1, :] = (self.u[2:self.n, :] - self.u[0:self.n-2, :]) / (2 * self.dx)
-        self.ux[0, :] = (-3.0 / 2 * self.u[0, :] + 2 * self.u[1, :] - 1/2 * self.u[2, :]) / self.dx
-        self.ux[self.n-1, :] = (3.0 / 2 * self.u[self.n-1, :] - 2 * self.u[self.n-2, :] + 1/2 * self.u[self.n-3, :]) / self.dx
+        self.ux[1 : self.n - 1, :] = (self.u[2 : self.n, :] - self.u[0 : self.n - 2, :]) / (
+            2 * self.dx
+        )
+        self.ux[0, :] = (
+            -3.0 / 2 * self.u[0, :] + 2 * self.u[1, :] - 1 / 2 * self.u[2, :]
+        ) / self.dx
+        self.ux[self.n - 1, :] = (
+            3.0 / 2 * self.u[self.n - 1, :]
+            - 2 * self.u[self.n - 2, :]
+            + 1 / 2 * self.u[self.n - 3, :]
+        ) / self.dx
 
     def _finite_diff_2nd(self):
         """
         Computes the second-order derivative.
         """
-        self.ux[1:self.n-1, :] = (self.u[2:self.n, :] - 2 * self.u[1:self.n-1, :] + self.u[0:self.n-2, :]) / self.dx ** 2
-        self.ux[0, :] = (2 * self.u[0, :] - 5 * self.u[1, :] + 4 * self.u[2, :] - self.u[3, :]) / self.dx ** 2
-        self.ux[self.n-1, :] = (2 * self.u[self.n-1, :] - 5 * self.u[self.n-2, :] + 4 * self.u[self.n-3, :] - self.u[self.n-4, :]) / self.dx ** 2
+        self.ux[1 : self.n - 1, :] = (
+            self.u[2 : self.n, :] - 2 * self.u[1 : self.n - 1, :] + self.u[0 : self.n - 2, :]
+        ) / self.dx**2
+        self.ux[0, :] = (
+            2 * self.u[0, :] - 5 * self.u[1, :] + 4 * self.u[2, :] - self.u[3, :]
+        ) / self.dx**2
+        self.ux[self.n - 1, :] = (
+            2 * self.u[self.n - 1, :]
+            - 5 * self.u[self.n - 2, :]
+            + 4 * self.u[self.n - 3, :]
+            - self.u[self.n - 4, :]
+        ) / self.dx**2
 
     def _finite_diff_3rd(self):
         """

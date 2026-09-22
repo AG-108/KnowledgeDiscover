@@ -5,40 +5,35 @@ governing equations of PDEs. It supports both regular grids data and sparse
 sampling, and can be combined with Physics-Informed Neural Networks (PINN).
 """
 
-from abc import ABCMeta, abstractmethod
-from ..base import BaseEstimator
-import warnings
 import os
-import zlib
-from collections import defaultdict
-from multiprocessing import Pool, cpu_count
 import random
-from time import time
-from datetime import datetime
-import logging
-import numpy as np
-import commentjson as json
-import torch
-from scipy.stats import pearsonr
+import warnings
+from abc import ABCMeta, abstractmethod
+from collections import defaultdict
 
-from .discover.task import set_task
+import commentjson as json
+import numpy as np
+import torch
+
+from ..base import BaseEstimator
+from ..data import RegularData, SparseData
+from .discover.config import load_config
 from .discover.controller import Controller
 from .discover.dso.prior import make_prior
-from .discover.program import Program,from_str_tokens,from_tokens
-from .discover.config import load_config
-from .discover.state_manager import make_state_manager as manager_make_state_manager
 from .discover.pinn import PINN_model
-from .discover.utils import safe_merge_dicts
+from .discover.program import Program, from_tokens
 from .discover.searcher import Searcher
-from ..data import SparseData, RegularData
+from .discover.state_manager import make_state_manager as manager_make_state_manager
+from .discover.task import set_task
+from .discover.utils import safe_merge_dicts
 
-warnings.filterwarnings('ignore', category=FutureWarning)
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
+warnings.filterwarnings("ignore", category=FutureWarning)
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"
 
 
 class BaseRL(BaseEstimator, metaclass=ABCMeta):
     """Abstract base class for reinforcement learning based models."""
-    
+
     @abstractmethod
     def __init__(self):
         pass
@@ -50,14 +45,15 @@ class BaseRL(BaseEstimator, metaclass=ABCMeta):
     def predict(self, X):
         """Make predictions."""
         pass
-    
+
+
 class KD_DSCV(BaseRL):
     """Deep Reinforcement Learning model for PDE discovery.
-    
+
     This class implements a deep RL approach to discover governing equations
     of PDEs. It uses a controller to generate candidate equations and a
     searcher to evaluate them.
-    
+
     Attributes:
         n_iterations (int): Number of training iterations.
         n_samples_per_batch (int): Number of samples per batch.
@@ -68,21 +64,22 @@ class KD_DSCV(BaseRL):
         core_num (int): Number of CPU cores to use.
         config: Configuration dictionary.
     """
-    
+
     _parameter: dict = {}
-    
-    def __init__(self,
+
+    def __init__(
+        self,
         n_iterations=100,
         n_samples_per_batch=100,
         binary_operators=[],
         unary_operators=[],
-        out_path='./log/',
+        out_path="./log/",
         core_num=1,
         config_out=None,
         seed=0,
-        ):
+    ):
         """Initialize KD_DSCV model.
-        
+
         Args:
             n_iterations (int): Number of training iterations.
             n_samples_per_batch (int): Number of samples per batch.
@@ -97,7 +94,7 @@ class KD_DSCV(BaseRL):
         self.n_samples_per_batch = n_samples_per_batch
         self.operator = binary_operators + unary_operators
         self.out_path = out_path
-         
+
         self.dataset = None
         self.seed = seed
         self.core_num = core_num
@@ -106,7 +103,7 @@ class KD_DSCV(BaseRL):
 
     def setup(self):
         """Setup model components.
-        
+
         Initializes:
             - Program cache
             - Task
@@ -118,7 +115,7 @@ class KD_DSCV(BaseRL):
         """
         # Clear the cache and reset the compute graph
         Program.clear_cache()
-                
+
         # initialize
         self.set_task()
         self.prior = self.make_prior()
@@ -127,46 +124,37 @@ class KD_DSCV(BaseRL):
         self.gp_aggregator = self.make_gp_aggregator()
         self.searcher = self.make_searcher()
         self.set_seeds(self.seed)
-        
+
     def info(self):
         """Print model information."""
         print("Library: ", Program.task.library)
         self.controller.prior.report_constraint_counts()
-        
-    def import_inner_data(self, dataset, data_type='regular'):
+
+    def import_inner_data(self, dataset, data_type="regular"):
         """Import data from predefined datasets.
 
         Args:
             dataset (str): Name of dataset.
             data_type (str): Type of data ('regular' or 'sparse').
         """
-        if data_type == 'regular':
+        if data_type == "regular":
             self.data_class = RegularData(dataset)
             self.data_class.load_data()
-            
+
             # Save file
             if self.out_path is not None:
-                self.out_path = os.path.join(self.out_path,
-                                    "discover_{}_{}.csv".format(dataset, self.seed)
-                )            
+                self.out_path = os.path.join(
+                    self.out_path, "discover_{}_{}.csv".format(dataset, self.seed)
+                )
         self.setup()
 
     def import_dataset(self, dataset, *, sym_true=None, n_input_dim=None, dataset_name=None):
-        """Import data through a :class:`~kd.dataset.GridPDEDataset` instance.
+        """Import a regular PDE grid through the DISCOVER adapter."""
 
-        This preserves向后兼容 by keeping :meth:`import_inner_data` untouched, while
-        allowing外部调用者通过统一的 ``load_pde`` 管道提供数据。
+        from kd.dataset import (
+            GridPDEDataset,
+        )  # Import lazily to avoid a module-level dependency cycle.
 
-        Args:
-            dataset: GridPDEDataset 对象。
-            sym_true: 可选地覆盖真实方程符号表达式。
-            n_input_dim: 可选地指定空间维度数。
-
-        Returns:
-            KD_DSCV: 便于链式调用。
-        """
-
-        from kd.dataset import GridPDEDataset  # 延迟导入以避免循环依赖
         from .discover.adapter import DSCVRegularAdapter
 
         if not isinstance(dataset, GridPDEDataset):
@@ -175,36 +163,38 @@ class KD_DSCV(BaseRL):
         adapter = DSCVRegularAdapter(dataset, sym_true=sym_true, n_input_dim=n_input_dim)
         self.data_class = adapter
 
-        resolved_name = dataset_name or getattr(dataset, 'legacy_name', None) or \
-            getattr(dataset, 'registry_name', None) or getattr(dataset, 'equation_name', None) or "custom_dataset"
+        resolved_name = (
+            dataset_name
+            or getattr(dataset, "legacy_name", None)
+            or getattr(dataset, "registry_name", None)
+            or getattr(dataset, "equation_name", None)
+            or "custom_dataset"
+        )
         self.dataset = resolved_name
         if self.out_path is not None:
-            self.out_path = os.path.join(
-                self.out_path,
-                f"discover_{resolved_name}_{self.seed}.csv"
-            )
+            self.out_path = os.path.join(self.out_path, f"discover_{resolved_name}_{self.seed}.csv")
 
         self.setup()
         return self
 
     def make_outter_data(self, x, y, domains, data_type):
         """Create data handler for external data.
-        
+
         Args:
             x: Input features.
             y: Target values.
             domains: Domain boundaries.
             data_type (str): Type of data.
-            
+
         Raises:
             AssertionError: If data type is not 'regular'.
         """
-        assert data_type == 'regular', "only regular form of dataset is supported in current mode"
+        assert data_type == "regular", "only regular form of dataset is supported in current mode"
         # Todo: Implement other data types
 
-    def fit(self, X, y, domains=[], data_type='Sparse'):
+    def fit(self, X, y, domains=[], data_type="Sparse"):
         """Fit model to data.
-        
+
         Args:
             X: Input features.
             y: Target values.
@@ -216,11 +206,11 @@ class KD_DSCV(BaseRL):
 
     def train_one_step(self, epoch=0, verbose=True):
         """Train model for one step.
-        
+
         Args:
             epoch (int): Current epoch.
             verbose (bool): Whether to print progress.
-            
+
         Returns:
             dict: Training results.
         """
@@ -228,26 +218,34 @@ class KD_DSCV(BaseRL):
 
     def train(self, n_epochs=100, verbose=True):
         """Train model for multiple epochs.
-        
+
         Args:
             n_epochs (int): Number of epochs.
             verbose (bool): Whether to print progress.
-            
+
         Returns:
             dict: Training results.
         """
         return self.searcher.search(n_epochs=n_epochs, verbose=verbose)
-        
+
     def set_config(self, config):
         """Set model configuration.
-        
+
         Args:
             config: Configuration dictionary or path.
         """
-        if config is not None:
+        # A mapping is an override for this estimator's bundled PDE config.
+        # Passing it through discover.config.load_config first would require
+        # the legacy config_common.json/config_regression.json files, which
+        # are not part of this package, and would fail before the override
+        # could be merged.
+        if config is not None and not isinstance(config, dict):
             config = load_config(config)
 
-        with open(os.path.join(os.path.dirname(os.path.realpath(__file__)), self.base_config_file), encoding='utf-8') as f:    
+        with open(
+            os.path.join(os.path.dirname(os.path.realpath(__file__)), self.base_config_file),
+            encoding="utf-8",
+        ) as f:
             base_config = json.load(f)
         config_update = safe_merge_dicts(base_config, config)
         self.config = defaultdict(dict, config_update)
@@ -260,7 +258,7 @@ class KD_DSCV(BaseRL):
 
     def make_prior(self):
         """Create prior for equation generation.
-        
+
         Returns:
             Prior: Prior object.
         """
@@ -269,7 +267,7 @@ class KD_DSCV(BaseRL):
 
     def make_state_manager(self):
         """Create state manager.
-        
+
         Returns:
             StateManager: State manager object.
         """
@@ -277,45 +275,39 @@ class KD_DSCV(BaseRL):
 
     def make_controller(self):
         """Create controller.
-        
+
         Returns:
             Controller: Controller object.
         """
-        controller = Controller(
-                                self.prior,
-                                self.state_manager,
-                                **self.config_controller)
+        controller = Controller(self.prior, self.state_manager, **self.config_controller)
         return controller
 
     def make_gp_aggregator(self):
         """Create GP aggregator if enabled.
-        
+
         Returns:
             GPAggregator or None: GP aggregator object.
         """
         if self.config_gp_agg.pop("run_gp_agg", False):
             from discover.aggregator import gpAggregator
-            gp_aggregator = gpAggregator(self.prior,
-                                         self.pool,
-                                         self.config_gp_agg)
+
+            gp_aggregator = gpAggregator(self.prior, self.pool, self.config_gp_agg)
         else:
             gp_aggregator = None
         return gp_aggregator
-    
+
     def make_searcher(self):
         """Create searcher.
-        
+
         Returns:
             Searcher: Searcher object.
         """
-        self.config_training['n_iterations'] = self.n_iterations
-        self.config_training['n_samples_per_batch'] = self.n_samples_per_batch
+        self.config_training["n_iterations"] = self.n_iterations
+        self.config_training["n_samples_per_batch"] = self.n_samples_per_batch
 
         searcher = Searcher(
-                            controller=self.controller,
-                            args=self.config_training,
-                            gp_aggregator=self.gp_aggregator
-                            )
+            controller=self.controller, args=self.config_training, gp_aggregator=self.gp_aggregator
+        )
         return searcher
 
     def set_task(self):
@@ -326,16 +318,16 @@ class KD_DSCV(BaseRL):
         const_params = const_params if const_params is not None else {}
         Program.set_const_optimizer(const_optimizer, **const_params)
 
-        self.config_task['dataset'] = self.dataset
+        self.config_task["dataset"] = self.dataset
         if len(self.operator) > 0:
-            self.config_task['function_set'] = self.operator
-        
+            self.config_task["function_set"] = self.operator
+
         assert self.data_class is not None, "Dataset should be made before setting task"
         set_task(self.config_task, self.data_class.get_data())
 
     def set_seeds(self, new_seed):
         """Set random seeds for reproducibility.
-        
+
         Args:
             new_seed (int): Random seed.
         """
@@ -343,18 +335,18 @@ class KD_DSCV(BaseRL):
         random.seed(new_seed)
         torch.random.manual_seed(new_seed)
         torch.cuda.manual_seed_all(new_seed)
-    
+
     def print_pq(self):
         """Print priority queue."""
         self.searcher.print_pq()
 
     def plot(self, fig_type, **kwargs):
         """Plot training results.
-        
+
         Args:
             fig_type (str): Type of figure to plot.
             **kwargs: Additional plotting arguments.
-            
+
         Returns:
             Figure: Matplotlib figure.
         """
@@ -364,21 +356,26 @@ class KD_DSCV(BaseRL):
         """Make predictions (not implemented)."""
         pass
 
+
 class KD_DSCV_SPR(KD_DSCV):
     """KD_DSCV model with Physics-Informed Neural Networks.
-    
+
     This class extends KD_DSCV with PINN capabilities for better
     equation discovery in sparse data settings.
     """
 
-    def __init__(self, *args, config_out=None, **kwargs):
+    def __init__(self, *args, config_out=None, device=None, **kwargs):
         """Initialize KD_DSCV_Pinn model.
-        
+
         Args:
             *args: Positional arguments for KD_DSCV.
             config_out: Optional output configuration.
+            device: PyTorch device for the PINN component. If omitted, auto-detect.
             **kwargs: Keyword arguments for KD_DSCV.
         """
+        self.device = torch.device(
+            device if device is not None else ("cuda" if torch.cuda.is_available() else "cpu")
+        )
         super().__init__(*args, config_out=None, **kwargs)
         self.base_config_file = "./discover/config/config_pde_pinn.json"
         self.set_config(config_out)
@@ -392,7 +389,7 @@ class KD_DSCV_SPR(KD_DSCV):
         """
         super().set_config(config)
         self.config_pinn = self.config["pinn"]
-        self.config_task['task_type'] = 'pde_pinn'
+        self.config_task["task_type"] = "pde_pinn"
 
     def import_dataset(
         self,
@@ -404,17 +401,10 @@ class KD_DSCV_SPR(KD_DSCV):
         random_state=None,
         dataset_name=None,
     ):
-        """Import sparse/PINN data via :class:`~kd.dataset.GridPDEDataset`.
-
-        Args:
-            dataset: GridPDEDataset 实例。
-            sample: 抽样点数量（优先级高于 ``sample_ratio``）。
-            sample_ratio: 抽样比例 (0,1]，默认 0.1。
-            colloc_num: collocation 采样数量，留空则保持默认。
-            random_state: 随机种子，保证抽样可复现。
-        """
+        """Import sparse PDE observations through the PINN adapter."""
 
         from kd.dataset import GridPDEDataset
+
         from .discover.adapter import DSCVSparseAdapter
 
         if not isinstance(dataset, GridPDEDataset):
@@ -429,43 +419,41 @@ class KD_DSCV_SPR(KD_DSCV):
         )
         self.data_class = adapter
 
-        resolved_name = dataset_name or getattr(dataset, 'legacy_name', None) or \
-            getattr(dataset, 'registry_name', None) or getattr(dataset, 'equation_name', None) or "custom_dataset"
+        resolved_name = (
+            dataset_name
+            or getattr(dataset, "legacy_name", None)
+            or getattr(dataset, "registry_name", None)
+            or getattr(dataset, "equation_name", None)
+            or "custom_dataset"
+        )
         self.dataset = resolved_name
         if self.out_path is not None:
-            self.out_path = os.path.join(
-                self.out_path,
-                f"discover_{resolved_name}_{self.seed}.csv"
-            )
+            self.out_path = os.path.join(self.out_path, f"discover_{resolved_name}_{self.seed}.csv")
 
         self.setup()
         return self
 
     def make_pinn_model(self):
         """Create PINN model.
-        
+
         Returns:
             PINN_model: PINN model object.
         """
-        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        print('Using device:', device)
+        print("Using device:", self.device)
         model = PINN_model(
-            self.out_path,
-            self.config_pinn,
-            self.config_task['dataset'],
-            device
+            self.out_path, self.config_pinn, self.config_task["dataset"], self.device
         )
         return model
-    
+
     def setup(self):
         """Setup model components including PINN."""
         super().setup()
         self.denoise_pinn = self.make_pinn_model()
-        self.denoise_pinn.import_outter_data(self.data_class.get_data())   
-        
+        self.denoise_pinn.import_outter_data(self.data_class.get_data())
+
     def reset_up(self, clear_cache=True, reset_controller=True, new_seed=None):
         """Reset model components.
-        
+
         Args:
             clear_cache (bool): Whether to clear program cache.
             reset_controller (bool): Whether to reset controller.
@@ -479,42 +467,41 @@ class KD_DSCV_SPR(KD_DSCV):
 
         if reset_controller:
             self.controller = self.make_controller()
-        
+
     def pretrain(self):
         """Pretrain PINN model with observations."""
         print("NN evaluator training with data")
         self.denoise_pinn.pretrain()
-        Program.reset_task(self.denoise_pinn, self.config_pinn['generation_type'])
-        
+        Program.reset_task(self.denoise_pinn, self.config_pinn["generation_type"])
+
     def callIterPINN(self, n_epochs, verbose=True):
         """Run iterative PINN and PDE discovery.
-        
+
         Args:
             n_epochs (int): Number of epochs.
             verbose (bool): Whether to print progress.
-            
+
         Returns:
             dict: Training results.
         """
         self.pretrain()
 
-        last = False    
+        last = False
         last_best_p = None
         best_tokens = []
         prefix, _ = os.path.splitext(self.out_path)
         iter_num = self.config_pinn["iter_num"]
-        eq_num = self.config_task.get('eq_num', 1)
-        
+
         for i in range(iter_num):
             if i > 0:
                 self.reset_up(reset_controller=False)
-                bsz = self.config_training['batch_size']
-                self.config_training['n_samples'] = 10*bsz
+                bsz = self.config_training["batch_size"]
+                self.config_training["n_samples"] = 10 * bsz
 
-            print(f"The No.{i} pde discovery process")   
+            print(f"The No.{i} pde discovery process")
             results = [self.searcher.search(n_epochs=n_epochs, verbose=verbose, keep_history=False)]
             self.out_path = f"{prefix}_{i+1}.csv"
-            best_p = [results[j]['program'] for j in range(len(results))]
+            best_p = [results[j]["program"] for j in range(len(results))]
 
             if len(best_tokens) > 0:
                 new_best_p = []
@@ -525,24 +512,28 @@ class KD_DSCV_SPR(KD_DSCV):
                     else:
                         new_best_p.append(best_p[j])
                 best_p = new_best_p
-               
+
             if i + 1 == iter_num:
                 last = True
-            
-            self.pinn_train(best_p, count=i+1, coef=self.config_pinn['coef_pde'],
-                            local_sample=self.config_pinn['local_sample'],
-                            last=last)
-            
+
+            self.pinn_train(
+                best_p,
+                count=i + 1,
+                coef=self.config_pinn["coef_pde"],
+                local_sample=self.config_pinn["local_sample"],
+                last=last,
+            )
+
             best_tokens = [best_p[j].tokens for j in range(len(results))]
             self.best_p = best_p
 
         print(f"The No.{iter_num} pde discovery process")
-        self.reset_up(reset_controller=False)    
+        self.reset_up(reset_controller=False)
         return self.searcher.search(n_epochs=n_epochs, verbose=verbose, keep_history=False)
-    
+
     def pinn_train(self, best_p, count, coef=0.1, local_sample=False, last=False):
         """Train PINN with discovered equation constraint.
-        
+
         Args:
             best_p: Best program found.
             count (int): Iteration count.
@@ -551,27 +542,27 @@ class KD_DSCV_SPR(KD_DSCV):
             last (bool): Whether this is the last iteration.
         """
         self.denoise_pinn.train_pinn(best_p, count, coef=coef, local_sample=local_sample, last=last)
-        Program.reset_task(self.denoise_pinn, self.config_pinn['generation_type'])
-                
+        Program.reset_task(self.denoise_pinn, self.config_pinn["generation_type"])
+
     def train(self, n_epochs, verbose):
         """Train model.
-        
+
         Args:
             n_epochs (int): Number of epochs.
             verbose (bool): Whether to print progress.
-            
+
         Returns:
             dict: Training results.
         """
         self.setup()
-        eq_num = self.config_task['eq_num'] 
+        eq_num = self.config_task["eq_num"]
         self.best_p = [None for _ in range(eq_num)]
         result = self.callIterPINN(n_epochs, verbose)
         return result
 
-    def make_outter_data(self, x, y, domains, data_type='Sparse'):
+    def make_outter_data(self, x, y, domains, data_type="Sparse"):
         """Create data handler for external data.
-        
+
         Args:
             x: Input features.
             y: Target values.
@@ -579,11 +570,11 @@ class KD_DSCV_SPR(KD_DSCV):
             data_type (str): Type of data.
         """
         self.data_class = SparseData(x, y)
-        self.data_class.process_data(domains)    
+        self.data_class.process_data(domains)
 
-    def fit(self, x, y, domains, n_epochs=20, verbose=True, data_type='Sparse'):
+    def fit(self, x, y, domains, n_epochs=20, verbose=True, data_type="Sparse"):
         """Fit model to data.
-        
+
         Args:
             x: Input features.
             y: Target values.
@@ -591,7 +582,7 @@ class KD_DSCV_SPR(KD_DSCV):
             n_epochs (int): Number of epochs.
             verbose (bool): Whether to print progress.
             data_type (str): Type of data.
-            
+
         Returns:
             dict: Training results.
         """

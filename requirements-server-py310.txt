@@ -1,0 +1,2 @@
+# Optional server baseline requiring Python >=3.10. Install after requirements.txt.
+pyoperon==0.6.1

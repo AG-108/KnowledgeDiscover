@@ -1,0 +1,150 @@
+{
+   // Merged from the original repo's config_common.json + config_regression.json
+   // (archive/kd/model/DeepSymbolicOptimization/dso/dso/config/). Sections for
+   // the un-ported control/binding tasks, gp_meld, postprocess, experiment
+   // (file-logging) and PPO were dropped; every remaining default is the value
+   // the original config resolved to for a regression run.
+
+   "task" : {
+      "task_type" : "regression",
+
+      // Either a benchmark name from task/regression/benchmarks.csv, a path to
+      // a CSV file, or -- as KD_DSO uses -- an (X, y) tuple passed directly.
+      "dataset" : "Keijzer-2",
+
+      "function_set" : ["add", "sub", "mul", "div", "sin", "cos"],
+
+      "metric" : "inv_nrmse",
+      "metric_params" : [1.0],
+
+      "extra_metric_test" : null,
+      "extra_metric_test_params" : [],
+
+      // NRMSE threshold for early stopping (useful on noiseless benchmarks
+      // where DSO can recover the exact expression).
+      "threshold" : 1e-12,
+
+      // protected=false: floating-point errors (e.g. log of a negative) yield
+      // a minimal reward. protected=true: "protected" operators avoid the
+      // errors but introduce discontinuities.
+      "protected" : false,
+
+      "reward_noise" : 0.0,
+      "reward_noise_type" : "r",
+      "normalize_variance" : false,
+
+      "decision_tree_threshold_set" : [],
+
+      // Only used when "poly" is in function_set.
+      "poly_optimizer_params" : {
+         "degree" : 3,
+         "coef_tol" : 1e-6,
+         "regressor" : "dso_least_squares",
+         "regressor_params" : {
+            "cutoff_p_value" : 1.0,
+            "n_max_terms" : null,
+            "coef_tol" : 1e-6
+         }
+      }
+   },
+
+   "training" : {
+      "n_samples" : 2000000,
+      "batch_size" : 1000,
+
+      // Risk-seeking policy gradient: set epsilon < 1.0 with baseline "R_e".
+      "epsilon" : 0.05,
+      "baseline" : "R_e",
+
+      // Control variate params for vanilla PG; no effect under risk-seeking.
+      "alpha" : 0.5,
+      "b_jumpstart" : false,
+
+      "n_cores_batch" : 1,
+
+      // Only used to compute the Pareto front; does not affect optimization.
+      "complexity" : "token",
+
+      "const_optimizer" : "scipy",
+      "const_params" : {
+         "method" : "L-BFGS-B",
+         "options" : { "gtol" : 1e-3 }
+      },
+
+      "verbose" : true,
+      "debug" : 0,
+      "early_stopping" : true,
+
+      // Experimental memory-buffer hyperparameters.
+      "use_memory" : false,
+      "memory_capacity" : 1e3,
+      "warm_start" : null,
+      "memory_threshold" : null,
+
+      // Size of the hall of fame / Pareto front kept during training. Was
+      // under "logging" upstream; folded in here since the file-logging
+      // machinery it belonged to was not ported.
+      "hof" : 100,
+      "save_pareto_front" : true
+   },
+
+   "state_manager" : {
+      "type" : "hierarchical",
+      "observe_action" : false,
+      "observe_parent" : true,
+      "observe_sibling" : true,
+      "observe_dangling" : false,
+      "embedding" : false,
+      "embedding_size" : 8
+   },
+
+   "policy" : {
+      "policy_type" : "rnn",
+      "max_length" : 64,
+      "cell" : "lstm",
+      "num_layers" : 1,
+      "num_units" : 32,
+      "initializer" : "zeros"
+   },
+
+   "policy_optimizer" : {
+      // "pg" (vanilla/risk-seeking policy gradient) or "pqt" (priority queue
+      // training). PPO was not ported.
+      "policy_optimizer_type" : "pg",
+      "optimizer" : "adam",
+      "learning_rate" : 0.0005,
+      "entropy_weight" : 0.03,
+      "entropy_gamma" : 0.7,
+
+      // Only read when policy_optimizer_type == "pqt".
+      "pqt_k" : 10,
+      "pqt_batch_size" : 1,
+      "pqt_weight" : 200.0,
+      "pqt_use_pg" : false
+   },
+
+   "prior" : {
+      "length" : {
+         "min_" : 4,
+         "max_" : 64,
+         "on" : true
+      },
+      "repeat" : {
+         "tokens" : "const",
+         "min_" : null,
+         "max_" : 3,
+         "on" : true
+      },
+      "inverse" : { "on" : true },
+      "trig" : { "on" : true },
+      "const" : { "on" : true },
+      "no_inputs" : { "on" : true },
+      "uniform_arity" : { "on" : true },
+      "soft_length" : {
+         "loc" : 10,
+         "scale" : 5,
+         "on" : true
+      },
+      "domain_range" : { "on" : false }
+   }
+}

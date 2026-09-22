@@ -1,0 +1,17 @@
+{
+  "name": "pysindy",
+  "device": "cpu",
+  "model": {
+    "polynomial_degree": 2,
+    "include_bias": true,
+    "reg_weight_lam": 0.005,
+    "regularizer": "L0",
+    "relax_coeff_nu": 1.0,
+    "tolerance": 0.00001,
+    "max_iter": 30,
+    "normalize_columns": true,
+    "derivative_order": 3,
+    "trim_boundary": 2
+  },
+  "profiles": {"full": {"model": {"max_iter": 100}}}
+}

@@ -1,5 +1,4 @@
-﻿import os
-import sys
+import os
 
 from _common import bootstrap_project_root
 
@@ -59,10 +58,14 @@ def _build_weak_form_terms(U: np.ndarray, x: np.ndarray, y: np.ndarray, t: np.nd
     return theta, target, names
 
 
-def fit_sparse_model(U: np.ndarray, x: np.ndarray, y: np.ndarray, t: np.ndarray, threshold: float = 1e-2):
+def fit_sparse_model(
+    U: np.ndarray, x: np.ndarray, y: np.ndarray, t: np.ndarray, threshold: float = 1e-2
+):
     theta, target, names = _build_weak_form_terms(U, x, y, t)
     coeffs, *_ = np.linalg.lstsq(theta, target, rcond=None)
-    selected = [(name, float(coeff)) for name, coeff in zip(names, coeffs) if abs(coeff) > threshold]
+    selected = [
+        (name, float(coeff)) for name, coeff in zip(names, coeffs) if abs(coeff) > threshold
+    ]
     return coeffs, names, selected
 
 

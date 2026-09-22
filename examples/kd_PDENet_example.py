@@ -1,8 +1,14 @@
+import os
+
 import numpy as np
+from _common import bootstrap_project_root
+
+project_root = bootstrap_project_root()
+
 from kd.dataset import load_wake_equation
 from kd.model.kd_pdenet import PDENetModel
 
-DATA_DIR = "../kd/dataset/WDwake"
+DATA_DIR = os.path.join(project_root, "kd", "dataset", "WDwake")
 
 dataset = load_wake_equation(DATA_DIR, ["TI8_U.npy", "TI8_V.npy"])
 
@@ -20,9 +26,9 @@ model = PDENetModel(
 model.fit(dataset)
 model.print_model()
 
-U0 = dataset.usol[:, :, :, 50]          # (C, Nx, Ny)
+U0 = dataset.usol[:, :, :, 50]  # (C, Nx, Ny)
 dt = dataset.t[51] - dataset.t[50]
-U1_pred = model.predict(U0, dt)         # (C, Nx, Ny)
+U1_pred = model.predict(U0, dt)  # (C, Nx, Ny)
 
 U1_true = dataset.usol[:, :, :, 51]
 mse = np.mean((U1_pred - U1_true) ** 2)

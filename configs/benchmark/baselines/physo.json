@@ -1,0 +1,17 @@
+{
+  "name": "physo",
+  "device": "cpu",
+  "model": {
+    "epochs": 2,
+    "op_names": ["add", "sub", "mul", "div", "sin", "cos"],
+    "fixed_consts": [1.0],
+    "parallel_mode": false
+  },
+  "profiles": {
+    "full": {
+      "model": {
+        "epochs": 20
+      }
+    }
+  }
+}

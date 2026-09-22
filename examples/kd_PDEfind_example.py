@@ -1,13 +1,11 @@
-import os
-import sys
-
 from _common import bootstrap_project_root
 
 project_root = bootstrap_project_root()
 
 import numpy as np
-from kd.model.kd_pdefind import PDEFindModel
+
 from kd.dataset import GridPDEDataset, load_kdv_equation
+from kd.model.kd_pdefind import PDEFindModel
 
 data = load_kdv_equation()
 x = data.x
@@ -19,28 +17,28 @@ dataset = GridPDEDataset(
     pde_data={"x": x, "t": t, "usol": u},
     domain={"x": (x.min(), x.max()), "t": (t.min(), t.max())},
     epi=0.0,
-    legacy=True
+    legacy=True,
 )
 
 model = PDEFindModel(
-    derivative_order=3,               # 包含到二阶导，适配扩散
+    derivative_order=3,
     threshold=5,
     alpha=1e-5,
-    max_iter=500
+    max_iter=500,  # Include second derivatives so the library can represent diffusion.
 )
 
-# 模型训练（根据 GridPDEDataset 提供的 x,t,usol 拟合 PDE）
+# Fit the PDE from the grid coordinates and solution field.
 model.fit(dataset)
 
-# 打印识别到的 PDE（u_t = ...）
+# Print the discovered PDE.
 model.print_model()
 
-# 预测
-U0 = u[:, 50]            # 取 t=50 对应的空间场
-dt = t[51] - t[50]             # 邻近时间步长
+# Evaluate one fitted one-step prediction.
+U0 = u[:, 50]  # Use the spatial field at the selected time index.
+dt = t[51] - t[50]  # Advance by one neighboring time step.
 U1_pred = model.predict(U0, dt)
 
 # sanity check
 U1_true = u[:, 51]
-mse = np.mean((U1_pred - U1_true)**2)
+mse = np.mean((U1_pred - U1_true) ** 2)
 print(f"One-step forecast MSE: {mse:.6e}")

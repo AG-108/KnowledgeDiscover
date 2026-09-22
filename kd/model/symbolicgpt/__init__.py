@@ -16,6 +16,7 @@ from .trainer import Trainer, TrainerConfig
 from .generator import generate_equation
 from .utils import (
     CharDataset,
+    evaluate_expression,
     fit_constants,
     points_tensor_from_xy,
     sample_from_model,
@@ -31,6 +32,7 @@ __all__ = [
     "TrainerConfig",
     "generate_equation",
     "CharDataset",
+    "evaluate_expression",
     "fit_constants",
     "points_tensor_from_xy",
     "sample_from_model",

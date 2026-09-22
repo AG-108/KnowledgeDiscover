@@ -1,6 +1,8 @@
 # PDENetModel.py
 from __future__ import annotations
-import os, sys
+
+import os
+import sys
 
 _THIS_FILE = os.path.abspath(__file__)
 _THIS_DIR = os.path.dirname(_THIS_FILE)
@@ -8,15 +10,13 @@ _THIS_DIR = os.path.dirname(_THIS_FILE)
 sys.path.insert(0, _THIS_DIR)
 sys.path.insert(0, os.path.join(_THIS_DIR, "PDENet2"))
 
+import conf
+import initparameters
 import numpy as np
+import setenv
 import torch
-
 from aTEAM.optim import NumpyFunctionInterface
 from scipy.optimize import fmin_bfgs as bfgs
-
-import conf
-import setenv
-import initparameters
 
 
 class PDENetModel:
@@ -113,7 +113,7 @@ class PDENetModel:
         if x_len <= 0 or y_len <= 0:
             raise ValueError("Invalid spatial bounds.")
 
-        # 这里是为了防止不适应非方阵加的检测
+        # Reject grids that the rectangular-grid adapter cannot represent safely.
         # if Nx != Ny:
         #     raise ValueError(
         #         f"Original PDE-Net-2.0 setenv assumes square mesh; got Nx={Nx}, Ny={Ny}. "
@@ -150,20 +150,17 @@ class PDENetModel:
             "--dtype": self.dtype_name,
             "--device": self.device,
             "--constraint": self.constraint,
-
             # region / discretization
             "--eps": bound,
             "--dt": dt,
             "--cell_num": 1,
             "--blocks": "1",
-
             # network hyperparams
             "--kernel_size": self.kernel_size,
             "--max_order": self.derivative_order,
             "--dx": dx,
             "--hidden_layers": self.hidden_layers,
             "--scheme": self.scheme,
-
             # required by schema (not used for your dataset-driven training)
             "--dataname": "burgers",
             "--viscosity": 0.0,
@@ -174,20 +171,16 @@ class PDENetModel:
             "--channel_names": channel_names,
             "--freq": 1,
             "--data_start_time": 0.0,
-
             # noise (off)
             "--start_noise": 0.0,
             "--end_noise": 0.0,
-
             # regularization weights
             "--stablize": self.stablize,
             "--sparsity": self.alpha,
             "--momentsparsity": self.momentsparsity,
-
             "--npseed": self.seed,
             "--torchseed": self.seed,
             "--maxiter": self.max_iter,
-
             "--recordfile": "None",
             "--recordcycle": 200,
             "--savecycle": -1,
@@ -230,7 +223,7 @@ class PDENetModel:
                 loss = (torch.ones(1, requires_grad=True) / torch.zeros(1)).to(loss)
             return loss
 
-        isfrozen = (False if self.constraint == "free" else True)
+        isfrozen = False if self.constraint == "free" else True
 
         nfi = NumpyFunctionInterface(
             [
@@ -300,9 +293,11 @@ class PDENetModel:
         if U0.ndim != 3:
             raise ValueError(f"Expected U0 shape (C, Nx, Ny), got {U0.shape}")
 
-        u0_t = torch.as_tensor(U0, dtype=self.torch_dtype, device=self.device).unsqueeze(0)  # (1,C,Nx,Ny)
+        u0_t = torch.as_tensor(U0, dtype=self.torch_dtype, device=self.device).unsqueeze(
+            0
+        )  # (1,C,Nx,Ny)
 
-        # 关键：forward 内部用 autograd.grad，所以这里必须开启梯度
+        # forward uses autograd.grad, so prediction must run with gradients enabled.
         with torch.enable_grad():
             u0_t.requires_grad_(True)
             u1_t = self.model(u0_t, T=float(dt))

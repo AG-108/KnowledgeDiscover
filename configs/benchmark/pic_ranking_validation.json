@@ -1,0 +1,29 @@
+{
+  "seeds": [17, 29, 43],
+  "data_nx": 24,
+  "data_nt": 24,
+  "simulator": {
+    "internal_nx": 96,
+    "final_time": 0.6,
+    "time_step": 0.001
+  },
+  "cache_dir": "results/v2_validation/pic_reference_cache",
+  "required_true_top1_rate": 1.0,
+  "backend": {
+    "hidden_width": 50,
+    "hidden_layers": 4,
+    "reference_epochs": 5000,
+    "pinn_epochs": 300,
+    "learning_rate": 0.001,
+    "physics_weight": 0.01,
+    "nx": 24,
+    "nt": 24,
+    "n_windows": 6,
+    "window_fraction": 0.5,
+    "dtype": "float64",
+    "activation": "sin",
+    "reference_max_normalized_rmse": 0.02,
+    "pinn_min_relative_loss_improvement": null,
+    "pinn_max_final_loss": null
+  }
+}

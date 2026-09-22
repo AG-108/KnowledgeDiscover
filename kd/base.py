@@ -7,29 +7,28 @@ scikit-learn's BaseEstimator.
 
 import inspect
 from collections import defaultdict
-import warnings
-import numpy as np
+
 
 class BaseEstimator:
     """Base class for all estimators in KD.
-    
+
     This class should not be used directly. Instead, use derived classes.
     All estimators should inherit from this class.
-    
-    This is an abstract base class that provides common functionality for 
+
+    This is an abstract base class that provides common functionality for
     parameter management and string representation. It does not have any
     attributes of its own.
     """
 
     def __init__(self, **params):
         """Initialize self.
-        
+
         Args:
             **params: Arbitrary keyword arguments that will be set as parameters
                 of the estimator.
         """
         self.set_params(**params)
-        
+
     def get_params(self, deep=True):
         """Get parameters for this estimator.
 
@@ -64,53 +63,56 @@ class BaseEstimator:
         if not params:
             return self
         valid_params = self.get_params(deep=True)
-        
+
         nested_params = defaultdict(dict)
         for key, value in params.items():
             key, delim, sub_key = key.partition("__")
             if key not in valid_params:
                 raise ValueError(f"Invalid parameter {key} for {self}.")
-            
+
             if delim:
                 nested_params[key][sub_key] = value
             else:
                 setattr(self, key, value)
                 valid_params[key] = value
-        
+
         for key, sub_params in nested_params.items():
             valid_params[key].set_params(**sub_params)
-        
+
         return self
 
     @classmethod
     def _get_param_names(cls):
         """Get parameter names for the estimator.
-        
+
         Returns:
             list: List of parameter names in the format ``[p1, p2, p3...]``.
-            
+
         Note:
             Parameters are fetched directly from the class ``__init__`` method.
         """
         init = getattr(cls.__init__, "deprecated_original", cls.__init__)
         if init is object.__init__:
             return []
-        
+
         init_signature = inspect.signature(init)
-        parameters = [p for p in init_signature.parameters.values() 
-                      if p.name != "self" and p.kind != p.VAR_KEYWORD]
-        
+        parameters = [
+            p
+            for p in init_signature.parameters.values()
+            if p.name != "self" and p.kind != p.VAR_KEYWORD
+        ]
+
         for p in parameters:
             if p.kind == p.VAR_POSITIONAL:
                 raise RuntimeError(
                     f"{cls} should not use *args in constructor; parameters must be specified."
                 )
-        
+
         return sorted([p.name for p in parameters])
 
     def __repr__(self):
         """Return a string representation of the estimator.
-        
+
         Returns:
             str: String representation.
         """

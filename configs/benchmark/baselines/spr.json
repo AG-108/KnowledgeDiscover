@@ -1,0 +1,21 @@
+{
+  "name": "spr",
+  "device": "cpu",
+  "model": {
+    "n_iterations": 5,
+    "n_samples_per_batch": 50
+  },
+  "profiles": {
+    "smoke": {
+      "run": {
+        "dscv_epochs": 1
+      }
+    },
+    "full": {
+      "model": {
+        "n_iterations": 100,
+        "n_samples_per_batch": 100
+      }
+    }
+  }
+}

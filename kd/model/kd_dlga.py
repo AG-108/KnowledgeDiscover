@@ -1,20 +1,23 @@
-# kd/model/kd_dlga.py (最终完善版)
+# User-facing DLGA wrapper with a configurable operator library.
+import heapq
 import logging
-import numpy as np
-import torch
-import random
 import os
 import pickle
-import heapq
+import random
+
+import numpy as np
+import torch
 from tqdm import tqdm
+
 from kd.model.dlga import DLGA
 
-class KD_DLGA(DLGA):
-    """
-    DLGA 模型的一个用户友好封装版本。
-    """
 
-    def __init__(self, operators: list[str], epi: float, input_dim: int, verbose: bool = True, **kwargs):
+class KD_DLGA(DLGA):
+    """Expose DLGA with a configurable operator library and benchmark-friendly outputs."""
+
+    def __init__(
+        self, operators: list[str], epi: float, input_dim: int, verbose: bool = True, **kwargs
+    ):
         self.user_operators = operators
         self.library_size = len(operators)
         self.verbose = verbose
@@ -22,13 +25,14 @@ class KD_DLGA(DLGA):
         self.equations_ = None
         self.best_equation_ = None
 
-
     def generate_meta_data(self, X):
         self.Net.to(self.device)
         X_tensor = torch.as_tensor(np.asarray(X, dtype=np.float32), device=self.device)
         X_tensor.requires_grad_(True)
         self.Net.load_state_dict(
-            torch.load(f"model_save/Net_{self.best_epoch}.pkl", map_location=self.device, weights_only=True)
+            torch.load(
+                f"model_save/Net_{self.best_epoch}.pkl", map_location=self.device, weights_only=True
+            )
         )
         self.Net.eval()
         u = self.Net(X_tensor)
@@ -39,13 +43,19 @@ class KD_DLGA(DLGA):
             uxx_grad = torch.autograd.grad(outputs=ux.sum(), inputs=X_tensor, create_graph=True)[0]
             uxx = uxx_grad[:, 0].reshape(-1, 1)
             try:
-                uxxx_grad = torch.autograd.grad(outputs=uxx.sum(), inputs=X_tensor, create_graph=True)[0]
+                uxxx_grad = torch.autograd.grad(
+                    outputs=uxx.sum(), inputs=X_tensor, create_graph=True
+                )[0]
                 uxxx = uxxx_grad[:, 0].reshape(-1, 1)
             except Exception as e:
-                logging.warning("Failed to compute u_xxx via autograd, falling back to zeros: %s", e)
+                logging.warning(
+                    "Failed to compute u_xxx via autograd, falling back to zeros: %s", e
+                )
                 uxxx = torch.zeros_like(u)
         except Exception as e:
-            logging.warning("Failed to compute u_xx/u_xxx via autograd, falling back to zeros: %s", e)
+            logging.warning(
+                "Failed to compute u_xx/u_xxx via autograd, falling back to zeros: %s", e
+            )
             uxx = torch.zeros_like(u)
             uxxx = torch.zeros_like(u)
         try:
@@ -54,18 +64,22 @@ class KD_DLGA(DLGA):
         except Exception as e:
             logging.warning("Failed to compute u_tt via autograd, falling back to zeros: %s", e)
             utt = torch.zeros_like(u)
-        available_ops = {'u': u, 'u_x': ux, 'u_t': ut, 'u_xx': uxx, 'u_xxx': uxxx, 'u_tt': utt}
-        # 1. Theta 矩阵的构建依然严格遵守 user_operators，这用于方程搜索
+        available_ops = {"u": u, "u_x": ux, "u_t": ut, "u_xx": uxx, "u_xxx": uxxx, "u_tt": utt}
+        # Restrict Theta to the configured operators used by the equation search.
         theta_columns = []
         for op_name in self.user_operators:
             if op_name in available_ops:
                 theta_columns.append(available_ops[op_name])
-        self.Theta = torch.concatenate(theta_columns, axis=1) if theta_columns else torch.empty(X.shape[0], 0).to(self.device)
+        self.Theta = (
+            torch.concatenate(theta_columns, axis=1)
+            if theta_columns
+            else torch.empty(X.shape[0], 0).to(self.device)
+        )
 
-        # 2. metadata 则存储所有计算出的项，使其成为一个完整的“数据源”
+        # Keep every computed derivative in metadata for diagnostics and visualization.
         self.metadata = {key: val.cpu().detach().numpy() for key, val in available_ops.items()}
-        
-        # 3. 父类中其他需要的属性也需更新
+
+        # Preserve the derivative aliases expected by the parent implementation.
         self.u_t = ut.cpu().detach().numpy()
         self.u_tt = utt.cpu().detach().numpy()
 
@@ -74,10 +88,12 @@ class KD_DLGA(DLGA):
     def random_module(self):
         genes_module = []
         for _ in range(self.max_length):
-            if self.library_size == 0: break
+            if self.library_size == 0:
+                break
             a = random.randint(0, self.library_size - 1)
             genes_module.append(a)
-            if random.uniform(0, 1) > self.partial_prob: break
+            if random.uniform(0, 1) > self.partial_prob:
+                break
         return genes_module
 
     def mutation(self):
@@ -85,7 +101,8 @@ class KD_DLGA(DLGA):
         for i in range(size_pop):
             if random.uniform(0, 1) < self.add_rate:
                 add_Chrom = self.random_module()
-                if add_Chrom and add_Chrom not in Chrom[i]: Chrom[i].append(add_Chrom)
+                if add_Chrom and add_Chrom not in Chrom[i]:
+                    Chrom[i].append(add_Chrom)
             if random.uniform(0, 1) < self.delete_rate and len(Chrom[i]) > 1:
                 Chrom[i].pop(random.randint(0, len(Chrom[i]) - 1))
             if random.uniform(0, 1) < self.mutate_rate and self.library_size > 0:
@@ -104,20 +121,25 @@ class KD_DLGA(DLGA):
         genes = []
         for _ in range(self.max_length):
             gene_random = self.random_module()
-            if gene_random: genes.append(sorted(gene_random))
-            if random.uniform(0, 1) > self.genes_prob: break
+            if gene_random:
+                genes.append(sorted(gene_random))
+            if random.uniform(0, 1) > self.genes_prob:
+                break
         return genes
 
     def convert_chrom_to_eq(self, chrom, left_name, coef):
         name = self.user_operators
         string = []
-        if not chrom: return f"{left_name}= (empty equation)"
+        if not chrom:
+            return f"{left_name}= (empty equation)"
         for i in range(len(chrom)):
-            if i >= len(coef): break
+            if i >= len(coef):
+                break
             item = chrom[i]
             coef_str = str(np.round(coef[i, 0], 4))
             term_str = "*".join([name[gene] for gene in item if gene < len(name)])
-            if not term_str: continue
+            if not term_str:
+                continue
             string.append(f"{coef_str}*{term_str}")
         equation = f"{left_name}=" + "+".join(string).replace("+-", "-")
         return equation
@@ -129,7 +151,7 @@ class KD_DLGA(DLGA):
             initial_genome = self.random_genome()
             self.Chrom.append(initial_genome)
             if not initial_genome:
-                self.Fitness.append(float('inf'))
+                self.Fitness.append(float("inf"))
                 continue
             gene_translate, length_penalty_coef = self.translate_DNA(initial_genome)
             _, MSE, _, _ = self.get_fitness(gene_translate, length_penalty_coef)
@@ -157,28 +179,30 @@ class KD_DLGA(DLGA):
                         self.Chrom.append(best_loaded)
             self.select()
             if self.verbose and self.Chrom and self.Chrom[0] != best:
-                output_str = (f"iter: {iter_num + 1}\n"
-                              f"The best Chrom: {self.Chrom[0]}\n"
-                              f"The best coef:  \n{self.coef[0]}\n"
-                              f"The best fitness: {self.Fitness[0]}\n"
-                              f"The best name: {self.name[0]}\n"
-                              "----------------------------------------\n")
+                output_str = (
+                    f"iter: {iter_num + 1}\n"
+                    f"The best Chrom: {self.Chrom[0]}\n"
+                    f"The best coef:  \n{self.coef[0]}\n"
+                    f"The best fitness: {self.Fitness[0]}\n"
+                    f"The best name: {self.name[0]}\n"
+                    "----------------------------------------\n"
+                )
                 with open("result_save/DLGA_output.txt", "a") as f:
                     f.write(output_str)
                 print(output_str)
         if not self.Chrom:
             print("Evolution finished, but no solution was found.")
-            return [], [], float('inf'), ""
+            return [], [], float("inf"), ""
         return self.Chrom[0], self.coef[0], self.Fitness[0], self.name[0]
 
     def select(self):
-        # ... (选择逻辑与上一版本相同) ...
+        # Re-score the population before retaining the best half.
         Chrom, size_pop = self.Chrom, self.pop_size
         new_Chrom, new_fitness, new_coef, new_name = [], [], [], []
         fitness_list, coef_list, name_list = [], [], []
         for i in range(size_pop):
             if not Chrom[i]:
-                fitness_list.append(float('inf'))
+                fitness_list.append(float("inf"))
                 coef_list.append([])
                 name_list.append("")
                 continue
@@ -203,37 +227,37 @@ class KD_DLGA(DLGA):
         self.Fitness = new_fitness
         self.coef = new_coef
         self.name = new_name
-        
-        # 确保 Fitness 和 Chrom 列表不为空，以避免 min() 或索引错误
+
+        # Empty populations cannot contribute fitness or complexity diagnostics.
         if self.Fitness and self.Chrom:
-            # 记录最佳适应度
-            if hasattr(self, 'fitness_history'):
+            # Record the best fitness for this generation.
+            if hasattr(self, "fitness_history"):
                 self.fitness_history.append(min(self.Fitness))
-            
-            # 记录详细的进化历史数据，供后续可视化使用
-            if hasattr(self, 'evolution_history'):
-                unique_genes = len(set(tuple(sorted(module)) 
-                                     for chrom in self.Chrom if chrom
-                                     for module in chrom))
-                self.evolution_history.append({
-                    'generation': len(self.fitness_history),
-                    'fitness': min(self.Fitness),
-                    'complexity': len(self.Chrom[0]) if self.Chrom[0] else 0,
-                    'population_size': self.pop_size,
-                    'unique_modules': unique_genes
-                })
+
+            # Store generation diagnostics consumed by the visualization helpers.
+            if hasattr(self, "evolution_history"):
+                unique_genes = len(
+                    set(tuple(sorted(module)) for chrom in self.Chrom if chrom for module in chrom)
+                )
+                self.evolution_history.append(
+                    {
+                        "generation": len(self.fitness_history),
+                        "fitness": min(self.Fitness),
+                        "complexity": len(self.Chrom[0]) if self.Chrom[0] else 0,
+                        "population_size": self.pop_size,
+                        "unique_modules": unique_genes,
+                    }
+                )
 
         return self.Chrom, self.Fitness, self.coef, self.name
-    
+
     def fit(self, X, y):
-        """
-        重写 fit 方法，以确保在调用渲染器时传递正确的动态算子列表
-        """
+        """Fit the neural surrogate and run the operator-aware genetic search."""
         self.Net, self.best_epoch = self.train_NN(X, y)
         self.Theta = self.generate_meta_data(X)
-        
+
         try:
-            # 调用我们重写过的 evolution 方法
+            # Run the operator-aware evolutionary search.
             Chrom, coef, fitness, name = self.evolution()
 
             if not Chrom or (isinstance(coef, np.ndarray) and coef.size == 0):
@@ -248,34 +272,40 @@ class KD_DLGA(DLGA):
             print(f"Chromosome: {Chrom}")
             print(f"Coefficients: {coef}")
 
-            # 调用我们重写过的 convert_chrom_to_eq 方法
+            # Convert genes with the configured operator names.
             equation = self.convert_chrom_to_eq(Chrom, name, coef)
             self.best_equation_ = equation
             self.equations_ = [equation]
             print(f"equation form: {equation}")
 
-            # 检查 equation_renderer 是否可用
+            # LaTeX rendering is optional and should not invalidate a fitted model.
             try:
                 from kd.viz import dlga_eq2latex as equation_renderer
-                # 【关键修改】 调用新的渲染器，并传入 operator_names 参数
+
+                # Pass the dynamic operator mapping to the renderer.
                 self.eq_latex = equation_renderer.dlga_eq2latex(
                     chromosome=Chrom,
                     coefficients=coef,
                     lhs_name_str=name,
-                    operator_names=self.user_operators # 将我们的动态列表传进去
+                    operator_names=self.user_operators,  # Preserve the model-specific operator order.
                 )
             except ImportError:
-                print("\n[INFO] Equation renderer not found or failed to import. Skipping LaTeX generation.")
+                print(
+                    "\n[INFO] Equation renderer not found or failed to import. Skipping LaTeX generation."
+                )
 
         except Exception as e:
             print(f"Error in fit: {str(e)}")
-            # 在出错时也打印有用的调试信息
+            # Include a traceback because search failures otherwise lose their context.
             import traceback
+
             traceback.print_exc()
             raise
-        
+
     def predict(self, mesh_data):
-        X_tensor = torch.from_numpy(mesh_data.astype(np.float32)).to(self.device) # Convert to tensor and predict
+        X_tensor = torch.from_numpy(mesh_data.astype(np.float32)).to(
+            self.device
+        )  # Convert to tensor and predict
         with torch.no_grad():
             u_pred = self.Net(X_tensor).cpu().numpy()
         return u_pred

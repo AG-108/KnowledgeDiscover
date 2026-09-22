@@ -1,0 +1,15 @@
+{
+  "name": "sindy",
+  "device": "cpu",
+  "model": {
+    "polynomial_degree": 2,
+    "include_bias": true,
+    "threshold": 0.05,
+    "alpha": 0.000001,
+    "max_iter": 20,
+    "normalize_columns": true,
+    "derivative_order": 3,
+    "trim_boundary": 2
+  },
+  "profiles": {"full": {"model": {"max_iter": 100}}}
+}

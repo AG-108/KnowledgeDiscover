@@ -1,0 +1,17 @@
+{
+  "profile": "smoke",
+  "tasks": ["ode"],
+  "models": ["sindy"],
+  "datasets": ["ode_core_*"],
+  "seeds": [0, 1, 2, 3, 4],
+  "timeout": 300,
+  "output_dir": "results/core_v2_ode_noisy_sparse",
+  "overrides": {
+    "datasets": {
+      "ode_core_oscillator": {"observation_noise": 0.01, "time_stride": 2},
+      "ode_core_population": {"observation_noise": 0.01, "time_stride": 2},
+      "ode_core_chaotic": {"observation_noise": 0.01, "time_stride": 2},
+      "ode_core_rational": {"observation_noise": 0.01, "time_stride": 2}
+    }
+  }
+}

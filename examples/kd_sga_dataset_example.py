@@ -1,8 +1,5 @@
 """Dataset-driven usage of KD_SGA."""
 
-import os
-import sys
-
 from _common import bootstrap_project_root
 
 project_root = bootstrap_project_root()
@@ -10,13 +7,13 @@ project_root = bootstrap_project_root()
 from kd.dataset import load_pde_grid
 from kd.model.kd_sga import KD_SGA
 
-# 1. 通过统一入口加载数据
-pde_dataset = load_pde_grid('chafee-infante')
+# Load the PDE dataset through the public registry.
+pde_dataset = load_pde_grid("chafee-infante")
 
-# 2. 初始化模型，与旧接口保持一致
+# Configure the model with legacy-compatible parameters.
 model = KD_SGA(sga_run=10, depth=3)
 
-# 3. 使用新增接口直接提供数据集
+# Pass the loaded dataset through the direct adapter.
 model.fit_dataset(pde_dataset)
 
 print(f"The discovered equation is: {model.best_pde_}")

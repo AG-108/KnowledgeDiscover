@@ -1,0 +1,26 @@
+{
+  "name": "eqgpt",
+  "device": "cpu",
+  "model": {
+    "gpt_pretrain_epochs": 5,
+    "augment_times": 8,
+    "surrogate_iters": 1000,
+    "choose": 2000,
+    "choose_validate": 500,
+    "optimize_epochs": 3,
+    "samples": 50,
+    "meta_nx": 20,
+    "meta_nt": 20,
+    "verbose": false
+  },
+  "profiles": {
+    "full": {
+      "model": {
+        "gpt_pretrain_epochs": 20,
+        "surrogate_iters": 10000,
+        "optimize_epochs": 20,
+        "samples": 200
+      }
+    }
+  }
+}

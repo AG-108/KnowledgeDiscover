@@ -1,22 +1,20 @@
-import os
-import sys
-
 from _common import bootstrap_project_root
 
 project_root = bootstrap_project_root()
 
 from gplearn.genetic import SymbolicRegressor
+
 from kd.dataset import SymbolicRegressionDataset
 from kd.metrics import MSE
 
 # Load a symbolic regression dataset
-dataset = SymbolicRegressionDataset(name='Koza-2')
+dataset = SymbolicRegressionDataset(name="Koza-2")
 
 data = dataset.get_data()
-X_train = data['X_train']
-y_train = data['y_train']
-X_test = data['X_test']
-y_test = data['y_test']
+X_train = data["X_train"]
+y_train = data["y_train"]
+X_test = data["X_test"]
+y_test = data["y_test"]
 
 model = SymbolicRegressor()
 

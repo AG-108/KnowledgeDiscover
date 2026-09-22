@@ -1,25 +1,23 @@
 # General imports
 import os
-import sys
 
 from _common import bootstrap_project_root
 
 project_root = bootstrap_project_root()
 
+import matplotlib.pyplot as plt
 import numpy as np
 import torch
-from torch.utils.data import DataLoader, TensorDataset
-import matplotlib.pyplot as plt
-
-from kd.dataset import load_kdv_equation
 
 # DeepMoD functions
 from deepymod import DeepMoD
+from deepymod.model.constraint import LeastSquares
 from deepymod.model.func_approx import NN
 from deepymod.model.library import Library1D
-from deepymod.model.constraint import LeastSquares
 from deepymod.model.sparse_estimators import Threshold
+from torch.utils.data import DataLoader, TensorDataset
 
+from kd.dataset import load_kdv_equation
 
 # Settings for reproducibility
 np.random.seed(42)
@@ -113,9 +111,9 @@ axes[1].set_xlabel("x")
 axes[1].set_ylabel("t")
 axes[1].figure.colorbar(axes[1].collections[0], ax=axes[1])
 
-out_fig = os.path.join(project_root, 'results', 'deepmod_demo.png')
+out_fig = os.path.join(project_root, "results", "deepmod_demo.png")
 os.makedirs(os.path.dirname(out_fig), exist_ok=True)
 plt.tight_layout()
-plt.savefig(out_fig, bbox_inches='tight')
+plt.savefig(out_fig, bbox_inches="tight")
 plt.close()
 print(f"Saved deepmod demo figure to: {out_fig}")

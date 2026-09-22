@@ -18,9 +18,10 @@
 # used by `fit()`; only `threshold` and `derivative_order`-implied terms
 # take effect. Picking a `threshold` that's too large relative to the
 # true coefficients will silently zero out every term (degenerate
-# `u_t = 0` result) — see TODO to wire up a real STRidge/STLSQ solver.
+# `u_t = 0` result). A future implementation should use a real STRidge/STLSQ solver.
 
 from typing import Any, Dict, Optional
+
 import numpy as np
 import pysindy as ps
 from pysindy.differentiation import FiniteDifference
@@ -39,7 +40,9 @@ class PDEFindModel:
         max_iter: int = 50,
     ):
         self.derivative_order = derivative_order
-        self.function_library = function_library or ps.PolynomialLibrary(degree=2, include_bias=False)
+        self.function_library = function_library or ps.PolynomialLibrary(
+            degree=2, include_bias=False
+        )
         self.threshold = threshold
         self.alpha = alpha
         self.max_iter = max_iter
@@ -77,14 +80,32 @@ class PDEFindModel:
         uxxx = np.gradient(uxx, x, axis=0, edge_order=2)
 
         candidate_terms = [
-            np.ones_like(U), U, ux, uxx, uxxx,
-            U * U, U * ux, U * uxx, U * uxxx,
-            ux * ux, ux * uxx, uxx * uxx,
+            np.ones_like(U),
+            U,
+            ux,
+            uxx,
+            uxxx,
+            U * U,
+            U * ux,
+            U * uxx,
+            U * uxxx,
+            ux * ux,
+            ux * uxx,
+            uxx * uxx,
         ]
         names = [
-            "1", "u", "u_x", "u_xx", "u_xxx",
-            "u^2", "u*u_x", "u*u_xx", "u*u_xxx",
-            "u_x^2", "u_x*u_xx", "u_xx^2",
+            "1",
+            "u",
+            "u_x",
+            "u_xx",
+            "u_xxx",
+            "u^2",
+            "u*u_x",
+            "u*u_xx",
+            "u*u_xxx",
+            "u_x^2",
+            "u_x*u_xx",
+            "u_xx^2",
         ]
 
         theta = np.column_stack([term.ravel() for term in candidate_terms])
@@ -132,9 +153,18 @@ class PDEFindModel:
         uxxx = np.gradient(uxx, x, edge_order=2)
 
         candidate_terms = [
-            np.ones_like(U0), U0, ux, uxx, uxxx,
-            U0 * U0, U0 * ux, U0 * uxx, U0 * uxxx,
-            ux * ux, ux * uxx, uxx * uxx,
+            np.ones_like(U0),
+            U0,
+            ux,
+            uxx,
+            uxxx,
+            U0 * U0,
+            U0 * ux,
+            U0 * uxx,
+            U0 * uxxx,
+            ux * ux,
+            ux * uxx,
+            uxx * uxx,
         ]
         ut = sum(coeff * term for coeff, term in zip(self._coeffs, candidate_terms))
         return U0 + dt * ut

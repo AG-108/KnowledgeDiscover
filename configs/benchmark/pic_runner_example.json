@@ -1,0 +1,39 @@
+{
+  "profile": "smoke",
+  "models": ["sindy"],
+  "datasets": ["burgers", "kdv"],
+  "seeds": [17, 29, 43],
+  "timeout": 900,
+  "output_dir": "results/pic_runner_example",
+  "overrides": {
+    "models": {},
+    "datasets": {},
+    "run": {},
+    "evaluation": {
+      "*": {
+        "physics_informed_pic": {
+          "enabled": true,
+          "cache_dir": "results/benchmark/pic_reference_cache",
+          "max_observations": 2000,
+          "backend": {
+            "hidden_width": 50,
+            "hidden_layers": 4,
+            "reference_epochs": 5000,
+            "pinn_epochs": 300,
+            "learning_rate": 0.001,
+            "physics_weight": 0.01,
+            "nx": 32,
+            "nt": 32,
+            "n_windows": 10,
+            "window_fraction": 0.5,
+            "dtype": "float64",
+            "activation": "sin",
+            "reference_max_normalized_rmse": 0.02,
+            "pinn_min_relative_loss_improvement": null,
+            "pinn_max_final_loss": null
+          }
+        }
+      }
+    }
+  }
+}

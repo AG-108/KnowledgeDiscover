@@ -1,0 +1,14 @@
+{
+  "hidden_width": 12,
+  "hidden_layers": 2,
+  "reference_epochs": 150,
+  "pinn_epochs": 3,
+  "learning_rate": 0.001,
+  "physics_weight": 0.01,
+  "nx": 10,
+  "nt": 10,
+  "n_windows": 4,
+  "window_fraction": 0.5,
+  "seed": 17,
+  "dtype": "float64"
+}

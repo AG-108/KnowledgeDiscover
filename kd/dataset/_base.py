@@ -1,51 +1,55 @@
 """
 Base IO code for all datasets
 """
+
 import ast
 import csv
 import itertools
 import logging
 import os
 import pickle
-import zlib
 import re
+import zlib
+from abc import ABC, abstractmethod
+from importlib import resources
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple, Union
 
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import scipy.io as sio
-import matplotlib.pyplot as plt
-from typing import Any, Dict, Union, Optional, Tuple, List
-from pathlib import Path
-from importlib import resources
-from abc import ABC, abstractmethod
+from scipy.interpolate import interp2d
 
 from ._info import DatasetInfo
-from scipy.interpolate import interp2d
 
 DATA_MODULE = "kd.dataset.data"
 GAMMA = 0.57721566490153286060651209008240243104215933593992
 
+
 def _harmonic(x1):
     if all(val.is_integer() for val in x1):
-        return np.array([sum(1/d for d in range(1, int(val)+1)) for val in x1], dtype=np.float32)
+        return np.array(
+            [sum(1 / d for d in range(1, int(val) + 1)) for val in x1], dtype=np.float32
+        )
     else:
-        return GAMMA + np.log(x1) + 0.5/x1 - 1./(12*x1**2) + 1./(120*x1**4)
+        return GAMMA + np.log(x1) + 0.5 / x1 - 1.0 / (12 * x1**2) + 1.0 / (120 * x1**4)
+
 
 _function_map = {
-    'pi': np.pi,
-    'sin': np.sin,
-    'cos': np.cos,
-    'tan': np.tan,
-    'exp': np.exp,
-    'log': np.log,
-    'sqrt': np.sqrt,
-    'div': np.divide,
-    'harmonic': _harmonic,
+    "pi": np.pi,
+    "sin": np.sin,
+    "cos": np.cos,
+    "tan": np.tan,
+    "exp": np.exp,
+    "log": np.log,
+    "sqrt": np.sqrt,
+    "div": np.divide,
+    "harmonic": _harmonic,
 }
 
-def _convert_data_dataframe(
-    data, target, feature_names, target_names, sparse_data=False
-):
+
+def _convert_data_dataframe(data, target, feature_names, target_names, sparse_data=False):
     # If the data is not sparse, create a regular DataFrame for features.
     if not sparse_data:
         data_df = pd.DataFrame(data, columns=feature_names, copy=False)
@@ -55,27 +59,29 @@ def _convert_data_dataframe(
 
     # Create a DataFrame for the target variable with appropriate column names.
     target_df = pd.DataFrame(target, columns=target_names)
-    
+
     # Concatenate the data and target DataFrames along columns (axis=1) to create a combined DataFrame.
     combined_df = pd.concat([data_df, target_df], axis=1)
-    
+
     # Separate the feature columns (X) and the target columns (y) from the combined DataFrame.
     X = combined_df[feature_names]
     y = combined_df[target_names]
-    
+
     # If there is only one target variable (i.e., y has only one column), simplify y to a 1D Series.
     if y.shape[1] == 1:
         y = y.iloc[:, 0]
-    
+
     # Return the combined DataFrame, features (X), and target (y).
     return combined_df, X, y
 
 
-def load_csv_data(data_file_path: str, encoding: str = "utf-8", has_header: bool = True) -> np.ndarray:
+def load_csv_data(
+    data_file_path: str, encoding: str = "utf-8", has_header: bool = True
+) -> np.ndarray:
     """
     Reads a CSV file and returns the data as a NumPy array, automatically determining whether there is a header.
 
-    Depending on the value of `has_header`, the function either skips the first row (if it is a header) 
+    Depending on the value of `has_header`, the function either skips the first row (if it is a header)
     or includes it as data.
 
     Args:
@@ -99,21 +105,22 @@ def load_csv_data(data_file_path: str, encoding: str = "utf-8", has_header: bool
     # Open the CSV file and read the data
     with data_path.open("r", encoding=encoding) as f:
         data = csv.reader(f)
-        
+
         # Read all rows from the CSV
         rows = list(data)
-        
+
         if has_header:
-            # If the file has a header, remove the first row
-            header = rows[0]  # Store header if needed (can be returned or processed)
+            # Exclude the header row from the numeric data.
             data_rows = rows[1:]
         else:
             # If no header, use all rows as data
             data_rows = rows
-        
+
         # Convert the data into a NumPy array
-        data_array = np.array(data_rows, dtype=np.float32)  # Assuming the data is numeric; handle further conversions if needed
-        
+        data_array = np.array(
+            data_rows, dtype=np.float32
+        )  # Assuming the data is numeric; handle further conversions if needed
+
     return data_array
 
 
@@ -121,13 +128,13 @@ def load_mat_file(file_path: str) -> Dict[str, Any]:
     """
     Parses a .mat file (MATLAB format) and returns its content as a Python dictionary.
     Supports both older .mat files (MATLAB 5) and newer ones (MATLAB 7.3 or HDF5 format).
-    
+
     Args:
         file_path (str): The path to the .mat file to be loaded.
 
     Returns:
         Dict[str, Any]: A dictionary where keys are variable names and values are corresponding data arrays.
-    
+
     Raises:
         ValueError: If the file format is not supported or if there's an error in reading the file.
     """
@@ -137,13 +144,15 @@ def load_mat_file(file_path: str) -> Dict[str, Any]:
         # Try loading with scipy (for MATLAB version 5 and below)
         mat_data = sio.loadmat(data_path)
         # Remove MATLAB-specific metadata (keys like __header__, __version__, __globals__)
-        mat_data_clean = {key: value for key, value in mat_data.items() if not key.startswith('__')}
+        mat_data_clean = {key: value for key, value in mat_data.items() if not key.startswith("__")}
         return mat_data_clean
     except NotImplementedError:
         # This error will occur if scipy cannot handle the file (e.g., MATLAB version > 7.3)
-        raise ValueError("The .mat file is of an unsupported format (likely version 7.3 or higher).")
+        raise ValueError(
+            "The .mat file is of an unsupported format (likely version 7.3 or higher)."
+        )
 
-  
+
 def load_numpy_data(file_path: str) -> Union[np.ndarray, dict]:
     """
     Loads NumPy data from a `.npy` or `.npz` file and returns it as a NumPy array or a dictionary (for `.npz` files).
@@ -152,22 +161,22 @@ def load_numpy_data(file_path: str) -> Union[np.ndarray, dict]:
         file_path (str): The path to the `.npy` or `.npz` file.
 
     Returns:
-        np.ndarray or dict: If the file is a `.npy` file, a NumPy array is returned. 
+        np.ndarray or dict: If the file is a `.npy` file, a NumPy array is returned.
                              If the file is a `.npz` file, a dictionary of arrays is returned.
 
     Example:
         >>> data = load_numpy_data('data.npy')
         >>> print(data)
         [1. 2. 3. 4.]
-        
+
         >>> data = load_numpy_data('data.npz')
         >>> print(data['arr_0'])
         [1. 2. 3. 4.]
     """
-    if file_path.endswith('.npy'):
+    if file_path.endswith(".npy"):
         # Load a single NumPy array from a .npy file
         return np.load(file_path)
-    elif file_path.endswith('.npz'):
+    elif file_path.endswith(".npz"):
         # Load a NumPy compressed archive (.npz) and return as a dictionary of arrays
         return np.load(file_path)
     else:
@@ -200,22 +209,7 @@ def load_csv_tlc(
     force_3d_usol: bool = True,
     encoding: Optional[str] = None,
 ) -> Union[Dict[str, Any], "ScatterPDEDataset"]:
-    """
-    读取散点 PDE CSV 并整理为 ScatterPDEDataset 可接收的数据格式。
-
-    CSV 约定（与你描述一致）：
-      - 每行 = 一个空间点的观测（N 行）
-      - 前 d 列 = 空间坐标（d 维），列名任意（如 x,y 或 x0,x1）
-      - 后续列 = 以时间分组。每个时间有 m 个变量列
-        列名形如: "u (1) @ t=0.1"、"v @ t=0.1"、"p @ t=1e-3" 等
-
-    返回：
-      - 默认返回 dict，包含 points,t,usol,spatial_vars,time_var,state_vars
-      - return_dataset=True 时返回 ScatterPDEDataset 实例（需要你已定义该类）
-
-    参数：
-      - force_3d_usol=True：即使只有一个变量也返回 (N,T,1)，更统一
-    """
+    """Load time-stamped scattered PDE observations from a CSV file."""
     df = pd.read_csv(csv_path, encoding=encoding)
 
     if df.shape[1] < 2:
@@ -223,7 +217,7 @@ def load_csv_tlc(
 
     cols = list(df.columns)
 
-    # 1) 找到“第一个时间数据列”的位置，从而切分坐标列与数据列
+    # Split coordinate columns from observations at the first time-stamped column.
     data_start = None
     parsed = []  # list of (col_name, var_name, t_value)
     for i, c in enumerate(cols):
@@ -241,9 +235,11 @@ def load_csv_tlc(
     data_cols = cols[data_start:]
 
     if len(coord_cols) == 0:
-        raise ValueError("未检测到坐标列（前 n 列）。请确认 CSV 前几列是坐标，并且后续列名含 '@ t='。")
+        raise ValueError(
+            "未检测到坐标列（前 n 列）。请确认 CSV 前几列是坐标，并且后续列名含 '@ t='。"
+        )
 
-    # 2) 解析所有数据列：提取 (var, t)
+    # Parse each observation column into a state-variable and time pair.
     for c in data_cols:
         mm = _TIME_COL_RE.match(str(c))
         if not mm:
@@ -255,31 +251,33 @@ def load_csv_tlc(
         t_val = float(mm.group("t"))
         parsed.append((c, var, t_val))
 
-    # 3) 空间坐标 points
+    # Store the leading columns as point coordinates.
     points = df[coord_cols].to_numpy(dtype=float)
     N, d = points.shape
 
-    # spatial_vars：若没给就用坐标列名
+    # Default spatial variable names to the coordinate column labels.
     if spatial_vars is None:
         spatial_vars = [str(c) for c in coord_cols]
     else:
         if len(spatial_vars) != d:
             raise ValueError(f"spatial_vars 长度 {len(spatial_vars)} 必须等于坐标维度 d={d}")
 
-    # 4) 变量与时间集合
+    # Preserve state and time order from their first appearance.
     var_names = sorted({v for _, v, _ in parsed})
     t_values = sorted({t for _, _, t in parsed})
 
     n_state = len(var_names)
     T = len(t_values)
 
-    # 5) 检查每个 (t, var) 是否都存在，防止缺列/重复列
-    #    同时构建列索引映射： (t, var) -> column_name
+    # Require exactly one column for every time and state pair.
+    # The mapping also defines the final tensor column order.
     mapping: Dict[Tuple[float, str], str] = {}
     for col, var, t in parsed:
         key = (t, var)
         if key in mapping:
-            raise ValueError(f"检测到重复列：t={t}, var={var}，列名至少重复两次：{mapping[key]!r} 和 {col!r}")
+            raise ValueError(
+                f"检测到重复列：t={t}, var={var}，列名至少重复两次：{mapping[key]!r} 和 {col!r}"
+            )
         mapping[key] = col
 
     missing = []
@@ -288,11 +286,11 @@ def load_csv_tlc(
             if (t, v) not in mapping:
                 missing.append((t, v))
     if missing:
-        # 只展示前几个，避免刷屏
+        # Limit diagnostics so malformed wide files remain readable.
         preview = ", ".join([f"(t={tv}, var={vv})" for tv, vv in missing[:8]])
         raise ValueError(f"缺少某些 (t,var) 列，示例：{preview}（共缺 {len(missing)} 个）")
 
-    # 6) 组装 usol: (N, T, n_state)
+    # Assemble usol with shape (n_points, n_times, n_states).
     usol = np.empty((N, T, n_state), dtype=float)
     for ti, t in enumerate(t_values):
         for si, v in enumerate(var_names):
@@ -301,7 +299,7 @@ def load_csv_tlc(
 
     t = np.asarray(t_values, dtype=float)
 
-    # 7) 若只一个变量且不强制 3D，可降为 (N,T)
+    # Optionally squeeze a single state to shape (n_points, n_times).
     if (not force_3d_usol) and n_state == 1:
         usol_out: np.ndarray = usol[:, :, 0]
     else:
@@ -322,7 +320,7 @@ def load_csv_tlc(
     if not return_dataset:
         return payload
 
-    # 延迟导入/引用，避免你还没把类放进同一模块时出问题
+    # Resolve the dataset class at call time to avoid definition-order issues.
     if dataset_kwargs is None:
         dataset_kwargs = {}
 
@@ -338,7 +336,8 @@ def load_csv_tlc(
         **dataset_kwargs,
     )
 
-def load_wake_equation(data_dir : str, file_names : List[str]):
+
+def load_wake_equation(data_dir: str, file_names: List[str]):
     U = []
     shape = None
     for file_name in file_names:
@@ -347,7 +346,11 @@ def load_wake_equation(data_dir : str, file_names : List[str]):
         if shape is None:
             shape = data.shape
         else:
-            assert shape == data.shape, "All data files must have the same shape, but got {} and {}".format(shape, data.shape)
+            assert (
+                shape == data.shape
+            ), "All data files must have the same shape, but got {} and {}".format(
+                shape, data.shape
+            )
         U.append(data)  # shape: (nt, nx, ny)
     x = np.linspace(-5, 5, U[0].shape[0])
     y = np.linspace(-5, 5, U[0].shape[1])
@@ -358,7 +361,7 @@ def load_wake_equation(data_dir : str, file_names : List[str]):
         equation_name="Wake",
         pde_data={"coords": coords, "usol": usol},
         domain={"x": (x.min(), x.max()), "y": (y.min(), y.max()), "t": (t.min(), t.max())},
-        epi=0.0
+        epi=0.0,
     )
 
 
@@ -366,6 +369,7 @@ class BaseDataLoader(ABC):
     """
     Abstract base class defining the interface for data loaders.
     """
+
     @abstractmethod
     def load_data(self):
         pass
@@ -380,7 +384,9 @@ class PDEDataLoader(BaseDataLoader):
         """
         self.data_dir = Path(data_dir)
 
-    def load_data(self, equation_name: str = None, file: str = None) -> Union[np.ndarray, Dict[str, Any]]:
+    def load_data(
+        self, equation_name: str = None, file: str = None
+    ) -> Union[np.ndarray, Dict[str, Any]]:
         """
         Loads PDE-related data from different file formats (CSV, MAT, NPY, NPZ).
 
@@ -427,40 +433,41 @@ class PDEDataLoader(BaseDataLoader):
 
 class MetaBase(type):
     """
-    Metaclass to enforce that subclasses implement required methods 
+    Metaclass to enforce that subclasses implement required methods
     and contain necessary attributes, ensuring a consistent interface.
     """
-    required_methods = {'get_data'}
-    required_attributes = ('x', 't', 'usol')
-    
+
+    required_methods = {"get_data"}
+    required_attributes = ("x", "t", "usol")
+
     def __new__(cls, name, bases, dct):
         """
         Overrides class creation to enforce method and attribute requirements.
         """
-                
+
         if not isinstance(cls.required_attributes, (set, list, tuple)):
             raise TypeError(f"{name}.required_attributes must be a set, list, or tuple.")
-        
+
         # Ensure required methods are implemented
         for method in cls.required_methods:
             if method not in dct:
-                raise TypeError(f'{name} must implement the method: {method}')
-        
+                raise TypeError(f"{name} must implement the method: {method}")
+
         # Ensure required attributes exist
         for attr in cls.required_attributes:
             if attr not in dct and not any(attr in base.__dict__ for base in bases):
                 raise TypeError(f'{name} must contain the attribute: "{attr}"')
-        
+
         return super().__new__(cls, name, bases, dct)
 
 
 class MetaData(metaclass=MetaBase):
     """Base class to store metadata of a Partial Differential Equation (PDE) dataset."""
-    
+
     x = None
     t = None
     usol = None
-    
+
     def __init__(self, info: Any):
         """
         Initialize the metadata for a PDE dataset.
@@ -486,8 +493,8 @@ class MetaData(metaclass=MetaBase):
 
 
 class GridPDEDataset(MetaData):
-    """ 
-    A class representing a Partial Differential Equation (PDE) dataset, providing data access 
+    """
+    A class representing a Partial Differential Equation (PDE) dataset, providing data access
     and analysis functionality.
 
     Internal storage:
@@ -498,19 +505,20 @@ class GridPDEDataset(MetaData):
           * legacy=False -> (n_response, N_x1, ..., N_t)
     """
 
-    def __init__(self,
-                 equation_name: str,
-                 pde_data: Optional[Dict[str, Any]],
-                 domain: Optional[Dict[str, Tuple[float, float]]],
-                 epi: float,
-                 x: Optional[np.ndarray] = None,
-                 t: Optional[np.ndarray] = None,
-                 usol: Optional[np.ndarray] = None,
-                 descr: Optional["DatasetInfo"] = None,
-                 coords: Optional[Dict[str, np.ndarray]] = None,
-                 time_var: str = "t",
-                 legacy: bool = False,
-                 ):
+    def __init__(
+        self,
+        equation_name: str,
+        pde_data: Optional[Dict[str, Any]],
+        domain: Optional[Dict[str, Tuple[float, float]]],
+        epi: float,
+        x: Optional[np.ndarray] = None,
+        t: Optional[np.ndarray] = None,
+        usol: Optional[np.ndarray] = None,
+        descr: Optional["DatasetInfo"] = None,
+        coords: Optional[Dict[str, np.ndarray]] = None,
+        time_var: str = "t",
+        legacy: bool = False,
+    ):
         """
         Initializes the PDE dataset, supporting two input methods:
         1. Providing data through the `pde_data` dictionary.
@@ -541,7 +549,9 @@ class GridPDEDataset(MetaData):
         # ---- Load data into coords + _usol (unified internal representation) ----
         if pde_data is not None:
             if "coords" in pde_data:
-                self.coords = {k: np.asarray(v, dtype=float).reshape(-1) for k, v in pde_data["coords"].items()}
+                self.coords = {
+                    k: np.asarray(v, dtype=float).reshape(-1) for k, v in pde_data["coords"].items()
+                }
                 self._usol = np.real(np.asarray(pde_data["usol"]))
             else:
                 # legacy dict: x,t,usol
@@ -561,7 +571,9 @@ class GridPDEDataset(MetaData):
             }
             self._usol = np.real(np.asarray(usol))
         else:
-            raise ValueError("Provide either `pde_data`, or (`coords` & `usol`), or (`x`,`t`,`usol`).")
+            raise ValueError(
+                "Provide either `pde_data`, or (`coords` & `usol`), or (`x`,`t`,`usol`)."
+            )
 
         # ---- Validate coords ----
         if self.time_var not in self.coords:
@@ -578,7 +590,10 @@ class GridPDEDataset(MetaData):
         if self._usol.shape == expected_field_shape:
             # backward compatible scalar response
             self._usol = self._usol[np.newaxis, ...]
-        elif self._usol.ndim == len(expected_field_shape) + 1 and self._usol.shape[1:] == expected_field_shape:
+        elif (
+            self._usol.ndim == len(expected_field_shape) + 1
+            and self._usol.shape[1:] == expected_field_shape
+        ):
             pass
         else:
             raise ValueError(
@@ -729,7 +744,10 @@ class GridPDEDataset(MetaData):
         return m.min(0), m.max(0)
 
     def get_boundaries(self) -> Dict[str, Tuple[float, float]]:
-        return {v: (float(self.coords[v].min()), float(self.coords[v].max())) for v in self._ordered_vars}
+        return {
+            v: (float(self.coords[v].min()), float(self.coords[v].max()))
+            for v in self._ordered_vars
+        }
 
     def get_domain(self) -> Optional[Dict[str, Tuple[float, float]]]:
         return self.domain
@@ -749,15 +767,15 @@ class GridPDEDataset(MetaData):
         if axis not in self._ordered_vars:
             raise ValueError(f"Invalid axis '{axis}'. Available: {self._ordered_vars}")
 
-        ax = 1 + self._ordered_vars.index(axis)   # +1 because _usol has leading response dim
-        grad = np.gradient(self._usol, axis=ax)   # (n_response, ...)
+        ax = 1 + self._ordered_vars.index(axis)  # +1 because _usol has leading response dim
+        grad = np.gradient(self._usol, axis=ax)  # (n_response, ...)
         return grad[0] if self.legacy else grad
 
     def get_range(
-            self,
-            x_range: Optional[Tuple[float, float]] = None,
-            t_range: Optional[Tuple[float, float]] = None,
-            ranges: Optional[Dict[str, Tuple[float, float]]] = None,
+        self,
+        x_range: Optional[Tuple[float, float]] = None,
+        t_range: Optional[Tuple[float, float]] = None,
+        ranges: Optional[Dict[str, Tuple[float, float]]] = None,
     ) -> Dict[str, np.ndarray]:
         """
         Backward compatible:
@@ -803,7 +821,9 @@ class GridPDEDataset(MetaData):
 
         return result
 
-    def sample(self, n_samples: Union[int, float], method: str = "random") -> Tuple[np.ndarray, np.ndarray]:
+    def sample(
+        self, n_samples: Union[int, float], method: str = "random"
+    ) -> Tuple[np.ndarray, np.ndarray]:
         """
         Returns:
           - sampled_points: (n, n_dims) over coords (no response dim)
@@ -825,7 +845,9 @@ class GridPDEDataset(MetaData):
         n_samples = int(n_samples)
 
         if n_samples > total_points:
-            raise ValueError(f"Requested {n_samples} samples, but only {total_points} points available.")
+            raise ValueError(
+                f"Requested {n_samples} samples, but only {total_points} points available."
+            )
 
         if method == "random":
             flat_idx = np.random.choice(total_points, n_samples, replace=False)
@@ -837,11 +859,11 @@ class GridPDEDataset(MetaData):
             sampled_points = np.stack(pts_cols, axis=1)
 
             if self.legacy:
-                sampled_u = self._usol[(0,) + multi_idx]          # (n,)
-                sampled_usol = sampled_u.reshape(-1, 1)           # (n,1)
+                sampled_u = self._usol[(0,) + multi_idx]  # (n,)
+                sampled_usol = sampled_u.reshape(-1, 1)  # (n,1)
             else:
                 sampled_u = self._usol[(slice(None),) + multi_idx]  # (n_response, n)
-                sampled_usol = np.moveaxis(sampled_u, 0, 1)          # (n, n_response)
+                sampled_usol = np.moveaxis(sampled_u, 0, 1)  # (n, n_response)
 
             return sampled_points, sampled_usol
 
@@ -866,8 +888,8 @@ class GridPDEDataset(MetaData):
                 sampled_u = self._usol[(0,) + multi_idx].reshape(-1, 1)  # (n,1)
                 sampled_usol = sampled_u
             else:
-                sampled_u = self._usol[(slice(None),) + multi_idx]        # (n_response, n)
-                sampled_usol = np.moveaxis(sampled_u, 0, 1)               # (n, n_response)
+                sampled_u = self._usol[(slice(None),) + multi_idx]  # (n_response, n)
+                sampled_usol = np.moveaxis(sampled_u, 0, 1)  # (n, n_response)
 
             if sampled_points.shape[0] > n_samples:
                 sampled_points = sampled_points[:n_samples]
@@ -877,19 +899,25 @@ class GridPDEDataset(MetaData):
 
         if method == "spline":
             # Keep behavior consistent with old implementation: only 1D (x,t) and single response
-            if len(self._ordered_vars) != 2 or (len(self._spatial_vars) == 0 or self._spatial_vars[0] != "x"):
-                raise ValueError("spline sampling is only supported for 1D (x,t) datasets in this implementation.")
+            if len(self._ordered_vars) != 2 or (
+                len(self._spatial_vars) == 0 or self._spatial_vars[0] != "x"
+            ):
+                raise ValueError(
+                    "spline sampling is only supported for 1D (x,t) datasets in this implementation."
+                )
             if self.n_response != 1:
                 raise ValueError("spline sampling currently only supports n_response=1.")
             if not self.legacy:
-                # 你也可以允许 non-legacy，但返回 (n,1)/(n, n_response) 的口径容易混乱；这里保持简单
-                raise ValueError("spline sampling is only supported when legacy=True (to keep old behavior).")
+                # Restrict this adapter to legacy scalar fields to keep shapes unambiguous.
+                raise ValueError(
+                    "spline sampling is only supported when legacy=True (to keep old behavior)."
+                )
 
             grid_size = int(np.sqrt(n_samples))
             x_new = np.linspace(self.x.min(), self.x.max(), grid_size)
             t_new = np.linspace(self.t.min(), self.t.max(), grid_size)
 
-            spline = interp2d(self.t, self.x, self._usol[0], kind='cubic')
+            spline = interp2d(self.t, self.x, self._usol[0], kind="cubic")
             usol_new = spline(t_new, x_new)
 
             x_samples, t_samples = np.meshgrid(x_new, t_new)
@@ -908,13 +936,19 @@ class GridPDEDataset(MetaData):
         if self.legacy:
             U = self.usol  # (Nx, Nt)
             if U.ndim != 2:
-                raise ValueError("plot_solution is only supported for 1D spatial datasets (2D usol) in legacy mode.")
+                raise ValueError(
+                    "plot_solution is only supported for 1D spatial datasets (2D usol) in legacy mode."
+                )
             plt.figure(figsize=(8, 6))
-            plt.imshow(U, aspect='auto', origin='lower',
-                       extent=[self.t.min(), self.t.max(), self.x.min(), self.x.max()])
-            plt.colorbar(label='Solution u(x, t)')
-            plt.xlabel('Time (t)')
-            plt.ylabel('Space (x)')
+            plt.imshow(
+                U,
+                aspect="auto",
+                origin="lower",
+                extent=[self.t.min(), self.t.max(), self.x.min(), self.x.max()],
+            )
+            plt.colorbar(label="Solution u(x, t)")
+            plt.xlabel("Time (t)")
+            plt.ylabel("Space (x)")
             plt.title(f"Solution of {self.equation_name}")
             plt.show()
             return
@@ -923,21 +957,29 @@ class GridPDEDataset(MetaData):
         if self.n_response != 1:
             raise ValueError("plot_solution only supports n_response=1 when legacy=False.")
         if self._usol.ndim != 3:
-            raise ValueError("plot_solution is only supported for 1D spatial datasets (usol shape (1, Nx, Nt)).")
+            raise ValueError(
+                "plot_solution is only supported for 1D spatial datasets (usol shape (1, Nx, Nt))."
+            )
 
         plt.figure(figsize=(8, 6))
-        plt.imshow(self._usol[0], aspect='auto', origin='lower',
-                   extent=[self.t.min(), self.t.max(), self.x.min(), self.x.max()])
-        plt.colorbar(label='Solution u(x, t)')
-        plt.xlabel('Time (t)')
-        plt.ylabel('Space (x)')
+        plt.imshow(
+            self._usol[0],
+            aspect="auto",
+            origin="lower",
+            extent=[self.t.min(), self.t.max(), self.x.min(), self.x.max()],
+        )
+        plt.colorbar(label="Solution u(x, t)")
+        plt.xlabel("Time (t)")
+        plt.ylabel("Space (x)")
         plt.title(f"Solution of {self.equation_name}")
         plt.show()
 
     def __repr__(self) -> str:
-        return (f"GridPDEDataset(equation='{self.equation_name}', legacy={self.legacy}, "
-                f"n_response={self.n_response}, size={self.get_size()}, "
-                f"boundaries={self.get_boundaries()})")
+        return (
+            f"GridPDEDataset(equation='{self.equation_name}', legacy={self.legacy}, "
+            f"n_response={self.n_response}, size={self.get_size()}, "
+            f"boundaries={self.get_boundaries()})"
+        )
 
 
 class ScatterPDEDataset(MetaData):
@@ -964,9 +1006,9 @@ class ScatterPDEDataset(MetaData):
         domain: Optional[Dict[str, Tuple[float, float]]] = None,
         epi: float = 0.0,
         descr: Optional["DatasetInfo"] = None,
-        spatial_vars: Optional[List[str]] = None,   # e.g. ["x","y"] or ["x","y","z"]
+        spatial_vars: Optional[List[str]] = None,  # e.g. ["x","y"] or ["x","y","z"]
         time_var: str = "t",
-        point_ids: Optional[np.ndarray] = None,     # optional IDs, shape (N,)
+        point_ids: Optional[np.ndarray] = None,  # optional IDs, shape (N,)
     ):
         super().__init__(equation_name)
 
@@ -1020,7 +1062,7 @@ class ScatterPDEDataset(MetaData):
                     f"`spatial_vars` length {len(self._spatial_vars)} must match points dim d={d}"
                 )
 
-        # legacy-ish alias (与你 GridPDEDataset 保持一致的字段名习惯)
+        # Keep the GridPDEDataset-style alias for compatibility.
         self.u = self.usol
 
     # -----------------
@@ -1052,13 +1094,15 @@ class ScatterPDEDataset(MetaData):
 
     @property
     def vars(self) -> List[str]:
-        # 在散点场景里，“vars”更多是语义标签，而不是可 mesh 的坐标轴
+        # For scattered data, vars are semantic labels rather than meshable axes.
         return self.spatial_vars + [self.time_var]
 
     # -----------------
     # Core accessors
     # -----------------
-    def get_datapoint(self, point_id: int, t_id: int, state: int = 0) -> Tuple[Tuple[float, ...], float]:
+    def get_datapoint(
+        self, point_id: int, t_id: int, state: int = 0
+    ) -> Tuple[Tuple[float, ...], float]:
         """
         Returns:
           - coords_tuple: (x1, x2, ..., xd, t)
@@ -1085,9 +1129,9 @@ class ScatterPDEDataset(MetaData):
         New-style scattered data dict.
         """
         return {
-            "points": self.points,          # (N, d)
-            "t": self._t,                   # (T,)
-            "usol": self.usol,              # (N, T) or (N,T,n_state)
+            "points": self.points,  # (N, d)
+            "t": self._t,  # (T,)
+            "usol": self.usol,  # (N, T) or (N,T,n_state)
             "spatial_vars": self.spatial_vars,
             "time_var": self.time_var,
             "point_ids": self.point_ids,
@@ -1113,8 +1157,8 @@ class ScatterPDEDataset(MetaData):
         N, d = self.points.shape
         T = self.n_times
 
-        X_rep = np.repeat(self.points, repeats=T, axis=0)          # (N*T, d)
-        t_tile = np.tile(self._t, reps=N).reshape(-1, 1)           # (N*T, 1)
+        X_rep = np.repeat(self.points, repeats=T, axis=0)  # (N*T, d)
+        t_tile = np.tile(self._t, reps=N).reshape(-1, 1)  # (N*T, 1)
         return np.hstack([X_rep, t_tile])
 
     def mesh_bounds(self) -> Tuple[np.ndarray, np.ndarray]:
@@ -1165,7 +1209,9 @@ class ScatterPDEDataset(MetaData):
         if spatial_ranges is not None:
             for name, (lo, hi) in spatial_ranges.items():
                 if name not in self._spatial_vars:
-                    raise ValueError(f"Unknown spatial var '{name}'. Available: {self._spatial_vars}")
+                    raise ValueError(
+                        f"Unknown spatial var '{name}'. Available: {self._spatial_vars}"
+                    )
                 j = self._spatial_vars.index(name)
                 col = self.points[:, j]
                 mask &= (col >= lo) & (col <= hi)
@@ -1276,17 +1322,18 @@ class ODEDataset(MetaData):
     per trial.
     """
 
-    def __init__(self,
-                 equation_name: str,
-                 trajectories: List[Dict[str, Any]],
-                 state_vars: List[str],
-                 *,
-                 time_var: str = "t",
-                 param_names: Optional[List[str]] = None,
-                 domain: Optional[Dict[str, Tuple[float, float]]] = None,
-                 epi: float = 0.0,
-                 descr: Optional["DatasetInfo"] = None,
-                 ):
+    def __init__(
+        self,
+        equation_name: str,
+        trajectories: List[Dict[str, Any]],
+        state_vars: List[str],
+        *,
+        time_var: str = "t",
+        param_names: Optional[List[str]] = None,
+        domain: Optional[Dict[str, Tuple[float, float]]] = None,
+        epi: float = 0.0,
+        descr: Optional["DatasetInfo"] = None,
+    ):
         super().__init__(equation_name)
 
         self.equation_name = equation_name
@@ -1319,15 +1366,19 @@ class ODEDataset(MetaData):
             params = traj.get("params")
             if params is not None:
                 param_key_set.update(params.keys())
-            cleaned.append({
-                "t": t,
-                "state": state,
-                "params": params,
-                "id": traj.get("id", f"traj{i}"),
-            })
+            cleaned.append(
+                {
+                    "t": t,
+                    "state": state,
+                    "params": params,
+                    "id": traj.get("id", f"traj{i}"),
+                }
+            )
 
         self.trajectories = cleaned
-        self._param_names: List[str] = list(param_names) if param_names is not None else sorted(param_key_set)
+        self._param_names: List[str] = (
+            list(param_names) if param_names is not None else sorted(param_key_set)
+        )
 
     # -------------------------
     # Properties
@@ -1351,7 +1402,9 @@ class ODEDataset(MetaData):
     # -------------------------
     # Core accessors
     # -------------------------
-    def get_datapoint(self, traj_id: int, t_id: int) -> Tuple[float, np.ndarray, Optional[Dict[str, float]]]:
+    def get_datapoint(
+        self, traj_id: int, t_id: int
+    ) -> Tuple[float, np.ndarray, Optional[Dict[str, float]]]:
         """Returns (t_value, state_vector, params_dict_or_None) for one trajectory sample."""
         traj = self.trajectories[traj_id]
         t_val = float(traj["t"][t_id])
@@ -1440,9 +1493,7 @@ class ODEDataset(MetaData):
             state_cols = state.T  # (T, n_state)
             if use_params:
                 params = traj["params"] or {}
-                param_cols = np.array(
-                    [[params.get(p, np.nan) for p in self._param_names]] * T
-                )
+                param_cols = np.array([[params.get(p, np.nan) for p in self._param_names]] * T)
                 cols = np.hstack([state_cols, param_cols])
             else:
                 cols = state_cols
@@ -1501,14 +1552,18 @@ class ODEDataset(MetaData):
         if n <= 0:
             raise ValueError("n_samples must be positive.")
         if n > total:
-            raise ValueError(f"Requested {n} samples, but only {total} (trajectory,time) pairs exist.")
+            raise ValueError(
+                f"Requested {n} samples, but only {total} (trajectory,time) pairs exist."
+            )
 
         flat_idx = rng.choice(total, size=n, replace=False)
         traj_sel = all_traj_idx[flat_idx]
         t_sel = all_t_idx[flat_idx]
 
         sampled_t = np.array([self.trajectories[ti]["t"][tid] for ti, tid in zip(traj_sel, t_sel)])
-        sampled_state = np.array([self.trajectories[ti]["state"][:, tid] for ti, tid in zip(traj_sel, t_sel)])
+        sampled_state = np.array(
+            [self.trajectories[ti]["state"][:, tid] for ti, tid in zip(traj_sel, t_sel)]
+        )
 
         return sampled_t, sampled_state
 
@@ -1551,8 +1606,16 @@ class SymbolicRegressionDataset(MetaData):
         Save generated dataset in logdir if logdir is provided.
     """
 
-    def __init__(self, name, benchmark_source="benchmarks.csv", root=None, noise=0.0,
-                 seed=0, logdir=None, backup=False):
+    def __init__(
+        self,
+        name,
+        benchmark_source="benchmarks.csv",
+        root=None,
+        noise=0.0,
+        seed=0,
+        logdir=None,
+        backup=False,
+    ):
         # Set class variables
         super().__init__(name)
         self.name = name
@@ -1560,7 +1623,9 @@ class SymbolicRegressionDataset(MetaData):
         self.noise = noise if noise is not None else 0.0
 
         # Set random number generator used for sampling X values
-        seed += zlib.adler32(name.encode("utf-8")) # Different seed for each name, otherwise two benchmarks with the same domain will always have the same X values
+        seed += zlib.adler32(
+            name.encode("utf-8")
+        )  # Different seed for each name, otherwise two benchmarks with the same domain will always have the same X values
         self.rng = np.random.RandomState(seed)
 
         # Load benchmark data
@@ -1595,35 +1660,53 @@ class SymbolicRegressionDataset(MetaData):
             self.y_train += self.rng.normal(loc=0, scale=scale, size=self.y_train.shape)
             self.y_test += self.rng.normal(loc=0, scale=scale, size=self.y_test.shape)
         elif self.noise < 0:
-            print('WARNING: Ignoring negative noise value: {}'.format(self.noise))
+            print("WARNING: Ignoring negative noise value: {}".format(self.noise))
 
         # Load default function set
         function_set_path = os.path.join(root, "function_sets.csv")
         function_set_df = pd.read_csv(function_set_path, index_col=0)
         function_set_name = row["function_set"]
-        self.function_set = function_set_df.loc[function_set_name].tolist()[0].strip().split(',')
+        self.function_set = function_set_df.loc[function_set_name].tolist()[0].strip().split(",")
 
         # Prepare status output
-        output_message = '\n-- BUILDING DATASET START -----------\n'
-        output_message += 'Generated data for benchmark   : {}\n'.format(name)
-        output_message += 'Benchmark path                 : {}\n'.format(benchmark_path)
-        output_message += 'Function set                   : {} --> {}\n'.format(function_set_name, self.function_set)
-        output_message += 'Function set path              : {}\n'.format(function_set_path)
-        test_spec_txt = row["test_spec"] if row["test_spec"] != "None" else "{} (Copy from train!)".format(row["test_spec"])
-        output_message += 'Dataset specifications         : \n' \
-                          + '        Train --> {}\n'.format(row["train_spec"]) \
-                          + '        Test  --> {}\n'.format(test_spec_txt)
+        output_message = "\n-- BUILDING DATASET START -----------\n"
+        output_message += "Generated data for benchmark   : {}\n".format(name)
+        output_message += "Benchmark path                 : {}\n".format(benchmark_path)
+        output_message += "Function set                   : {} --> {}\n".format(
+            function_set_name, self.function_set
+        )
+        output_message += "Function set path              : {}\n".format(function_set_path)
+        test_spec_txt = (
+            row["test_spec"]
+            if row["test_spec"] != "None"
+            else "{} (Copy from train!)".format(row["test_spec"])
+        )
+        output_message += (
+            "Dataset specifications         : \n"
+            + "        Train --> {}\n".format(row["train_spec"])
+            + "        Test  --> {}\n".format(test_spec_txt)
+        )
         random_choice_train = self.rng.randint(self.X_train.shape[0])
-        random_sample_train = "[{}],[{}]".format(self.X_train[random_choice_train], self.y_train[random_choice_train])
-        output_message += 'Built data set                 : \n' \
-                          + '        Train --> X:{}, y:{}, Sample: {}\n'.format(self.X_train.shape, self.y_train.shape, random_sample_train)
+        random_sample_train = "[{}],[{}]".format(
+            self.X_train[random_choice_train], self.y_train[random_choice_train]
+        )
+        output_message += (
+            "Built data set                 : \n"
+            + "        Train --> X:{}, y:{}, Sample: {}\n".format(
+                self.X_train.shape, self.y_train.shape, random_sample_train
+            )
+        )
         if row["test_spec"] is not None:
             random_choice_test = self.rng.randint(self.X_test.shape[0])
-            random_sample_test = "[{}],[{}]".format(self.X_test[random_choice_test], self.y_test[random_choice_test])
-            output_message += '        Test  --> X:{}, y:{}, Sample: {}\n'.format(self.X_test.shape, self.y_test.shape, random_sample_test)
+            random_sample_test = "[{}],[{}]".format(
+                self.X_test[random_choice_test], self.y_test[random_choice_test]
+            )
+            output_message += "        Test  --> X:{}, y:{}, Sample: {}\n".format(
+                self.X_test.shape, self.y_test.shape, random_sample_test
+            )
         if backup and logdir is not None:
             output_message += self.save(logdir)
-        output_message += '-- BUILDING DATASET END -------------\n'
+        output_message += "-- BUILDING DATASET END -------------\n"
         print(output_message)
 
     def extract_dataset_specs(self, specs):
@@ -1634,15 +1717,33 @@ class SymbolicRegressionDataset(MetaData):
                 assert False, "Dataset specifications should be a string or None: {}".format(specs)
         specs = ast.literal_eval(specs)
         if specs is not None:
-            specs['distribution'] = list(list(specs.items())[0][1].items())[0][0]
-            if specs['distribution'] == "E":
-                lower = list(list(specs.items())[0][1].items())[0][1][0]
-                upper = list(list(specs.items())[0][1].items())[0][1][1]
-                distance = upper - lower
-                specs['dataset_size'] = int(distance / list(list(specs.items())[0][1].items())[0][1][2]) + 1
+            specs["distribution"] = list(list(specs.items())[0][1].items())[0][0]
+            if specs["distribution"] == "E":
+                sizes = []
+                for i in range(1, self.n_input_var + 1):
+                    input_var = "all" if "all" in specs else f"x{i}"
+                    if input_var not in specs:
+                        input_var = "x1"
+                    sizes.append(len(self._equidistant_values(specs[input_var]["E"])))
+                specs["dataset_size"] = int(np.prod(sizes))
             else:
-                specs['dataset_size'] = list(list(specs.items())[0][1].items())[0][1][2]
+                specs["dataset_size"] = list(list(specs.items())[0][1].items())[0][1][2]
         return specs
+
+    @staticmethod
+    def _equidistant_values(spec):
+        """Build an equidistant axis from ``[start, stop, step_or_count]``."""
+        start, stop, step_or_count = spec
+        distance = stop - start
+        if step_or_count <= 0 or distance < 0:
+            raise ValueError(f"Invalid equidistant specification: {spec}")
+        if step_or_count > distance:
+            count = int(step_or_count)
+        else:
+            count = int(round(distance / step_or_count)) + 1
+        if count < 1:
+            raise ValueError(f"Equidistant specification produces no points: {spec}")
+        return np.linspace(start=start, stop=stop, num=count, endpoint=True)
 
     def build_dataset(self, specs, max_iterations=1000, max_repeated_empty=100):
         """This function generates an (X,y) dataset by randomly sampling X
@@ -1651,6 +1752,14 @@ class SymbolicRegressionDataset(MetaData):
         valid within the given range, removing nan and inf values. The
         generated dataset will be filled up to the desired dataset size or
         the function terminates with an error."""
+        if specs["distribution"] == "E":
+            X = self.make_X(specs, specs["dataset_size"])
+            y = self.numpy_expr(X)
+            X, y = self.remove_invalid(X, y)
+            if len(X) == 0:
+                raise ValueError(f"Equidistant specification produced no finite samples: {specs}")
+            return X, y
+
         current_size = 0
         X_tmp = None
         y_tmp = None
@@ -1660,7 +1769,9 @@ class SymbolicRegressionDataset(MetaData):
         count_iterations = 0
         while current_size < specs["dataset_size"]:
             if count_iterations > max_iterations:
-                assert False, "Dataset creation taking too long. Got {} from {}".format(X_tmp.shape, specs)
+                assert False, "Dataset creation taking too long. Got {} from {}".format(
+                    X_tmp.shape, specs
+                )
             missing_value_count = specs["dataset_size"] - current_size
             # Get all X values
             X = self.make_X(specs, missing_value_count)
@@ -1674,27 +1785,32 @@ class SymbolicRegressionDataset(MetaData):
                 if count_repeated_empty > max_repeated_empty:
                     assert False, "Dataset cannot be created in the given range: {}".format(specs)
             # Put old and new data together if available
-            if not X_tmp is None:
+            if X_tmp is not None:
                 X = np.append(X, X_tmp, axis=0)
                 y = np.append(y, y_tmp, axis=0)
             current_size = X.shape[0]
-            # Handle "E" distributions
-            if X.shape[0] != specs["dataset_size"] and specs['distribution'] == "E":
-                assert False, "Equal distant data points cannot be created in the given range: {}".format(specs)
             X_tmp = X
             y_tmp = y
-            count_iterations +=1
+            count_iterations += 1
         assert X.shape[0] == specs["dataset_size"]
         if X.ndim == 1:
             X = X[:, np.newaxis]
         return X, y
 
     def get_data(self) -> Dict[str, Any]:
-        return {'X_train':self.X_train, 'y_train':self.y_train, 'X_test':self.X_test, 'y_test':self.y_test, 'function_set':self.function_set}
+        return {
+            "X_train": self.X_train,
+            "y_train": self.y_train,
+            "X_test": self.X_test,
+            "y_test": self.y_test,
+            "function_set": self.function_set,
+        }
 
-    def remove_invalid(self, X, y, y_limit=100):
-        """Removes nan, infs, and out of range datapoints from a dataset."""
-        valid = np.logical_and(y > -y_limit, y < y_limit)
+    def remove_invalid(self, X, y, y_limit=None):
+        """Remove non-finite targets and optionally enforce a magnitude limit."""
+        valid = np.isfinite(y)
+        if y_limit is not None:
+            valid &= np.logical_and(y > -y_limit, y < y_limit)
         y = y[valid]
         X = X[valid]
         assert X.shape[0] == y.shape[0]
@@ -1717,14 +1833,11 @@ class SymbolicRegressionDataset(MetaData):
                 low, high, n = spec[input_var]["U"]
                 feature = self.rng.uniform(low=low, high=high, size=size)
             elif "E" in spec[input_var]:
-                start, stop, step = spec[input_var]["E"]
-                if step > stop - start:
-                    n = step
-                else:
-                    n = int((stop - start)/step) + 1
-                feature = np.linspace(start=start, stop=stop, num=n, endpoint=True)
+                feature = self._equidistant_values(spec[input_var]["E"])
             else:
-                raise ValueError("Did not recognize specification for {}: {}.".format(input_var, spec[input_var]))
+                raise ValueError(
+                    "Did not recognize specification for {}: {}.".format(input_var, spec[input_var])
+                )
             features.append(feature)
 
         # Do multivariable combinations
@@ -1744,16 +1857,17 @@ class SymbolicRegressionDataset(MetaData):
             s = s.replace(k, f"_function_map['{k}']")
         for i in reversed(range(self.n_input_var)):
             s = s.replace(f"x{i + 1}", f"x[:, {i}]")
-        #Return numpy expression
+        # Return numpy expression
         # `s` is built above purely from internal token substitution (never from
         # external/user input), so eval() here only ever runs a controlled
         # arithmetic expression string.
-        return lambda x : eval(s)
+        return lambda x: eval(s)
 
-    def save(self, logdir='./'):
+    def save(self, logdir="./"):
         """Saves the dataset to a specified location."""
-        save_path = os.path.join(logdir,'data_{}_n{:.2f}_s{}.csv'.format(
-                self.name, self.noise, self.seed))
+        save_path = os.path.join(
+            logdir, "data_{}_n{:.2f}_s{}.csv".format(self.name, self.noise, self.seed)
+        )
         try:
             os.makedirs(logdir, exist_ok=True)
             np.savetxt(
@@ -1761,37 +1875,39 @@ class SymbolicRegressionDataset(MetaData):
                 np.concatenate(
                     (
                         np.hstack((self.X_train, self.y_train[..., np.newaxis])),
-                        np.hstack((self.X_test, self.y_test[..., np.newaxis]))
-                    ), axis=0),
-                delimiter=',', fmt='%1.5f'
+                        np.hstack((self.X_test, self.y_test[..., np.newaxis])),
+                    ),
+                    axis=0,
+                ),
+                delimiter=",",
+                fmt="%1.5f",
             )
-            return 'Saved dataset to               : {}\n'.format(save_path)
+            return "Saved dataset to               : {}\n".format(save_path)
         except Exception as e:
             logging.warning("Could not save dataset: %s", e)
 
-    def plot(self, logdir='./'):
+    def plot(self, logdir="./"):
         """Plot Dataset with underlying ground truth."""
         if self.X_train.shape[1] == 1:
             from matplotlib import pyplot as plt
-            save_path = os.path.join(logdir,'plot_{}_n{:.2f}_s{}.png'.format(
-                    self.name, self.noise, self.seed))
+
+            save_path = os.path.join(
+                logdir, "plot_{}_n{:.2f}_s{}.png".format(self.name, self.noise, self.seed)
+            )
 
             # Draw ground truth expression
             bounds = list(list(self.train_spec.values())[0].values())[0][:2]
             x = np.linspace(bounds[0], bounds[1], endpoint=True, num=100)
             y = self.numpy_expr(x[:, None])
-            plt.plot(x, y, color='red', linestyle='dashed')
+            plt.plot(x, y, color="red", linestyle="dashed")
             # Draw the actual points
             plt.scatter(self.X_train, self.y_train)
             # Add a title
-            plt.title(
-                "{} N:{} S:{}".format(
-                    self.name, self.noise, self.seed),
-                fontsize=7)
+            plt.title("{} N:{} S:{}".format(self.name, self.noise, self.seed), fontsize=7)
             try:
                 os.makedirs(logdir, exist_ok=True)
                 plt.savefig(save_path)
-                print('Saved plot to                  : {}'.format(save_path))
+                print("Saved plot to                  : {}".format(save_path))
             except Exception as e:
                 logging.warning("Could not plot dataset: %s", e)
             plt.close()
@@ -1885,7 +2001,9 @@ class TabularRegressionDataset(MetaData):
             "groups": self.groups,
         }
 
-    def sample(self, n_samples: Union[int, float], *, seed: Optional[int] = None) -> Tuple[np.ndarray, np.ndarray]:
+    def sample(
+        self, n_samples: Union[int, float], *, seed: Optional[int] = None
+    ) -> Tuple[np.ndarray, np.ndarray]:
         rng = np.random.default_rng(seed)
         n_total = self.X.shape[0]
 
@@ -1911,7 +2029,7 @@ class TabularRegressionDataset(MetaData):
 
 def load_burgers_equation():
     descr = DatasetInfo(
-        description = """
+        description="""
         Dataset for high-viscosity Burgers equation 
         ut=-uux+0.1uxx
         x∈[-8.0,8.0), t∈[0,10]
@@ -1923,16 +2041,17 @@ def load_burgers_equation():
     file_path = resources.files(DATA_MODULE) / "burgers2.mat"
     pde_data = load_mat_file(file_path)
     return GridPDEDataset(
-        equation_name = 'burgers equation',
-        descr = descr,
-        pde_data = pde_data,
-        domain = {'x': (-7.0, 7.0), 't': (1, 9)},
-        epi = 1e-3
+        equation_name="burgers equation",
+        descr=descr,
+        pde_data=pde_data,
+        domain={"x": (-7.0, 7.0), "t": (1, 9)},
+        epi=1e-3,
     )
-    
+
+
 def load_kdv_equation():
     descr = DatasetInfo(
-        description = """
+        description="""
         Dataset for Korteweg-De Vries (KdV) equation with sin initial condition, actually a standardized form of Kdv_equation dataset
         ut=-uux-uxxx
         x∈[-20,20), t∈[0,40]
@@ -1945,71 +2064,55 @@ def load_kdv_equation():
     pde_data = load_mat_file(file_path)
 
     return GridPDEDataset(
-        equation_name = 'kdv equation',
-        descr = descr,
-        pde_data = None,
-        x = pde_data['x'],
-        t = pde_data['tt'],
-        usol = pde_data['uu'],
-        domain = {'x': (-16, 16), 't': (5, 35)},
-        epi = 1e-3,
-        legacy=True
+        equation_name="kdv equation",
+        descr=descr,
+        pde_data=None,
+        x=pde_data["x"],
+        t=pde_data["tt"],
+        usol=pde_data["uu"],
+        domain={"x": (-16, 16), "t": (5, 35)},
+        epi=1e-3,
+        legacy=True,
     )
 
 
 def load_pde_dataset(
     filename: str,
-    equation_name: str = 'PDE Dataset',
-    x_key: str = 'x',
-    t_key: str = 't',
-    u_key: str = 'usol',
+    equation_name: str = "PDE Dataset",
+    x_key: str = "x",
+    t_key: str = "t",
+    u_key: str = "usol",
     domain: dict = None,
     epi: float = 1e-3,
-    data_dir_module: str = "kd.dataset.data"
+    data_dir_module: str = "kd.dataset.data",
 ):
-    """
-    一个通用的、用户友好的数据加载器，可以从指定的.mat文件加载PDE数据，
-    并允许用户自定义所有关键元信息。
-
-    Args:
-        filename (str): 要加载的 .mat 文件的名称 (例如: "my_data.mat")。
-        equation_name (str): 您为这个数据集赋予的名称 (例如: "My PDE")。
-        x_key (str, optional): .mat 文件中代表空间坐标的键。默认为 'x'。
-        t_key (str, optional): .mat 文件中代表时间坐标的键。默认为 't'。
-        u_key (str, optional): .mat 文件中代表解的键。默认为 'usol'。
-        domain (dict, optional): 定义分析子域，格式为 {'x':(min,max), 't':(min,max)}。默认为 None。
-        epi (float, optional): 为该数据集推荐的稀疏性惩罚项。默认为 1e-3。
-        data_dir_module (str, optional): 存储数据文件的模块路径。默认为 "kd.dataset.data"。
-
-    Returns:
-        一个功能完备的 GridPDEDataset 对象，可被所有 KD 模型使用。
-    """
+    """Load a regular PDE grid from a MAT file using explicit array keys."""
     try:
-        # 1. 自动构建文件的完整路径
+        # Resolve the data file through the requested package.
         file_path = resources.files(data_dir_module) / filename
-        
-        # 2. 使用底层的加载器读取 .mat 文件
+
+        # Read the MAT file with the low-level loader.
         pde_data = load_mat_file(file_path)
 
-        # 3. 使用用户指定的键名，从加载的字典中提取数据
+        # Extract coordinates and field values through the configured keys.
         x_data = np.asarray(pde_data[x_key], dtype=float).flatten()
         t_data = np.asarray(pde_data[t_key], dtype=float).flatten()
         u_data = np.asarray(pde_data[u_key])
 
-        # 确保 u_data 的形状与 (len(x), len(t)) 对齐
+        # Align the solution shape with (len(x), len(t)).
         if u_data.shape == (len(t_data), len(x_data)):
             u_data = u_data.T
 
-        # 4. 将所有信息送入 GridPDEDataset 进行标准化封装
+        # Normalize the extracted arrays through GridPDEDataset.
         dataset = GridPDEDataset(
             equation_name=equation_name,
-            pde_data=None, 
+            pde_data=None,
             x=x_data,
             t=t_data,
             usol=u_data,
-            domain=domain, 
+            domain=domain,
             epi=epi,
-            legacy=True
+            legacy=True,
         )
         print(f"成功加载数据集: {equation_name}，文件: {filename}")
         return dataset
@@ -2018,7 +2121,9 @@ def load_pde_dataset(
         print(f"错误: 在默认数据目录中未找到文件 {filename}")
         return None
     except KeyError as e:
-        print(f"错误: 文件 {filename} 中缺少必需的键: {e}。请检查您传入的 x_key, t_key, u_key 参数是否正确。")
+        print(
+            f"错误: 文件 {filename} 中缺少必需的键: {e}。请检查您传入的 x_key, t_key, u_key 参数是否正确。"
+        )
         return None
     except Exception as e:
         print(f"错误: 加载或处理文件时发生未知错误: {e}")
@@ -2121,16 +2226,20 @@ def load_ball_drop_dataset(
         for drop_id in sorted(df["Drop #"].unique()):
             sub = df[df["Drop #"] == drop_id].sort_values("Time (s)")
             t = sub["Time (s)"].to_numpy(dtype=float)
-            state = np.vstack([
-                sub["Height (m)"].to_numpy(dtype=float),
-                sub["Velocity (m/s)"].to_numpy(dtype=float),
-            ])
-            trajectories.append({
-                "t": t,
-                "state": state,
-                "params": params,
-                "id": f"{ball_name}-drop{int(drop_id)}",
-            })
+            state = np.vstack(
+                [
+                    sub["Height (m)"].to_numpy(dtype=float),
+                    sub["Velocity (m/s)"].to_numpy(dtype=float),
+                ]
+            )
+            trajectories.append(
+                {
+                    "t": t,
+                    "state": state,
+                    "params": params,
+                    "id": f"{ball_name}-drop{int(drop_id)}",
+                }
+            )
 
     if len(trajectories) == 0:
         raise ValueError("No trajectories loaded; check `exclude` and balls.txt parsing.")
@@ -2172,7 +2281,10 @@ def load_rubber_dataset(split: str = "train") -> "TabularRegressionDataset":
 
     data_dir = (
         Path(__file__).resolve().parent
-        / "Discovery_of_soild_consititutive" / "data" / "data_rubber" / split
+        / "Discovery_of_soild_consititutive"
+        / "data"
+        / "data_rubber"
+        / split
     )
     if not data_dir.exists():
         raise FileNotFoundError(f"Rubber data directory not found: {data_dir}")
@@ -2204,7 +2316,9 @@ def load_rubber_dataset(split: str = "train") -> "TabularRegressionDataset":
         groups.extend([file_path.name] * n)
 
     if len(X_rows) == 0:
-        raise ValueError(f"No files in {data_dir} matched the C<compound>_<temperature>.xlsx pattern.")
+        raise ValueError(
+            f"No files in {data_dir} matched the C<compound>_<temperature>.xlsx pattern."
+        )
 
     X = np.vstack(X_rows)
     y = np.concatenate(y_rows)
@@ -2235,9 +2349,38 @@ def load_rubber_dataset(split: str = "train") -> "TabularRegressionDataset":
 # -------------------------
 
 _CYT_COLUMNS = [
-    "X", "Y", "U", "V", "Ru", "P", "Ux", "Uy", "Vx", "Vy", "Px", "Py", "T", "dis",
-    "Mut", "Txx", "Txz", "Tzz", "Ma", "AoA", "Re", "ydudy", "vc", "conv", "prod",
-    "diff", "destr", "Sup_var1", "Sup_var2", "Sup_var3", "Sup_var4", "Sup_var5",
+    "X",
+    "Y",
+    "U",
+    "V",
+    "Ru",
+    "P",
+    "Ux",
+    "Uy",
+    "Vx",
+    "Vy",
+    "Px",
+    "Py",
+    "T",
+    "dis",
+    "Mut",
+    "Txx",
+    "Txz",
+    "Tzz",
+    "Ma",
+    "AoA",
+    "Re",
+    "ydudy",
+    "vc",
+    "conv",
+    "prod",
+    "diff",
+    "destr",
+    "Sup_var1",
+    "Sup_var2",
+    "Sup_var3",
+    "Sup_var4",
+    "Sup_var5",
 ]
 
 _CYT_CASE_ALIASES = {
@@ -2246,7 +2389,21 @@ _CYT_CASE_ALIASES = {
 }
 
 _CYT_DEFAULT_FEATURE_COLUMNS = [
-    "U", "V", "Ru", "P", "Ux", "Uy", "Vx", "Vy", "Px", "Py", "T", "dis", "Ma", "AoA", "Re",
+    "U",
+    "V",
+    "Ru",
+    "P",
+    "Ux",
+    "Uy",
+    "Vx",
+    "Vy",
+    "Px",
+    "Py",
+    "T",
+    "dis",
+    "Ma",
+    "AoA",
+    "Re",
 ]
 
 # Fortran free-format write can underflow the exponent field width for very
@@ -2296,9 +2453,7 @@ def load_cyt_flowfeature_raw(case: str) -> Dict[str, np.ndarray]:
     with file_path.open("r", encoding="utf-8", errors="replace") as f:
         header = f.readline().split()
         if header != _CYT_COLUMNS:
-            raise ValueError(
-                f"Unexpected FlowFeature.dat header for case {case!r}: {header}"
-            )
+            raise ValueError(f"Unexpected FlowFeature.dat header for case {case!r}: {header}")
 
         rows = []
         for line1 in f:
@@ -2349,7 +2504,9 @@ def load_cyt_dataset(
     if target not in columns:
         raise ValueError(f"Unknown target column {target!r}. Available: {_CYT_COLUMNS}")
 
-    feats = list(feature_columns) if feature_columns is not None else list(_CYT_DEFAULT_FEATURE_COLUMNS)
+    feats = (
+        list(feature_columns) if feature_columns is not None else list(_CYT_DEFAULT_FEATURE_COLUMNS)
+    )
     for feat in feats:
         if feat not in columns:
             raise ValueError(f"Unknown feature column {feat!r}. Available: {_CYT_COLUMNS}")
@@ -2561,9 +2718,15 @@ def load_solid_hardening_dataset() -> "TabularRegressionDataset":
             stress = np.asarray(stress, dtype=float)
             n = strain.shape[0]
 
-            X_rows.append(np.column_stack([
-                strain, np.full(n, float(strain_rate)), np.full(n, float(dif)),
-            ]))
+            X_rows.append(
+                np.column_stack(
+                    [
+                        strain,
+                        np.full(n, float(strain_rate)),
+                        np.full(n, float(dif)),
+                    ]
+                )
+            )
             y_rows.append(stress)
             groups.extend([f"{file_path.stem}_curve{i}"] * n)
 
@@ -2595,35 +2758,32 @@ def load_solid_hardening_dataset() -> "TabularRegressionDataset":
 # Viscous gravity current (VGS) proppant-transport PDE dataset
 # -------------------------
 
-_VGS_ROOT = Path(__file__).resolve().parent / "ViscousGravityCurrent" / "1_proppant_transport_discovery"
+_VGS_ROOT = Path(__file__).resolve().parent / "ViscousGravityCurrent" / "data"
 
 _VGS_NX = 500
 _VGS_DX = 2e-2
 
-# Canonical raw-data file per (case, window). Determined by reading the
-# original pipeline's own `main.py` in each folder, since case I's
-# "0-100" window has THREE slightly different copies of `caseI.dat`
-# scattered across its numbered subfolders (likely re-exported at
-# different pipeline stages) -- the copy below is the one the pipeline's
-# own main.py actually loads for that window.
+# Canonical raw-data file per physical case and time window. The imported
+# upstream repository contained several pipeline-stage copies; only the copy
+# consumed by the original training entry point is retained here.
 _VGS_CASE_CONFIG = {
     ("I", "0-100"): {
-        "file": _VGS_ROOT / "case I - 0-100 s" / "1. construct ANN surrogate" / "caseI.dat",
+        "file": _VGS_ROOT / "vgs_I_0-100.dat",
         "t_arange": (0, 100, 0.2),
         "t_coeff": 1.22625e-1,
     },
     ("I", "100-200"): {
-        "file": _VGS_ROOT / "case I - 100-200 s" / "caseI.dat",
+        "file": _VGS_ROOT / "vgs_I_100-200.dat",
         "t_arange": (0, 100, 0.2),
         "t_coeff": 1.22625e-1,
     },
     ("II", "0-1000"): {
-        "file": _VGS_ROOT / "case II - 0-1000 s" / "caseII.dat",
+        "file": _VGS_ROOT / "vgs_II_0-1000.dat",
         "t_arange": (0, 1000, 2),
         "t_coeff": 3.310149e-3,
     },
     ("II", "1000-2000"): {
-        "file": _VGS_ROOT / "case II - 1000-2000 s" / "caseII.dat",
+        "file": _VGS_ROOT / "vgs_II_1000-2000.dat",
         "t_arange": (0, 1000, 2),
         "t_coeff": 3.310149e-3,
     },
@@ -2636,13 +2796,12 @@ _VGS_DEFAULT_WINDOW = {"I": "0-100", "II": "0-1000"}
 def load_vgs_dataset(case: str = "I", window: Optional[str] = None) -> "GridPDEDataset":
     """
     Load a viscous-gravity-current / proppant-transport PDE discovery
-    dataset from `ViscousGravityCurrent/1_proppant_transport_discovery/`.
+    dataset from `ViscousGravityCurrent/data/`.
 
     The raw data is the free-surface height h(x, t) of a spreading
     two-phase (proppant-laden slurry vs ambient fluid) gravity current,
-    extracted from a 2D Stokes/level-set simulation (see
-    `case I - 0-100 s/0. prepare numerical data/viscous_gravity_current.m`),
-    on a fixed 500 (space) x 500 (time) grid, x in [0, 9.98]. Values are
+    extracted from a 2D Stokes/level-set simulation, on a fixed 500 (space)
+    x 500 (time) grid, x in [0, 9.98]. Values are
     the raw, unnormalized interface height as written by the simulation
     (roughly in [0.5, 49.5]); the original ML pipeline additionally divided
     by 50 before feeding it to a neural surrogate, which this loader does

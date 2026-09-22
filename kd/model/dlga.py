@@ -5,19 +5,20 @@ to discover governing equations of PDEs. It uses neural networks to fit the data
 genetic algorithms to search for the symbolic form of equations.
 """
 
+import heapq
 import os
+import pickle
 import random
 from abc import ABCMeta, abstractmethod
-import torch.utils.data
-from ..base import BaseEstimator
-from ..utils.utils_GA import *
-import numpy as np
-import heapq
-from tqdm import tqdm
-import pickle
-import matplotlib.pyplot as plt
 
+import numpy as np
+import torch.utils.data
+from tqdm import tqdm
+
+from ..base import BaseEstimator
+from ..utils.utils_GA import NN
 from ..viz import equation_renderer
+
 
 class BaseGa(BaseEstimator, metaclass=ABCMeta):
     """Abstract base class for genetic algorithm based models."""
@@ -37,11 +38,11 @@ class BaseGa(BaseEstimator, metaclass=ABCMeta):
 
 class DLGA(BaseGa):
     """Deep Learning Genetic Algorithm for PDE discovery.
-    
+
     This class combines neural networks with genetic algorithms to discover PDEs.
     The neural network fits the data while the genetic algorithm searches for
     the symbolic form of the governing equations.
-    
+
     Attributes:
         max_length (int): Maximum length of gene modules.
         partial_prob (float): Probability for partial gene generation.
@@ -63,15 +64,16 @@ class DLGA(BaseGa):
         evolution_history (list): History of evolution data.
         complexity_history (list): History of complexity data.
     """
-    
+
     _parameter: dict = {}
 
-    def __init__(self, epi, input_dim, max_iter=50000):
+    def __init__(self, epi, input_dim, max_iter=50000, device=None):
         """Initialize DLGA model.
-        
+
         Args:
             epi (float): Penalty coefficient for equation length.
             input_dim (int): Input dimension for neural network.
+            device: PyTorch device string. If omitted, use CUDA when available.
         """
         super().__init__()
         self.max_length = 5
@@ -84,8 +86,8 @@ class DLGA(BaseGa):
         self.n_generations = 100
         self.train_ratio = 0.8
         self.valid_ratio = 0.2
-        self.device = (
-            torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
+        self.device = torch.device(
+            device if device is not None else ("cuda" if torch.cuda.is_available() else "cpu")
         )
         self.Net = NN(
             Num_Hidden_Layers=5,
@@ -102,19 +104,19 @@ class DLGA(BaseGa):
         self.eq_latex = ""
         self.epi = epi
         self.fitness_history = []  # Track best fitness per generation
-        self.train_loss_history = []  # 训练损失历史
-        self.val_loss_history = []    # 验证损失历史
-        self.metadata = {}  # 新增元数据存储
-        self.evolution_history = []  # 存储完整的进化历史数据
-        self.complexity_history = []  # 存储复杂度历史
+        self.train_loss_history = []  # Training loss history.
+        self.val_loss_history = []  # Validation loss history.
+        self.metadata = {}  # Derivative metadata used by the genetic search and plots.
+        self.evolution_history = []  # Per-generation search diagnostics.
+        self.complexity_history = []  # Per-generation complexity diagnostics.
 
     def train_NN(self, X, y):
         """Train neural network on data.
-        
+
         Args:
             X: Input features.
             y: Target values.
-            
+
         Returns:
             tuple: (trained network, best epoch)
         """
@@ -127,7 +129,9 @@ class DLGA(BaseGa):
         # Split data
         train_end = max(1, int(X.shape[0] * self.train_ratio))
         valid_start = train_end
-        valid_end = max(valid_start, min(X.shape[0], valid_start + max(1, int(X.shape[0] * self.valid_ratio))))
+        valid_end = max(
+            valid_start, min(X.shape[0], valid_start + max(1, int(X.shape[0] * self.valid_ratio)))
+        )
 
         X_train = X[0:train_end]
         y_train = y[0:train_end]
@@ -164,9 +168,7 @@ class DLGA(BaseGa):
             prediction = self.Net(X_train)
             prediction_validate = self.Net(X_valid)
             loss = MSELoss(prediction, y_train.view(-1, 1))
-            loss_validate = np.mean(
-                (prediction_validate.detach().cpu().numpy() - y_valid) ** 2
-            )
+            loss_validate = np.mean((prediction_validate.detach().cpu().numpy() - y_valid) ** 2)
             loss.backward()
             NN_optimizer.step()
 
@@ -191,12 +193,12 @@ class DLGA(BaseGa):
 
     def generate_meta_data(self, X):
         """Generate meta-data for PDE discovery.
-        
+
         Computes various derivatives needed for equation discovery.
-        
+
         Args:
             X: Input data.
-            
+
         Returns:
             tuple: (Theta matrix, cache)
         """
@@ -211,9 +213,15 @@ class DLGA(BaseGa):
         u_grad = torch.autograd.grad(outputs=u.sum(), inputs=X, create_graph=True)[0]
         ux = u_grad[:, 0].reshape(-1, 1)
         ut = u_grad[:, 1].reshape(-1, 1)
-        uxx = torch.autograd.grad(outputs=ux.sum(), inputs=X, create_graph=True)[0][:, 0].reshape(-1, 1)
-        uxxx = torch.autograd.grad(outputs=uxx.sum(), inputs=X, create_graph=True)[0][:, 0].reshape(-1, 1)
-        utt = torch.autograd.grad(outputs=ut.sum(), inputs=X, create_graph=True)[0][:, 1].reshape(-1, 1)
+        uxx = torch.autograd.grad(outputs=ux.sum(), inputs=X, create_graph=True)[0][:, 0].reshape(
+            -1, 1
+        )
+        uxxx = torch.autograd.grad(outputs=uxx.sum(), inputs=X, create_graph=True)[0][:, 0].reshape(
+            -1, 1
+        )
+        utt = torch.autograd.grad(outputs=ut.sum(), inputs=X, create_graph=True)[0][:, 1].reshape(
+            -1, 1
+        )
         Theta = torch.concatenate([u, ux, uxx, uxxx, ut, utt], axis=1)
         self.Theta = Theta
 
@@ -221,17 +229,17 @@ class DLGA(BaseGa):
         self.u_tt = utt.cpu().detach().numpy()
 
         self.metadata = {
-            'u': u.cpu().detach().numpy(),
-            'u_x': ux.cpu().detach().numpy(),
-            'u_xxx': uxxx.cpu().detach().numpy(),
-            'u_t': ut.cpu().detach().numpy()
+            "u": u.cpu().detach().numpy(),
+            "u_x": ux.cpu().detach().numpy(),
+            "u_xxx": uxxx.cpu().detach().numpy(),
+            "u_t": ut.cpu().detach().numpy(),
         }
 
         return self.Theta
 
     def random_module(self):
         """Generate a random gene module.
-        
+
         Returns:
             list: Random gene module.
         """
@@ -246,7 +254,7 @@ class DLGA(BaseGa):
 
     def random_genome(self):
         """Generate a random genome (collection of gene modules).
-        
+
         Returns:
             list: Random genome.
         """
@@ -261,10 +269,10 @@ class DLGA(BaseGa):
 
     def translate_DNA(self, gene):
         """Translate gene to mathematical expression.
-        
+
         Args:
             gene: Gene to translate.
-            
+
         Returns:
             tuple: (translated expression, length penalty)
         """
@@ -284,11 +292,11 @@ class DLGA(BaseGa):
 
     def get_fitness(self, gene_translate, length_penalty_coef):
         """Calculate fitness of a gene.
-        
+
         Args:
             gene_translate: Translated gene expression.
             length_penalty_coef: Length penalty coefficient.
-            
+
         Returns:
             tuple: (coefficients, MSE, true MSE, equation type)
         """
@@ -322,7 +330,7 @@ class DLGA(BaseGa):
 
     def cross_over(self):
         """Perform crossover operation in genetic algorithm.
-        
+
         Returns:
             list: New population after crossover.
         """
@@ -344,7 +352,7 @@ class DLGA(BaseGa):
 
     def mutation(self):
         """Perform mutation operation in genetic algorithm.
-        
+
         Returns:
             list: New population after mutation.
         """
@@ -390,16 +398,12 @@ class DLGA(BaseGa):
         # Calculate fitness for all chromosomes
         for i in range(size_pop):
             gene_translate, length_penalty_coef = DLGA.translate_DNA(self, Chrom[i])
-            coef, MSE, MSE_true, name = DLGA.get_fitness(
-                self, gene_translate, length_penalty_coef
-            )
+            coef, MSE, MSE_true, name = DLGA.get_fitness(self, gene_translate, length_penalty_coef)
             fitness_list.append(MSE)
             coef_list.append(coef)
             name_list.append(name)
         # Select best 50% individuals
-        re1 = list(
-            map(fitness_list.index, heapq.nsmallest(int(size_pop / 2), fitness_list))
-        )
+        re1 = list(map(fitness_list.index, heapq.nsmallest(int(size_pop / 2), fitness_list)))
 
         for index in re1:
             new_Chrom.append(Chrom[index])
@@ -417,26 +421,27 @@ class DLGA(BaseGa):
         self.name = new_name
 
         # Record history (optional)
-        if hasattr(self, 'fitness_history'):
+        if hasattr(self, "fitness_history"):
             self.fitness_history.append(min(self.Fitness))
-        if hasattr(self, 'evolution_history'):
-            total_genes = sum(len(chrom) for chrom in self.Chrom)
-            unique_genes = len(set(tuple(sorted(module)) 
-                                 for chrom in self.Chrom 
-                                 for module in chrom))
-            self.evolution_history.append({
-                'generation': len(self.fitness_history),
-                'fitness': min(self.Fitness),
-                'complexity': len(self.Chrom[0]),
-                'population_size': self.pop_size,
-                'unique_modules': unique_genes
-            })
+        if hasattr(self, "evolution_history"):
+            unique_genes = len(
+                set(tuple(sorted(module)) for chrom in self.Chrom for module in chrom)
+            )
+            self.evolution_history.append(
+                {
+                    "generation": len(self.fitness_history),
+                    "fitness": min(self.Fitness),
+                    "complexity": len(self.Chrom[0]),
+                    "population_size": self.pop_size,
+                    "unique_modules": unique_genes,
+                }
+            )
 
         return self.Chrom, self.Fitness, self.coef, self.name
 
     def delete_duplicates(self):
         """Remove duplicate gene modules from chromosomes.
-        
+
         Returns:
             list: Population with duplicates removed.
         """
@@ -454,7 +459,7 @@ class DLGA(BaseGa):
         """Convert chromosome to equation string."""
         name = ["u", "ux", "uxx", "uxxx", "ut", "utt"]
 
-        # Debug信息
+        # Retain the selected population for diagnostics.
         print("\nDebug convert_chrom_to_eq:")
         print(f"Chromosome length: {len(chrom)}")
         print(f"Coefficient shape: {coef.shape}")
@@ -485,10 +490,10 @@ class DLGA(BaseGa):
                     string.append("*")
                 string.pop(-1)
                 string.append("+")
-                
+
             if string:
                 string.pop(-1)
-            
+
             equation = f"{left_name}=" + "".join(string)
             print(f"Generated equation: {equation}")
             return equation
@@ -541,7 +546,7 @@ class DLGA(BaseGa):
             with open("result_save/best_save.pkl", "rb") as f:
                 best = pickle.load(f)
             self.Chrom[0] = best
-            
+
             # Selection and logging
             DLGA.select(self)
             if self.Chrom[0] != best:
@@ -571,14 +576,14 @@ class DLGA(BaseGa):
 
     def fit(self, X, y):
         """Fit model to data.
-        
+
         Args:
             X: Input features.
             y: Target values.
         """
         self.Net, self.best_epoch = self.train_NN(X, y)
         self.Theta = self.generate_meta_data(X)
-        
+
         try:
             Chrom, coef, fitness, name = self.evolution()
             print("\nFinal solution debug info:")
@@ -586,18 +591,17 @@ class DLGA(BaseGa):
             print(f"Coefficient shape: {coef.shape}")
             print(f"Chromosome: {Chrom}")
             print(f"Coefficients: {coef}")
-            
+
             equation = self.convert_chrom_to_eq(Chrom, name, coef)
             print(f"equation form: {equation}")
 
-
-            if equation_renderer: # 检查导入是否成功
+            if (
+                equation_renderer
+            ):  # Render the equation only when the optional renderer imported successfully.
                 self.eq_latex = equation_renderer.dlga_eq2latex(
-                    chromosome=Chrom,
-                    coefficients=coef,
-                    lhs_name_str=name
+                    chromosome=Chrom, coefficients=coef, lhs_name_str=name
                 )
-            
+
         except Exception as e:
             print(f"Error in fit: {str(e)}")
             raise

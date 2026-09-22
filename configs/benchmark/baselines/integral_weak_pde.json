@@ -1,0 +1,14 @@
+{
+  "name": "integral_weak_pde",
+  "device": "cpu",
+  "model": {
+    "terms": [[1, 0], [2, 0], [1, 1], [2, 1], [1, 2], [1, 3]],
+    "n_test_x": 7,
+    "n_test_t": 7,
+    "support_fraction": 0.22,
+    "threshold": 0.001,
+    "ridge": 1e-10,
+    "max_iter": 10
+  },
+  "profiles": {}
+}

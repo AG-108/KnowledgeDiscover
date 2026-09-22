@@ -1,0 +1,15 @@
+{
+  "name": "e2e",
+  "device": "cpu",
+  "model": {
+    "checkpoint_path": null,
+    "source_dir": null,
+    "checkpoint_sha256": null,
+    "trust_checkpoint": false,
+    "max_input_points": 200,
+    "n_trees_to_refine": 10,
+    "stop_refinement_after": 1,
+    "rescale": true
+  },
+  "profiles": {"full": {"model": {"n_trees_to_refine": 100}}}
+}

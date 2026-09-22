@@ -86,7 +86,7 @@ class SolverConfig:
         
     def _find_data_file(self, filename):
         # 1. 当前目录下的 ./data/
-        local_path = os.path.join(os.path.dirname(__file__), "data", filename)
+        local_path = os.path.join(os.path.dirname(__file__), "..", "data", filename)
         if os.path.exists(local_path):
             return local_path
         # 2. 工程根目录下的 kd/dataset/data/

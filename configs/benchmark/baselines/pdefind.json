@@ -1,0 +1,17 @@
+{
+  "name": "pdefind",
+  "device": "cpu",
+  "model": {
+    "derivative_order": 3,
+    "threshold": 0.05,
+    "alpha": 0.00001,
+    "max_iter": 50
+  },
+  "profiles": {
+    "full": {
+      "model": {
+        "max_iter": 500
+      }
+    }
+  }
+}

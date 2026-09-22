@@ -1,0 +1,10 @@
+{
+  "name": "weakform",
+  "device": "cpu",
+  "model": {
+    "threshold": 0.01,
+    "spatial_stride": 2,
+    "time_stride": 4
+  },
+  "profiles": {}
+}

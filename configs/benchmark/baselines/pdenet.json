@@ -1,0 +1,21 @@
+{
+  "name": "pdenet",
+  "device": "cpu",
+  "model": {
+    "derivative_order": 3,
+    "threshold": 5,
+    "alpha": 0.00001,
+    "max_iter": 2,
+    "dtype": "double",
+    "steps": 1,
+    "batch_size": 2
+  },
+  "profiles": {
+    "full": {
+      "model": {
+        "max_iter": 500,
+        "batch_size": 8
+      }
+    }
+  }
+}

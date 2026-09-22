@@ -3,32 +3,33 @@
 from typing import Any, Dict, Optional, Type
 
 from ..base import BaseEstimator
-
+from .sga.sgapde import visualizer as sga_visualizer
 from .sga.sgapde.config import SolverConfig
 from .sga.sgapde.context import ProblemContext
 from .sga.sgapde.solver import SGAPDE_Solver
-from .sga.sgapde import visualizer as sga_visualizer
 
 
 class KD_SGA(BaseEstimator):
-    """
-    一个使用符号遗传算法 SGA 发现偏微分方程 PDE 的模型。
-    这是对 sgapde 库的一个封装，以适应 kd 框架。
+    """Adapt the SGA-PDE solver to the estimator interface used by KD."""
 
-    遵循 scikit-learn API 风格，通过 __init__ 设置参数，通过 fit 执行计算。
-    """
-    
-    def __init__(self, sga_run=100, num=20, depth=4, width=5, 
-                 p_var=0.5, p_mute=0.3, p_cro=0.5, seed=0, 
-                 use_autograd=False, max_epoch=100000, 
-                 use_metadata=False, delete_edges=False):
-        """
-        初始化 KD_SGA 模型。
-
-        所有参数都直接对应 sgapde.config.SolverConfig 中的配置项。
-        """
-        # BaseEstimator 的 __init__ 会自动帮我们处理参数赋值
-        # 但为了清晰，我们在这里也显式声明
+    def __init__(
+        self,
+        sga_run=100,
+        num=20,
+        depth=4,
+        width=5,
+        p_var=0.5,
+        p_mute=0.3,
+        p_cro=0.5,
+        seed=0,
+        use_autograd=False,
+        max_epoch=100000,
+        use_metadata=False,
+        delete_edges=False,
+    ):
+        """Initialize parameters that map directly to SolverConfig."""
+        # Assign parameters explicitly so the wrapper remains easy to inspect.
+        # These attributes map one-to-one to SolverConfig fields.
         self.sga_run = sga_run
         self.num = num
         self.depth = depth
@@ -41,21 +42,13 @@ class KD_SGA(BaseEstimator):
         self.max_epoch = max_epoch
         self.use_metadata = use_metadata
         self.delete_edges = delete_edges
-        
+
     def fit(self, problem_name: str):
-        """
-        根据预设的问题名称加载数据，并执行PDE发现算法。
-
-        这是我们当前阶段的临时数据接口，未来可以扩展。
-
-        参数:
-            problem_name (str): 预设的数据集名称, 
-                                例如 'chafee-infante', 'burgers', 'kdv'。
-        """
+        """Discover a PDE for one of the solver built-in problem names."""
         print(f"--- Starting SGA PDE Discovery for problem: {problem_name} ---")
 
-        # 1. 根据 self 的属性和传入的 problem_name 创建 SolverConfig
-        # 我们没有传入 u_data, x_data, t_data，所以它会自动从文件加载
+        # Build SolverConfig from the wrapper parameters and selected problem.
+        # Without external arrays, ProblemContext loads the built-in field.
         config = SolverConfig(
             problem_name=problem_name,
             sga_run=self.sga_run,
@@ -69,22 +62,22 @@ class KD_SGA(BaseEstimator):
             use_autograd=self.use_autograd,
             max_epoch=self.max_epoch,
             use_metadata=self.use_metadata,
-            delete_edges=self.delete_edges
+            delete_edges=self.delete_edges,
         )
-        
-        # 2. 创建数据上下文，完成所有数据预处理
+
+        # Construct the context and preprocess the selected field.
         context = ProblemContext(config)
-        
-        # 3. 创建并运行求解器
+
+        # Run the configured symbolic genetic solver.
         solver = SGAPDE_Solver(config)
         best_pde, best_score = solver.run(context)
-        
-        # 4. 存储结果到模型的属性中（以后缀 _ 结尾）
+
+        # Store fitted attributes with scikit-learn-style trailing underscores.
         self.best_pde_ = best_pde
         self.best_score_ = best_score
-        self.context_ = context # 保存完整的上下文，以备可视化使用
-        self.config_ = config   # 保存此次运行的配置
-        
+        self.context_ = context  # Retain the context for visualization.
+        self.config_ = config  # Retain the resolved solver configuration.
+
         print("\n--- SGA PDE Discovery Finished ---")
         print(f"Best PDE Found: {self.best_pde_}")
         print(f"AIC Score: {self.best_score_}")
@@ -99,16 +92,11 @@ class KD_SGA(BaseEstimator):
         context_cls: Optional[Type] = None,
         solver_cls: Optional[Type] = None,
     ):
-        """
-        新增接口：直接使用 :class:`~kd.dataset.GridPDEDataset` 执行 SGA.
+        """Discover a PDE from a GridPDEDataset instance."""
+        from kd.dataset import (
+            GridPDEDataset,
+        )  # Import lazily to avoid a module-level dependency cycle.
 
-        Args:
-            dataset: 由 ``kd.dataset.load_pde`` 返回的 GridPDEDataset 对象。
-            problem_name: 可选，覆盖用于 SolverConfig 的问题名称。
-            context_cls: 可选，注入自定义 ProblemContext 子类（测试用）。
-            solver_cls: 可选，注入自定义 SGAPDE_Solver 子类（测试用）。
-        """
-        from kd.dataset import GridPDEDataset  # 避免模块级循环依赖
         from .sga.adapter import SGADataAdapter
 
         if not isinstance(dataset, GridPDEDataset):
@@ -123,9 +111,7 @@ class KD_SGA(BaseEstimator):
         actual_context_cls = context_cls or ProblemContext
         actual_solver_cls = solver_cls or SGAPDE_Solver
 
-        print(
-            f"--- Starting SGA PDE Discovery for problem: {problem_label} (dataset mode) ---"
-        )
+        print(f"--- Starting SGA PDE Discovery for problem: {problem_label} (dataset mode) ---")
 
         config = SolverConfig(
             problem_name=problem_label,
@@ -161,11 +147,9 @@ class KD_SGA(BaseEstimator):
         return self
 
     def plot_results(self):
-        """
-        调用 sgapde 自带的可视化工具来绘制结果和诊断图。
-        """
-        if not hasattr(self, 'context_'):
+        """Render diagnostics for the most recently fitted solver context."""
+        if not hasattr(self, "context_"):
             raise RuntimeError("You must call fit() before plotting results.")
-        
+
         print("INFO: Generating visualization plots...")
         sga_visualizer.plot_figures(self.context_, self.config_)

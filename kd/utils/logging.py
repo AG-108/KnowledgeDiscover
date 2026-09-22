@@ -2,7 +2,14 @@ import logging
 import os
 from logging.handlers import RotatingFileHandler
 
-def setup_logger(name: str, log_file: str = None, log_level: str = 'DEBUG', max_log_size: int = 10 * 1024 * 1024, backup_count: int = 5):
+
+def setup_logger(
+    name: str,
+    log_file: str = None,
+    log_level: str = "DEBUG",
+    max_log_size: int = 10 * 1024 * 1024,
+    backup_count: int = 5,
+):
     """
     Setup a logger with specified configurations.
 
@@ -20,7 +27,7 @@ def setup_logger(name: str, log_file: str = None, log_level: str = 'DEBUG', max_
     logger.setLevel(log_level.upper())
 
     # Create a log format
-    log_format = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    log_format = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 
     # Console handler to output logs to the console
     console_handler = logging.StreamHandler()
@@ -32,10 +39,10 @@ def setup_logger(name: str, log_file: str = None, log_level: str = 'DEBUG', max_
         # Ensure the directory exists
         os.makedirs(os.path.dirname(log_file), exist_ok=True)
 
-        file_handler = RotatingFileHandler(log_file, maxBytes=max_log_size, backupCount=backup_count)
+        file_handler = RotatingFileHandler(
+            log_file, maxBytes=max_log_size, backupCount=backup_count
+        )
         file_handler.setFormatter(log_format)
         logger.addHandler(file_handler)
 
     return logger
-
-

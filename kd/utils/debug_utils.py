@@ -1,10 +1,11 @@
-import os
-import functools
 import atexit
+import os
+
 
 # Default no-op decorator that does nothing.
 def _noop_decorator(func):
     return func
+
 
 # The main 'profile' decorator, which will be replaced by a real profiler if enabled.
 profile = _noop_decorator
@@ -18,6 +19,7 @@ def print_obj_profile():
 if os.getenv("MEM_DEBUG") == "1":
     try:
         from memory_profiler import profile as _mem_profile
+
         profile = _mem_profile
         print("✅ MEMORY_DEBUG enabled: using memory_profiler.")
     except ImportError:
@@ -32,7 +34,7 @@ if os.getenv("OBJ_DEBUG") == "1":
             Manually callable function to print objgraph analysis.
             Use this in your code at specific points for fine-grained debugging.
             """
-            print("\n" + "="*20 + " Objgraph Analysis " + "="*20)
+            print("\n" + "=" * 20 + " Objgraph Analysis " + "=" * 20)
             print("--- Most Common Types ---")
             objgraph.show_most_common_types(limit=15)
             print("\n" + "--- Object Growth Since Last Check ---")
@@ -41,10 +43,12 @@ if os.getenv("OBJ_DEBUG") == "1":
         # Optional: Still register for exit analysis as a fallback
         @atexit.register
         def _exit_obj_profile():
-            print("\n" + "="*20 + " Final Objgraph Analysis at Exit " + "="*20)
+            print("\n" + "=" * 20 + " Final Objgraph Analysis at Exit " + "=" * 20)
             print_obj_profile()  # Reuse the function for consistency
 
-        print("✅ OBJ_DEBUG enabled: using objgraph (call print_obj_profile() manually or check at exit).")
+        print(
+            "✅ OBJ_DEBUG enabled: using objgraph (call print_obj_profile() manually or check at exit)."
+        )
 
         # Examples:
         # Use case 1: Memory profiling

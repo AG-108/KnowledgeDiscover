@@ -1,0 +1,29 @@
+{
+  "name": "pysr",
+  "device": "cpu",
+  "model": {
+    "niterations": 2,
+    "populations": 1,
+    "population_size": 20,
+    "binary_operators": ["+", "-", "*", "/"],
+    "unary_operators": ["sin", "cos", "exp"],
+    "maxsize": 20,
+    "model_selection": "best",
+    "parallelism": "serial",
+    "deterministic": true,
+    "verbosity": 0,
+    "progress": false,
+    "temp_equation_file": true
+  },
+  "profiles": {
+    "full": {
+      "model": {
+        "niterations": 100,
+        "populations": 8,
+        "population_size": 50,
+        "parallelism": "multithreading",
+        "deterministic": false
+      }
+    }
+  }
+}

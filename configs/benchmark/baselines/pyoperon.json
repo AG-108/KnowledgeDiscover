@@ -1,0 +1,25 @@
+{
+  "name": "pyoperon",
+  "device": "cpu",
+  "model": {
+    "allowed_symbols": "add,sub,mul,div,sin,cos,exp,constant,variable",
+    "population_size": 100,
+    "generations": 2,
+    "max_evaluations": 10000,
+    "max_length": 30,
+    "max_depth": 10,
+    "optimizer_iterations": 10,
+    "n_threads": 1
+  },
+  "profiles": {
+    "full": {
+      "model": {
+        "population_size": 1000,
+        "generations": 100,
+        "max_evaluations": 1000000,
+        "max_length": 50,
+        "optimizer_iterations": 100
+      }
+    }
+  }
+}

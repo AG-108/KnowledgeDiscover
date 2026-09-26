@@ -5,7 +5,7 @@
 失败原因和统计分母。
 
 [文档索引](docs/README.md) · [运行说明](docs/benchmark.md) ·
-[路线图](docs/benchmark_roadmap.md) · [交接状态](STATUS.md)
+[路线图](docs/benchmark_roadmap.md)
 
 ## 快速开始
 
@@ -52,7 +52,7 @@ Core ODE 的正式 440-case 实验尚未完成；候选函数协议和 Robertson
 | `tests/` | 单元测试和集成测试 |
 | `scripts/` | 运行、结果合并、审计与 profiling 工具 |
 | `hpc/`、`docker/` | 服务器运行与环境构建配方 |
-| `docs/`、`docs/reports/` | 当前指南与有日期的实验记录 |
+| `docs/` | 当前指南与协议说明 |
 | `results/`、`.local/` | 本地结果、私有配置与备份；不提交 |
 
 ## 开发与验证

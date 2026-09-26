@@ -2,9 +2,8 @@
 
 Updated 2026-09-26. This is the maintained implementation and follow-up plan.
 It consolidates the previous work order, owner review tasks, implementation status
-and next-run requirements. Historical evidence is in
-[the validation history](reports/benchmark_validation_history.md).
-Current code and actual run artifacts take precedence over older notes.
+and next-run requirements. Current code and local run artifacts take precedence
+over older notes.
 
 ## Implemented capabilities and boundaries
 
@@ -22,8 +21,7 @@ Current code and actual run artifacts take precedence over older notes.
 
 ## Priorities
 
-1. Recheck the PhySO, CPU PDE and GPU continuation outputs in the
-   [run report](reports/server_missing_pair_runs_20260925.md). Verify manifest,
+1. Recheck the local PhySO, CPU PDE and GPU continuation outputs. Verify manifest,
    case, target and status denominators and archive checksums before reporting
    completion. Preserve first attempts and use separate outputs for retries.
 2. Freeze Core ODE function-set metadata and method applicability. The eight-system,
@@ -107,4 +105,3 @@ These figures refer to the archived audit, not to new runs:
 Canonical details: [metrics](benchmark_metrics.md),
 [method cards](benchmark_v2_method_cards.md), [PIC](benchmark_v2_pic.md),
 [physical credibility](benchmark_v2_physical_credibility.md).
-Session handoff: [STATUS.md](../STATUS.md).

@@ -7,7 +7,6 @@
 - [Data availability and external assets](data.md)
 - [Server setup and portable launch scripts](server_setup.md)
 - [Implementation status and remaining work](benchmark_roadmap.md)
-- [Current session handoff](../STATUS.md)
 
 ## Protocols and implementation references
 
@@ -22,25 +21,16 @@
 | [Compatibility report](compatibility_report.md) | Dated no-fit matrix; not fitting or recovery evidence |
 | [Code style](code_style.md) | Maintained-code formatting and upstream exclusions |
 
-## Historical evidence
-
-- [Implementation validation history](reports/benchmark_validation_history.md)
-- [Server validation on 2026-09-25](reports/server_validation_20260925.md)
-- [PhySO and missing-pair continuation](reports/server_missing_pair_runs_20260925.md)
-- [SymbolicGPT matched protocol comparison](reports/symbolicgpt_protocol_comparison_20260925.md)
-- [Robertson observation audit](reports/robertson_observation_audit_20260925.md)
-
-Reports retain their dates, negative results and original denominators. Raw outputs
-are local artifacts. The [paper outline](paper/knowledge_discover_benchmark_outline.tex)
-is a working draft. Sphinx API sources remain in `source/`.
+The [paper outline](paper/knowledge_discover_benchmark_outline.tex) is a working
+draft. Sphinx API sources remain in `source/`.
 
 ## Repository organization and publication
 
 Source lives in `kd/`, configurations in `configs/`, examples in `examples/`,
 tests in `tests/`, reusable commands in `scripts/`, and server recipes in `hpc/`.
 The root `requirements.txt` is the portable core recipe; separate server requirement
-files capture the optional unified stack. Keep current instructions in a canonical
-guide and dated evidence in `reports/` instead of creating another work order.
+files capture the optional unified stack. Keep current instructions in canonical
+guides and store dated run evidence with local experiment results.
 
 External datasets, checkpoints, raw results, generated logs, archives, caches,
 credentials and local overrides are excluded by `.gitignore`. Existing small

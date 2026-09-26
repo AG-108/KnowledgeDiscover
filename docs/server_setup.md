@@ -15,8 +15,7 @@ normalized SHA256 hashes. Preserve previous worktrees and raw result directories
 
 The historical unified server used Python 3.10, PyTorch 2.5.1 with CUDA 12.1,
 PyOperon 0.6.1 and the pins in those files. Its E2E sympytorch fork and Julia
-installation are separate assets. Historical validation counts and failures are in
-[the dated server report](reports/server_validation_20260925.md).
+installation are separate assets.
 
 ~~~bash
 conda create -n kd-server python=3.10 pip
@@ -57,10 +56,9 @@ credentials local and validate real generation before a full batch.
 
 The dated `hpc/run_*_20260925.sh` recipes retain their original selections and
 budgets. CPU/GPU missing-pair recipes require the manifests and compatibility
-reports listed in [the run report](reports/server_missing_pair_runs_20260925.md);
-those artifacts are local and must exist before launching. Older dated scripts
-in `scripts/` likewise require their original manifests. They do not start
-when the repository is cloned or imported.
+reports from the original run; those artifacts are local and must exist before
+launching. Older dated scripts in `scripts/` likewise require their original
+manifests. They do not start when the repository is cloned or imported.
 
 For historical persistence scripts, KD_PROJECT identifies the source checkout.
 Export KD_PERSIST_DIR to select a separate destination; its default is the

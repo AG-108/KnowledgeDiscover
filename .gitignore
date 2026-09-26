@@ -51,6 +51,8 @@ nosetests.xml
 
 # Local configuration, credentials and private operational notes
 /.local/
+/STATUS.md
+/docs/reports/
 /.codex/
 /.claude/
 .env

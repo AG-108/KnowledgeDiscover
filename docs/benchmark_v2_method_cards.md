@@ -50,8 +50,9 @@ datasets and 300-second case timeout. Only the reuse switch and output
 directory differ. Both currently use `configured_fallback` operators because
 the Core ODE datasets do not declare a frozen benchmark function set. These
 diagnostics must be reported separately from any declared-grammar main track.
-The matched seed-0 damped-oscillator result and its denominators are recorded
-in `docs/reports/symbolicgpt_protocol_comparison_20260925.md`.
+The matched seed-0 damped-oscillator diagnostic completed both reused-model RHS
+fits and one of two per-fit RHS runs; neither protocol recovered the target
+structure, so the result is not main-track recovery evidence.
 
 ## ODE dataset cards
 
@@ -151,10 +152,9 @@ noisy data are finite-difference estimates, not clean oracle derivatives.
 Robertson's very short initial time steps amplify observation noise during
 finite-difference derivative estimation; the 1% noisy/sparse setting is a
 numerical stress case and must be assessed separately from clean recovery.
-The five-seed nonuniform-grid audit in
-`docs/reports/robertson_observation_audit_20260925.md` confirms low clean derivative
-error but severe 1% noise amplification; no time cutoff or alternative
-derivative estimator has been adopted for a formal noisy track.
+A five-seed nonuniform-grid audit found low clean derivative error but severe 1%
+noise amplification; no time cutoff or alternative derivative estimator has been
+adopted for a formal noisy track.
 
 `configs/benchmark/core_ode_track.json` lists all currently integrated methods
 that declare ODE support and the same eight datasets. Its five-seed full-profile

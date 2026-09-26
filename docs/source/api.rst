@@ -17,7 +17,7 @@ Data Module
 
 Models
 ------
-.. automodule:: kd.model.deeprl
+.. automodule:: kd.model.kd_dscv
    :members:
    :undoc-members:
    :show-inheritance:
@@ -28,23 +28,13 @@ Models
    :show-inheritance:
 
 Visualization
-------------
+-------------
 .. automodule:: kd.viz.dlga_viz
    :members:
    :undoc-members:
    :show-inheritance:
 
-.. automodule:: kd.viz.dlga_kdv
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
 .. automodule:: kd.viz.dscv_viz
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-.. automodule:: kd.viz.deeprl_kdv
    :members:
    :undoc-members:
    :show-inheritance:

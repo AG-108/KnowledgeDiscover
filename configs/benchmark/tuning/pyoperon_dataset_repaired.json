@@ -1,0 +1,26 @@
+{
+  "profile": "full",
+  "tasks": ["sr", "ode"],
+  "models": ["pyoperon"],
+  "datasets": ["*"],
+  "seeds": [0],
+  "timeout": 180,
+  "resume": true,
+  "output_dir": "results/tuning/pyoperon_dataset_declared",
+  "overrides": {
+    "models": {
+      "pyoperon": {
+        "use_dataset_function_set": true,
+        "search_space_policy": "declared",
+        "allowed_symbols": "add,sub,mul,div,sin,cos,exp,log,sqrt,constant,variable",
+        "population_size": 500,
+        "generations": 30,
+        "max_evaluations": 30000,
+        "max_length": 40,
+        "max_depth": 10,
+        "optimizer_iterations": 30,
+        "n_threads": 1
+      }
+    }
+  }
+}

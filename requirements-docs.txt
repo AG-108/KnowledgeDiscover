@@ -1,0 +1,3 @@
+# Documentation builder; runtime imports use requirements.txt.
+sphinx==7.4.7
+alabaster==0.7.16

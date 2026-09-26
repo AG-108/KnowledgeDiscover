@@ -1,0 +1,19 @@
+{
+  "profile": "full",
+  "tasks": ["ode"],
+  "models": ["symbolicgpt"],
+  "datasets": ["ode_core_damped_oscillator", "ode_core_sir"],
+  "seeds": [0],
+  "timeout": 300,
+  "resume": false,
+  "output_dir": "results/tuning/symbolicgpt_per_fit",
+  "overrides": {
+    "models": {
+      "symbolicgpt": {
+        "use_dataset_function_set": false,
+        "reuse_pretraining_within_case": false,
+        "dataloader_workers": 0
+      }
+    }
+  }
+}

@@ -1,0 +1,30 @@
+{
+  "profile": "full",
+  "tasks": ["sr", "ode"],
+  "models": ["pysr"],
+  "datasets": ["*"],
+  "seeds": [0],
+  "timeout": 180,
+  "resume": true,
+  "output_dir": "results/tuning/pysr_dataset_declared",
+  "overrides": {
+    "models": {
+      "pysr": {
+        "use_dataset_function_set": true,
+        "search_space_policy": "declared",
+        "niterations": 30,
+        "populations": 2,
+        "population_size": 40,
+        "binary_operators": ["+", "-", "*", "/"],
+        "unary_operators": ["sin", "cos", "exp", "log", "sqrt"],
+        "maxsize": 30,
+        "model_selection": "best",
+        "parallelism": "serial",
+        "deterministic": true,
+        "verbosity": 0,
+        "progress": false,
+        "temp_equation_file": true
+      }
+    }
+  }
+}

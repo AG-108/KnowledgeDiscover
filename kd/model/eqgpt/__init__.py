@@ -5,7 +5,7 @@ reward signals from a sparse-regression fit over surrogate-network
 derivatives.
 
 Adapted from the original EqGPT repository (Apache License 2.0),
-vendored at `kd/dataset/EqGPT/` in this project:
+optionally stored locally at `kd/dataset/EqGPT/` in this project:
     "PDEGPT: Learning from Math handbooks for Partial Differential
     Equation Discovery" (https://www.nature.com/articles/s41467-025-65114-2)
 

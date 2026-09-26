@@ -27,7 +27,7 @@ import re
 
 import numpy as np
 import sympy
-from sympy import sympify, expand
+from sympy import expand, sympify
 
 eps = 1e-4
 big_eps = 1e-3
@@ -150,12 +150,16 @@ def simplify_formula(formula_to_simplify, digits=4):
     rounded = orig_form_str
 
     try:
-        for a in sympy.preorder_traversal(orig_form_str):
-            if isinstance(a, sympy.Float):
-                if np.abs(a) < 10**(-1 * digits):
-                    rounded = rounded.subs(a, 0)
-                else:
-                    rounded = rounded.subs(a, round(a, digits))
+        replacements = {}
+        threshold = 10**(-1 * digits)
+        for atom in sympy.preorder_traversal(orig_form_str):
+            if isinstance(atom, sympy.Float):
+                replacements[atom] = 0 if np.abs(atom) < threshold else round(atom, digits)
+        if replacements:
+            # Numeric atoms only need exact replacement, not subs()'s algebraic
+            # pattern matching. A single xreplace preserves atom-level output
+            # while avoiding a full expression rebuild for every coefficient.
+            rounded = rounded.xreplace(replacements)
     except Exception:
         return None
 

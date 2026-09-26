@@ -1,6 +1,7 @@
 """torch parameter groups manager"""
 import torch
-from collections import OrderedDict,Iterator
+from collections import OrderedDict
+from collections.abc import Iterator
 
 __all__ = ['ParamGroupsManager',]
 

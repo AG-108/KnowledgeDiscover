@@ -2,7 +2,7 @@
 
 Raw per-target records are written to `benchmark_summary.json/csv`; method/task aggregates
 are written to `benchmark_aggregate.json/csv`. New records declare
-`metric_protocol_version = "2.0"`. Older records remain readable, but failed legacy rows
+`metric_protocol_version = "2.1"`. Older records remain readable, but failed legacy rows
 cannot be retroactively classified as recovery-eligible when that fact was not stored.
 Aggregates are partitioned by protocol version, so legacy and v2 rows are never silently
 pooled. `n_cases`, `n_target_rows`, and `denominator_unit = target_row` make clear that a
@@ -20,8 +20,21 @@ denominator contains every eligible row, including `error` and `timeout`; skippe
 and rows without trusted truth are excluded. Evaluator coverage remains visible so an
 evaluator failure is not silently described as an algorithm failure.
 
-For SR/ODE, `exact_recovery` means algebraic equality after variable normalization and
-SymPy simplification. `exact_recovery_rate` uses the eligible denominator.
+For SR/ODE, protocol 2.1 `exact_recovery` means structural recovery: after variable
+normalization and additive expansion, discovered and reference expressions must have the
+same additive terms, but numeric coefficients are ignored. Numeric exponents remain part
+of the structure, so `x**2` and `x**3` do not match. Numeric scale or offset inside a
+function argument is treated as a coefficient rather than a structural operator.
+`structural_recovery` is an explicit alias, and
+`exact_recovery_semantics = additive_term_structure_ignoring_numeric_coefficients` is
+stored with every row. `exact_recovery_rate` uses the eligible denominator.
+
+`coefficient_error` is reported separately, and only after structural recovery. It is the
+relative L2 error between coefficients aligned by the recovered structural terms, with an
+absolute L2 fallback when the reference coefficient norm is zero. Protocol 2.1 retains the
+old strict SymPy equality as `algebraic_exact_recovery`; protocol 2.0 `exact_recovery`
+records should therefore be interpreted as the legacy strict algebraic diagnostic, not
+pooled with protocol 2.1 structural recovery.
 
 For PDE, `pde_support_recovery` means equality of nonzero additive term-support sets; it
 deliberately ignores coefficient error. `term_support_accuracy`, precision, and recall give

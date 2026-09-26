@@ -1974,7 +1974,7 @@ pde,dlga,PDE_compound,PDE_compound,compatible,
 pde,deepmod,PDE_compound,PDE_compound,compatible,
 pde,pdefind,PDE_compound,PDE_compound,compatible,
 pde,pdenet,PDE_compound,PDE_compound,incompatible,pdenet example adapter requires two spatial dimensions
-pde,weakform,PDE_compound,PDE_compound,incompatible,weakform example adapter requires two spatial dimensions
+pde,weakform,PDE_compound,PDE_compound,compatible,
 pde,eqgpt,PDE_compound,PDE_compound,compatible,
 pde,sindy,PDE_compound,PDE_compound,compatible,
 pde,pysindy,PDE_compound,PDE_compound,compatible,
@@ -1985,7 +1985,7 @@ pde,dlga,PDE_divide,PDE_divide,compatible,
 pde,deepmod,PDE_divide,PDE_divide,compatible,
 pde,pdefind,PDE_divide,PDE_divide,compatible,
 pde,pdenet,PDE_divide,PDE_divide,incompatible,pdenet example adapter requires two spatial dimensions
-pde,weakform,PDE_divide,PDE_divide,incompatible,weakform example adapter requires two spatial dimensions
+pde,weakform,PDE_divide,PDE_divide,compatible,
 pde,eqgpt,PDE_divide,PDE_divide,compatible,
 pde,sindy,PDE_divide,PDE_divide,compatible,
 pde,pysindy,PDE_divide,PDE_divide,compatible,
@@ -2182,7 +2182,7 @@ pde,dlga,burgers,burgers,compatible,
 pde,deepmod,burgers,burgers,compatible,
 pde,pdefind,burgers,burgers,compatible,
 pde,pdenet,burgers,burgers,incompatible,pdenet example adapter requires two spatial dimensions
-pde,weakform,burgers,burgers,incompatible,weakform example adapter requires two spatial dimensions
+pde,weakform,burgers,burgers,compatible,
 pde,eqgpt,burgers,burgers,compatible,
 pde,sindy,burgers,burgers,compatible,
 pde,pysindy,burgers,burgers,compatible,
@@ -2193,7 +2193,7 @@ pde,dlga,chafee-infante,chafee-infante,compatible,
 pde,deepmod,chafee-infante,chafee-infante,compatible,
 pde,pdefind,chafee-infante,chafee-infante,compatible,
 pde,pdenet,chafee-infante,chafee-infante,incompatible,pdenet example adapter requires two spatial dimensions
-pde,weakform,chafee-infante,chafee-infante,incompatible,weakform example adapter requires two spatial dimensions
+pde,weakform,chafee-infante,chafee-infante,compatible,
 pde,eqgpt,chafee-infante,chafee-infante,compatible,
 pde,sindy,chafee-infante,chafee-infante,compatible,
 pde,pysindy,chafee-infante,chafee-infante,compatible,
@@ -2220,7 +2220,7 @@ pde,dlga,fisher,fisher,compatible,
 pde,deepmod,fisher,fisher,compatible,
 pde,pdefind,fisher,fisher,compatible,
 pde,pdenet,fisher,fisher,incompatible,pdenet example adapter requires two spatial dimensions
-pde,weakform,fisher,fisher,incompatible,weakform example adapter requires two spatial dimensions
+pde,weakform,fisher,fisher,compatible,
 pde,eqgpt,fisher,fisher,compatible,
 pde,sindy,fisher,fisher,compatible,
 pde,pysindy,fisher,fisher,compatible,
@@ -2231,7 +2231,7 @@ pde,dlga,fisher_linear,fisher_linear,compatible,
 pde,deepmod,fisher_linear,fisher_linear,compatible,
 pde,pdefind,fisher_linear,fisher_linear,compatible,
 pde,pdenet,fisher_linear,fisher_linear,incompatible,pdenet example adapter requires two spatial dimensions
-pde,weakform,fisher_linear,fisher_linear,incompatible,weakform example adapter requires two spatial dimensions
+pde,weakform,fisher_linear,fisher_linear,compatible,
 pde,eqgpt,fisher_linear,fisher_linear,compatible,
 pde,sindy,fisher_linear,fisher_linear,compatible,
 pde,pysindy,fisher_linear,fisher_linear,compatible,
@@ -2242,7 +2242,7 @@ pde,dlga,kdv,kdv,compatible,
 pde,deepmod,kdv,kdv,compatible,
 pde,pdefind,kdv,kdv,compatible,
 pde,pdenet,kdv,kdv,incompatible,pdenet example adapter requires two spatial dimensions
-pde,weakform,kdv,kdv,incompatible,weakform example adapter requires two spatial dimensions
+pde,weakform,kdv,kdv,compatible,
 pde,eqgpt,kdv,kdv,compatible,
 pde,sindy,kdv,kdv,compatible,
 pde,pysindy,kdv,kdv,compatible,
@@ -2253,7 +2253,7 @@ pde,dlga,pdeformer_sinus,pdeformer_sinus/0000,compatible,
 pde,deepmod,pdeformer_sinus,pdeformer_sinus/0000,compatible,
 pde,pdefind,pdeformer_sinus,pdeformer_sinus/0000,compatible,
 pde,pdenet,pdeformer_sinus,pdeformer_sinus/0000,incompatible,pdenet example adapter requires two spatial dimensions
-pde,weakform,pdeformer_sinus,pdeformer_sinus/0000,incompatible,weakform example adapter requires two spatial dimensions
+pde,weakform,pdeformer_sinus,pdeformer_sinus/0000,compatible,
 pde,eqgpt,pdeformer_sinus,pdeformer_sinus/0000,compatible,
 pde,sindy,pdeformer_sinus,pdeformer_sinus/0000,compatible,
 pde,pysindy,pdeformer_sinus,pdeformer_sinus/0000,compatible,
@@ -2395,7 +2395,7 @@ pde,dlga,vgs_II_0-1000,vgs_II_0-1000,compatible,
 pde,deepmod,vgs_II_0-1000,vgs_II_0-1000,compatible,
 pde,pdefind,vgs_II_0-1000,vgs_II_0-1000,compatible,
 pde,pdenet,vgs_II_0-1000,vgs_II_0-1000,incompatible,pdenet example adapter requires two spatial dimensions
-pde,weakform,vgs_II_0-1000,vgs_II_0-1000,incompatible,weakform example adapter requires two spatial dimensions
+pde,weakform,vgs_II_0-1000,vgs_II_0-1000,compatible,
 pde,eqgpt,vgs_II_0-1000,vgs_II_0-1000,compatible,
 pde,sindy,vgs_II_0-1000,vgs_II_0-1000,compatible,
 pde,pysindy,vgs_II_0-1000,vgs_II_0-1000,compatible,
@@ -2406,7 +2406,7 @@ pde,dlga,vgs_II_1000-2000,vgs_II_1000-2000,compatible,
 pde,deepmod,vgs_II_1000-2000,vgs_II_1000-2000,compatible,
 pde,pdefind,vgs_II_1000-2000,vgs_II_1000-2000,compatible,
 pde,pdenet,vgs_II_1000-2000,vgs_II_1000-2000,incompatible,pdenet example adapter requires two spatial dimensions
-pde,weakform,vgs_II_1000-2000,vgs_II_1000-2000,incompatible,weakform example adapter requires two spatial dimensions
+pde,weakform,vgs_II_1000-2000,vgs_II_1000-2000,compatible,
 pde,eqgpt,vgs_II_1000-2000,vgs_II_1000-2000,compatible,
 pde,sindy,vgs_II_1000-2000,vgs_II_1000-2000,compatible,
 pde,pysindy,vgs_II_1000-2000,vgs_II_1000-2000,compatible,
@@ -2417,7 +2417,7 @@ pde,dlga,vgs_I_0-100,vgs_I_0-100,compatible,
 pde,deepmod,vgs_I_0-100,vgs_I_0-100,compatible,
 pde,pdefind,vgs_I_0-100,vgs_I_0-100,compatible,
 pde,pdenet,vgs_I_0-100,vgs_I_0-100,incompatible,pdenet example adapter requires two spatial dimensions
-pde,weakform,vgs_I_0-100,vgs_I_0-100,incompatible,weakform example adapter requires two spatial dimensions
+pde,weakform,vgs_I_0-100,vgs_I_0-100,compatible,
 pde,eqgpt,vgs_I_0-100,vgs_I_0-100,compatible,
 pde,sindy,vgs_I_0-100,vgs_I_0-100,compatible,
 pde,pysindy,vgs_I_0-100,vgs_I_0-100,compatible,
@@ -2428,7 +2428,7 @@ pde,dlga,vgs_I_100-200,vgs_I_100-200,compatible,
 pde,deepmod,vgs_I_100-200,vgs_I_100-200,compatible,
 pde,pdefind,vgs_I_100-200,vgs_I_100-200,compatible,
 pde,pdenet,vgs_I_100-200,vgs_I_100-200,incompatible,pdenet example adapter requires two spatial dimensions
-pde,weakform,vgs_I_100-200,vgs_I_100-200,incompatible,weakform example adapter requires two spatial dimensions
+pde,weakform,vgs_I_100-200,vgs_I_100-200,compatible,
 pde,eqgpt,vgs_I_100-200,vgs_I_100-200,compatible,
 pde,sindy,vgs_I_100-200,vgs_I_100-200,compatible,
 pde,pysindy,vgs_I_100-200,vgs_I_100-200,compatible,
@@ -2439,7 +2439,7 @@ pde,dlga,wave_breaking,L_G2Tp12A080_broad,compatible,
 pde,deepmod,wave_breaking,L_G2Tp12A080_broad,compatible,
 pde,pdefind,wave_breaking,L_G2Tp12A080_broad,compatible,
 pde,pdenet,wave_breaking,L_G2Tp12A080_broad,incompatible,pdenet example adapter requires two spatial dimensions
-pde,weakform,wave_breaking,L_G2Tp12A080_broad,incompatible,weakform example adapter requires two spatial dimensions
+pde,weakform,wave_breaking,L_G2Tp12A080_broad,compatible,
 pde,eqgpt,wave_breaking,L_G2Tp12A080_broad,compatible,
 pde,sindy,wave_breaking,L_G2Tp12A080_broad,compatible,
 pde,pysindy,wave_breaking,L_G2Tp12A080_broad,compatible,
@@ -2450,7 +2450,7 @@ pde,dlga,wdwake,wdwake,incompatible,dlga adapter supports a scalar field in one 
 pde,deepmod,wdwake,wdwake,incompatible,deepmod adapter supports a scalar field in one spatial dimension
 pde,pdefind,wdwake,wdwake,incompatible,pdefind adapter supports a scalar field in one spatial dimension
 pde,pdenet,wdwake,wdwake,compatible,
-pde,weakform,wdwake,wdwake,compatible,
+pde,weakform,wdwake,wdwake,incompatible,weakform adapter supports a scalar field in one spatial dimension
 pde,eqgpt,wdwake,wdwake,incompatible,eqgpt adapter supports a scalar field in one spatial dimension
 pde,sindy,wdwake,wdwake,incompatible,sindy adapter supports a scalar field in one spatial dimension
 pde,pysindy,wdwake,wdwake,incompatible,pysindy adapter supports a scalar field in one spatial dimension

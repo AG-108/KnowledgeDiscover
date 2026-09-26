@@ -19,28 +19,24 @@ Changes vs. the original:
   builds its synthetic corpus as plain in-memory dicts, so this avoids a
   pointless json.dumps/json.loads roundtrip per example per epoch.
 
-Note on `eval()`: `sample_points_for_equation` and `_constants_loss` call
-`eval()` on equation strings. These strings only ever come from this
-module's own generator (`symbolicgpt.generator`) or from token sequences
-sampled from a GPT trained on that generator's output -- never from
-external/untrusted input -- matching the same "internally-generated
-expression string" pattern already used (and documented) in
-`kd/dataset/_base.py:make_numpy_expr`. The `from numpy import *` below,
-followed by the safe `divide`/`sqrt`/`log`/`exp` overrides, is load-bearing:
-it's what makes `eval()` see NaN-guarded versions of those functions
-instead of numpy's raw ones, so a generated equation with e.g. `sqrt` of a
-negative number degrades to a large-but-finite value instead of crashing
-or returning a complex number.
+Note on `eval()`: generated and sampled expressions are checked against an
+arithmetic AST grammar before evaluation in an explicit NumPy namespace
+with no builtins. The original protected sqrt/log/exp behavior is retained;
+for example, sqrt uses abs internally. Constant fitting rejects expressions
+unless their loss and predictions are finite on every training row.
 """
 
+import ast
 import builtins
 import json
+import math
 import random
 import re
+from functools import lru_cache
 
 import numpy as np
 import torch
-from numpy import *  # noqa: F401,F403 -- see eval() note above
+from numpy import *  # noqa: F401,F403 -- retained for vendored legacy helpers
 from scipy.optimize import minimize
 from torch.nn import functional as F
 from torch.utils.data import Dataset
@@ -377,24 +373,54 @@ def sample_points_for_equation(eq, n_points=2, n_vars=3, decimals=4, min_x=0, ma
     return X.tolist(), Y.tolist()
 
 
+_EXPRESSION_FUNCTIONS = {
+    "sin": np.sin, "cos": np.cos, "tan": np.tan,
+    "sqrt": sqrt, "log": log, "exp": exp,
+    "abs": np.abs, "Abs": np.abs,
+}
+
+
+@lru_cache(maxsize=256)
+def _compile_expression(expression, num_vars, allow_constants=False):
+    """Accept only scalar arithmetic in the generated equation grammar."""
+    try:
+        tree = ast.parse(expression, mode="eval")
+    except (SyntaxError, TypeError, ValueError) as exc:
+        raise ValueError("Invalid SymbolicGPT expression syntax") from exc
+    names = {f"x{i + 1}" for i in range(num_vars)}
+    if allow_constants:
+        names.add("C")
+    pending = [tree.body]
+    while pending:
+        node = pending.pop()
+        if isinstance(node, ast.BinOp) and isinstance(
+            node.op, (ast.Add, ast.Sub, ast.Mult, ast.Div, ast.Pow)
+        ):
+            pending.extend([node.left, node.right])
+        elif isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.UAdd, ast.USub)):
+            pending.append(node.operand)
+        elif isinstance(node, ast.Name) and node.id in names:
+            continue
+        elif (isinstance(node, ast.Constant)
+              and type(node.value) in (builtins.int, builtins.float)
+              and math.isfinite(node.value)):
+            continue
+        elif (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+              and node.func.id in _EXPRESSION_FUNCTIONS
+              and len(node.args) == 1 and not node.keywords):
+            pending.extend(node.args)
+        else:
+            raise ValueError("Unsupported SymbolicGPT expression grammar or variable")
+    return compile(tree, "<SymbolicGPT expression>", "eval")
+
+
 def _expression_namespace(X):
     """Build the restricted vector namespace used for generated equations."""
     X = np.asarray(X, dtype=float)
     if X.ndim == 1:
         X = X.reshape(-1, 1)
     namespace = {f"x{i + 1}": X[:, i] for i in range(X.shape[1])}
-    namespace.update(
-        {
-            "sin": np.sin,
-            "cos": np.cos,
-            "tan": np.tan,
-            "sqrt": sqrt,
-            "log": log,
-            "exp": exp,
-            "abs": np.abs,
-            "Abs": np.abs,
-        }
-    )
+    namespace.update(_EXPRESSION_FUNCTIONS)
     return X, namespace
 
 
@@ -406,20 +432,27 @@ def evaluate_expression(expression, X):
     arrays performs the same elementwise arithmetic in one NumPy call.
     """
     X, namespace = _expression_namespace(X)
+    code = _compile_expression(expression, X.shape[1])
     with np.errstate(all="ignore"):
-        values = eval(expression, {"__builtins__": {}}, namespace)
+        values = eval(code, {"__builtins__": {}}, namespace)
+    if np.iscomplexobj(values):
+        raise ValueError("SymbolicGPT expressions must return real predictions")
     values = np.asarray(values, dtype=float)
     if values.ndim == 0:
         values = np.full(X.shape[0], float(values), dtype=float)
-    return values.reshape(-1)
+    if values.shape != (X.shape[0],):
+        raise ValueError("SymbolicGPT expressions must return one prediction per input row")
+    return values
 
 
 def _constants_loss(constants, skeleton_eqn, X, Y):
     """Mean relative error of `skeleton_eqn` (with `C` placeholders filled
     in from `constants`, in order) against (X, Y). Minimized by
     `fit_constants` via `scipy.optimize.minimize`."""
-    eq = skeleton_eqn.replace("C", "{}").format(*constants)
     try:
+        if not np.isfinite(constants).all():
+            return float("inf")
+        eq = skeleton_eqn.replace("C", "({})").format(*constants)
         y_hat = evaluate_expression(eq, X)
     except Exception:
         return float("inf")
@@ -427,27 +460,38 @@ def _constants_loss(constants, skeleton_eqn, X, Y):
     y = np.asarray(Y, dtype=float).reshape(-1)
     if len(y_hat) != len(y):
         return float("inf")
-    valid = np.isfinite(y) & np.isfinite(y_hat)
-    if not np.any(valid):
+    if len(y) == 0 or not np.isfinite(y).all() or not np.isfinite(y_hat).all():
         return float("inf")
 
     # Match the old point-at-a-time ``relativeErr`` denominator: for a
     # scalar target np.linalg.norm(y + eps) is abs(y + eps).
-    denominator = np.abs(y[valid] + 1e-5)
+    denominator = np.abs(y + 1e-5)
     denominator = np.maximum(denominator, np.finfo(float).eps)
-    return float(np.mean((y_hat[valid] - y[valid]) ** 2 / denominator))
+    with np.errstate(over="ignore", invalid="ignore"):
+        loss = float(np.mean((y_hat - y) ** 2 / denominator))
+    return loss if np.isfinite(loss) else float("inf")
 
 
 def fit_constants(skeleton_eqn, X, Y):
     """
     Fit the `C` placeholders in `skeleton_eqn` to (X, Y) by minimizing
     `_constants_loss`. Returns (concrete_equation_str, final_loss).
+    Raises ValueError for invalid grammar, nonfinite fitted constants/loss,
+    or predictions that are not finite on every training row.
     """
+    X, _ = _expression_namespace(X)
+    _compile_expression(skeleton_eqn, X.shape[1], allow_constants=True)
     num_constants = skeleton_eqn.count("C")
-    if num_constants == 0:
-        return skeleton_eqn, _constants_loss([], skeleton_eqn, X, Y)
-
-    c0 = [1.0] * num_constants
-    result = minimize(_constants_loss, c0, args=(skeleton_eqn, X, Y))
-    concrete_eqn = skeleton_eqn.replace("C", "{}").format(*result.x)
-    return concrete_eqn, float(result.fun)
+    concrete_eqn = skeleton_eqn
+    if num_constants:
+        c0 = [1.0] * num_constants
+        result = minimize(_constants_loss, c0, args=(skeleton_eqn, X, Y))
+        if not np.isfinite(result.x).all() or not np.isfinite(result.fun):
+            raise ValueError("SymbolicGPT constant fitting returned nonfinite constants or loss")
+        concrete_eqn = skeleton_eqn.replace("C", "({})").format(*result.x)
+    # Recheck the exported expression over the complete data, not just the
+    # optimizer's cached objective or a subset of finite predictions.
+    loss = _constants_loss([], concrete_eqn, X, Y)
+    if not np.isfinite(loss):
+        raise ValueError("SymbolicGPT candidate has nonfinite predictions or loss")
+    return concrete_eqn, loss

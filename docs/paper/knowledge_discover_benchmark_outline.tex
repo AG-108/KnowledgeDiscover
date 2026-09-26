@@ -210,8 +210,8 @@ Adapter ID & Registered tasks & Implementation note \\
 \code{deepmod} & PDE & DeepMoD neural and sparse-model components. \\
 \code{pdefind} & PDE & PDE-FIND adapter using numerical regression. \\
 \code{pdenet} & PDE & PDE-Net adapter with a model-based evolution predictor. \\
-\code{weakform} & PDE & Currently finite differences plus thresholded least squares;
-not an integral weak-form or WSINDy implementation. \\
+\code{weakform} & PDE & Independent scalar-1D WSINDy-PDE adaptation using compact
+test functions, convolutional weak derivatives, scaling, and MSTLS. \\
 \code{eqgpt} & PDE & EqGPT adapter with CUDA support. \\
 \code{dso} & SR, ODE & PyTorch-based DSO integration; document departure from upstream. \\
 \code{symbolicgpt} & SR, ODE & Transformer-based symbolic-regression adapter. \\
@@ -225,9 +225,10 @@ registered in the inspected runner. Its inclusion requires an adapter, a baselin
 configuration, applicable task definitions, and evaluation tests. Keep it out of
 the reported 13 adapters until that work is complete. PySINDy installation alone
 likewise does not establish a separately evaluated baseline.}
-\todo{Resolve display names and upstream citations. Label the current
-\code{weakform} adapter as a finite-difference least-squares baseline in results.
-Audit pretrained checkpoints, training corpora, and test-set overlap for all
+\todo{Resolve remaining display names and upstream citations. State the scalar-1D
+scope of the WSINDy-PDE adaptation and distinguish it from upstream multidimensional,
+multifield, trigonometric, automatic-support, and RGLS options. Audit pretrained
+checkpoints, training corpora, and test-set overlap for all
 learned priors. Specify which physics or dimensional information each method receives.}
 
 \subsection{Execution and reproducibility infrastructure}

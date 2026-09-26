@@ -1,0 +1,332 @@
+{
+  "profile": "full",
+  "tasks": [
+    "pde"
+  ],
+  "models": [
+    "dscv",
+    "spr",
+    "sga",
+    "dlga",
+    "deepmod",
+    "pdefind",
+    "pdenet",
+    "weakform",
+    "eqgpt",
+    "sindy",
+    "pysindy"
+  ],
+  "datasets": [
+    "*"
+  ],
+  "seeds": [
+    0
+  ],
+  "timeout": 300,
+  "resume": true,
+  "output_dir": "results/tuning/pde_library_reference_diagnostic",
+  "overrides": {
+    "models": {
+      "dscv": {
+        "n_iterations": 10,
+        "n_samples_per_batch": 100
+      },
+      "spr": {
+        "n_iterations": 10,
+        "n_samples_per_batch": 50
+      },
+      "sga": {
+        "sga_run": 5,
+        "num": 15,
+        "depth": 3,
+        "width": 3
+      },
+      "dlga": {
+        "max_iter": 3000,
+        "operators": [
+          "u",
+          "u_x",
+          "u_xx",
+          "u_xxx"
+        ],
+        "verbose": false
+      },
+      "deepmod": {
+        "poly_order": 3,
+        "diff_order": 3,
+        "epochs": 10,
+        "batch_size": 256
+      },
+      "pdefind": {
+        "derivative_order": 3,
+        "threshold": 0.03
+      },
+      "pdenet": {
+        "max_iter": 20,
+        "batch_size": 4
+      },
+      "weakform": {
+        "polynomial_degree": 3,
+        "max_derivative": 3,
+        "max_weak_samples": 3000,
+        "n_thresholds": 30
+      },
+      "eqgpt": {
+        "gpt_pretrain_epochs": 8,
+        "surrogate_iters": 2000,
+        "choose": 500,
+        "choose_validate": 100,
+        "optimize_epochs": 5,
+        "samples": 80
+      },
+      "sindy": {
+        "polynomial_degree": 2,
+        "threshold": 0.05,
+        "alpha": 1e-06,
+        "max_iter": 100,
+        "derivative_order": 3
+      },
+      "pysindy": {
+        "polynomial_degree": 2,
+        "reg_weight_lam": 0.005,
+        "tolerance": 1e-05,
+        "max_iter": 100,
+        "derivative_order": 3
+      }
+    },
+    "run": {
+      "max_train_samples": 3000,
+      "dscv_epochs": 10,
+      "spr_pretrain_epochs": 20,
+      "spr_pinn_epochs": 10,
+      "spr_iterations": 1,
+      "dlga_samples": 500,
+      "dlga_population": 40,
+      "dlga_generations": 20
+    },
+    "model_datasets": {
+      "dscv": {
+        "burgers": {
+          "binary_operators": [
+            "add",
+            "mul",
+            "diff",
+            "diff2"
+          ],
+          "unary_operators": [
+            "n2"
+          ],
+          "candidate_space_label": "reference_diagnostic"
+        },
+        "kdv": {
+          "binary_operators": [
+            "add",
+            "mul",
+            "diff",
+            "diff3"
+          ],
+          "unary_operators": [
+            "n2"
+          ],
+          "candidate_space_label": "reference_diagnostic"
+        },
+        "chafee-infante": {
+          "binary_operators": [
+            "add",
+            "sub",
+            "diff2"
+          ],
+          "unary_operators": [
+            "n3"
+          ],
+          "candidate_space_label": "reference_diagnostic"
+        }
+      },
+      "spr": {
+        "burgers": {
+          "binary_operators": [
+            "add_t",
+            "mul_t",
+            "diff_t",
+            "diff2_t"
+          ],
+          "unary_operators": [
+            "n2_t"
+          ],
+          "candidate_space_label": "reference_diagnostic"
+        },
+        "kdv": {
+          "binary_operators": [
+            "add_t",
+            "mul_t",
+            "diff_t",
+            "diff3_t"
+          ],
+          "unary_operators": [
+            "n2_t"
+          ],
+          "candidate_space_label": "reference_diagnostic"
+        },
+        "chafee-infante": {
+          "binary_operators": [
+            "add_t",
+            "sub_t",
+            "diff2_t"
+          ],
+          "unary_operators": [
+            "n3_t"
+          ],
+          "candidate_space_label": "reference_diagnostic"
+        }
+      },
+      "dlga": {
+        "burgers": {
+          "operators": [
+            "u",
+            "u_x",
+            "u_xx"
+          ],
+          "candidate_space_label": "reference_diagnostic"
+        },
+        "kdv": {
+          "operators": [
+            "u",
+            "u_x",
+            "u_xxx"
+          ],
+          "candidate_space_label": "reference_diagnostic"
+        },
+        "chafee-infante": {
+          "operators": [
+            "u",
+            "u_xx"
+          ],
+          "candidate_space_label": "reference_diagnostic"
+        }
+      },
+      "deepmod": {
+        "burgers": {
+          "poly_order": 2,
+          "diff_order": 2,
+          "candidate_space_label": "reference_diagnostic"
+        },
+        "kdv": {
+          "poly_order": 2,
+          "diff_order": 3,
+          "candidate_space_label": "reference_diagnostic"
+        },
+        "chafee-infante": {
+          "poly_order": 3,
+          "diff_order": 2,
+          "candidate_space_label": "reference_diagnostic"
+        }
+      },
+      "pdefind": {
+        "burgers": {
+          "derivative_order": 2,
+          "terms": [
+            "u*u_x",
+            "u_xx"
+          ],
+          "candidate_space_label": "reference_diagnostic"
+        },
+        "kdv": {
+          "derivative_order": 3,
+          "terms": [
+            "u*u_x",
+            "u_xxx"
+          ],
+          "candidate_space_label": "reference_diagnostic"
+        },
+        "chafee-infante": {
+          "derivative_order": 2,
+          "terms": [
+            "u",
+            "u_xx",
+            "u^3"
+          ],
+          "candidate_space_label": "reference_diagnostic"
+        }
+      },
+      "weakform": {
+        "burgers": {
+          "terms": [
+            [
+              2,
+              1
+            ],
+            [
+              1,
+              2
+            ]
+          ],
+          "candidate_space_label": "reference_diagnostic"
+        },
+        "kdv": {
+          "terms": [
+            [
+              2,
+              1
+            ],
+            [
+              1,
+              3
+            ]
+          ],
+          "candidate_space_label": "reference_diagnostic"
+        },
+        "chafee-infante": {
+          "terms": [
+            [
+              1,
+              0
+            ],
+            [
+              1,
+              2
+            ],
+            [
+              3,
+              0
+            ]
+          ],
+          "candidate_space_label": "reference_diagnostic"
+        }
+      },
+      "sindy": {
+        "burgers": {
+          "derivative_order": 2,
+          "polynomial_degree": 2,
+          "candidate_space_label": "reference_diagnostic"
+        },
+        "kdv": {
+          "derivative_order": 3,
+          "polynomial_degree": 2,
+          "candidate_space_label": "reference_diagnostic"
+        },
+        "chafee-infante": {
+          "derivative_order": 2,
+          "polynomial_degree": 3,
+          "candidate_space_label": "reference_diagnostic"
+        }
+      },
+      "pysindy": {
+        "burgers": {
+          "derivative_order": 2,
+          "polynomial_degree": 2,
+          "candidate_space_label": "reference_diagnostic"
+        },
+        "kdv": {
+          "derivative_order": 3,
+          "polynomial_degree": 2,
+          "candidate_space_label": "reference_diagnostic"
+        },
+        "chafee-infante": {
+          "derivative_order": 2,
+          "polynomial_degree": 3,
+          "candidate_space_label": "reference_diagnostic"
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,29 @@
+{
+  "profile": "full",
+  "tasks": ["sr", "ode"],
+  "models": ["symbolicgpt"],
+  "datasets": ["*"],
+  "seeds": [0],
+  "timeout": 240,
+  "resume": true,
+  "output_dir": "results/tuning/symbolicgpt_dataset_declared",
+  "overrides": {
+    "models": {
+      "symbolicgpt": {
+        "use_dataset_function_set": true,
+        "search_space_policy": "declared",
+        "pretrain_corpus_size": 250,
+        "pretrain_epochs": 8,
+        "num_candidates": 24,
+        "max_conditioning_points": 256,
+        "candidate_batch_size": 16
+      }
+    },
+    "model_datasets": {
+      "symbolicgpt": {
+        "Korns-*": {"pretrain_corpus_size": 150, "pretrain_epochs": 5},
+        "Livermore2-*": {"pretrain_corpus_size": 150, "pretrain_epochs": 5}
+      }
+    }
+  }
+}

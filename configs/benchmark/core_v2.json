@@ -1,9 +1,21 @@
 {
   "profile": "smoke",
-  "models": ["sindy", "integral_weak_pde"],
-  "datasets": ["ode_core_*", "burgers", "kdv", "chafee-infante"],
+  "models": ["sindy", "weakform"],
+  "datasets": ["ode_core_damped_oscillator", "ode_core_pendulum", "ode_core_duffing", "ode_core_van_der_pol", "ode_core_sir", "ode_core_fitzhugh_nagumo", "ode_core_rational", "ode_core_robertson", "burgers", "kdv", "chafee-infante"],
   "seeds": [0, 1, 2, 3, 4],
   "timeout": 300,
   "output_dir": "results/core_v2",
-  "overrides": {"models": {}, "datasets": {}, "run": {}}
+  "overrides": {
+    "models": {},
+    "datasets": {},
+    "model_datasets": {
+      "sindy": {
+        "ode_core_damped_oscillator": {"polynomial_degree": 1},
+        "ode_core_duffing": {"polynomial_degree": 3},
+        "ode_core_van_der_pol": {"polynomial_degree": 3},
+        "ode_core_fitzhugh_nagumo": {"polynomial_degree": 3}
+      }
+    },
+    "run": {}
+  }
 }

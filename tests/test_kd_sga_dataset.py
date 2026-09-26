@@ -47,6 +47,23 @@ def test_fit_dataset_uses_adapter():
     assert isinstance(model.context_, DummyContext)
 
 
+def test_fit_dataset_accepts_nonpreset_grid_dataset():
+    dataset = load_pde_grid("fisher")
+
+    model = KD_SGA(sga_run=1, depth=1, width=1)
+    result = model.fit_dataset(
+        dataset,
+        context_cls=DummyContext,
+        solver_cls=DummySolver,
+    )
+
+    assert result is model
+    assert model.config_.problem_name == "fisher"
+    np.testing.assert_allclose(model.config_.u_data, dataset.usol)
+    assert model.config_.right_side == "right_side = ut"
+    assert model.config_.left_side == "left_side = ut"
+
+
 def test_fit_dataset_requires_pdedataset():
     model = KD_SGA()
     with pytest.raises(TypeError):

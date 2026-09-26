@@ -2499,18 +2499,17 @@ def load_cyt_dataset(
         gradients/wall-distance/Ma/AoA/Re (excludes raw coordinates X,Y and
         other closure-output columns).
     """
-    columns = load_cyt_flowfeature_raw(case)
-
-    if target not in columns:
+    if target not in _CYT_COLUMNS:
         raise ValueError(f"Unknown target column {target!r}. Available: {_CYT_COLUMNS}")
 
     feats = (
         list(feature_columns) if feature_columns is not None else list(_CYT_DEFAULT_FEATURE_COLUMNS)
     )
     for feat in feats:
-        if feat not in columns:
+        if feat not in _CYT_COLUMNS:
             raise ValueError(f"Unknown feature column {feat!r}. Available: {_CYT_COLUMNS}")
 
+    columns = load_cyt_flowfeature_raw(case)
     X = np.column_stack([columns[feat] for feat in feats])
     y = columns[target]
 

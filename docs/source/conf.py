@@ -66,12 +66,12 @@ html_theme = "alabaster"  # Use the standard Alabaster theme.
 # Add any paths that contain custom static files (such as style sheets) here,
 # relative to this directory. They are copied after the builtin static files,
 # so a file named "default.css" will overwrite the builtin "default.css".
-html_static_path = ["_static"]
+html_static_path = []
 
 # Expose language-switch links in the theme sidebar.
 html_theme_options = {
-    "github_user": "Scientific-Artificial-Intelligence-Lab",
-    "github_repo": "kd",
+    "github_user": "AG-108",
+    "github_repo": "KnowledgeDiscover",
     "description": "Knowledge Discovery Documentation",
     "fixed_sidebar": True,
     "show_powered_by": False,  # Hide the default Sphinx footer.

@@ -1,0 +1,27 @@
+{
+  "profile": "full",
+  "tasks": ["ode"],
+  "models": ["symbolicgpt"],
+  "datasets": [
+    "ode_core_damped_oscillator", "ode_core_pendulum", "ode_core_duffing",
+    "ode_core_van_der_pol", "ode_core_sir", "ode_core_fitzhugh_nagumo",
+    "ode_core_rational", "ode_core_robertson"
+  ],
+  "seeds": [0],
+  "timeout": 300,
+  "resume": false,
+  "output_dir": "results/tuning/symbolicgpt_core_ode_budget_pilot",
+  "overrides": {
+    "models": {
+      "symbolicgpt": {
+        "use_dataset_function_set": false,
+        "pretrain_corpus_size": 250,
+        "pretrain_epochs": 8,
+        "num_candidates": 24,
+        "max_conditioning_points": 256,
+        "candidate_batch_size": 16,
+        "dataloader_workers": 0
+      }
+    }
+  }
+}

@@ -1,0 +1,9 @@
+# Isolated PyOperon/Core ODE runner on Python 3.10 (Windows or Linux).
+# Keep NumPy 2 out of the existing Python 3.9 kd-env.
+numpy==2.0.2
+pandas==2.2.3
+scikit-learn==1.6.1
+scipy==1.13.1
+sympy==1.13.1
+matplotlib==3.9.4
+pyoperon==0.6.1

@@ -1,15 +1,20 @@
 #!/usr/bin/env bash
 
-set +e
-cd /root/KnowledgeDiscover || exit 1
+# Override these for a historical worktree or a separate persistent volume.
+KD_PROJECT="${KD_PROJECT:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)}"
+KD_STORAGE_ROOT="${KD_STORAGE_ROOT:-$HOME/.local/share/kd}"
 
+set +e
+cd "$KD_PROJECT" || exit 1
+
+mkdir -p logs
 rm -f logs/full_no_llmsr_20260917.exit
 OMP_NUM_THREADS=1 \
 MKL_NUM_THREADS=1 \
 OPENBLAS_NUM_THREADS=1 \
 NUMEXPR_NUM_THREADS=1 \
 JULIA_NUM_THREADS=2 \
-/opt/conda/envs/pdebench/bin/python -u scripts/run_parallel_benchmark.py \
+"${KD_PYTHON:-python}" -u scripts/run_parallel_benchmark.py \
   --manifest results/full_benchmark_20260917/gpu/benchmark_manifest.json \
   --manifest results/full_benchmark_20260917/cpu_classical/benchmark_manifest.json \
   --manifest results/full_benchmark_20260917/cpu_sparse/benchmark_manifest.json \

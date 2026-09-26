@@ -5,9 +5,6 @@ description = "Knowledge discover and plotting framework"
 readme = "README.md"
 requires-python = ">=3.8"
 license = "MIT"
-authors = [
-  { name = "Your Name", email = "your@email.com" }
-]
 
 dependencies = []
 
@@ -23,23 +20,17 @@ operon = ["pyoperon==0.6.1; python_version >= '3.10'"]
 requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["kd", "kd.*"]
+namespaces = false
+
 [tool.setuptools.package-data]
 "kd.dataset" = [
   "data/*.mat",
   "data/*.csv",
   "data/*.npy",
   "data/*.txt",
-  "CYT/README.md",
-  "CYT/*/Output/FlowFeature.dat",
-  "ViscousGravityCurrent/README.md",
-  "ViscousGravityCurrent/data/*.dat",
-  "Discovery_of_soild_consititutive/LICENSE",
-  "Discovery_of_soild_consititutive/README.md",
-  "Discovery_of_soild_consititutive/data/data_DIF/*.xlsx",
-  "Discovery_of_soild_consititutive/data/data_rubber/train/*.xlsx",
-  "Discovery_of_soild_consititutive/data/data_rubber/test/*.xlsx",
-  "Discovery_of_soild_consititutive/data/data_strain_stress/*.xlsx",
-  "Discovery_of_soild_consititutive/data/saved_data_hardening_strain_rate/*.pkl",
 ]
 "kd.model.llmsr" = ["LICENSE", "UPSTREAM.md"]
 

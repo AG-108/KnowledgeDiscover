@@ -1,0 +1,27 @@
+{
+  "profile": "full",
+  "tasks": ["sr", "ode"],
+  "models": ["dscv"],
+  "datasets": ["*"],
+  "seeds": [0],
+  "timeout": 300,
+  "resume": true,
+  "output_dir": "results/tuning/discover_dataset_declared",
+  "overrides": {
+    "models": {
+      "dscv": {
+        "use_dataset_function_set": true,
+        "search_space_policy": "declared",
+        "n_iterations": 10,
+        "n_samples_per_batch": 100
+      }
+    },
+    "model_datasets": {
+      "dscv": {
+        "Korns-*": {"n_iterations": 5},
+        "Livermore2-*": {"n_iterations": 5}
+      }
+    },
+    "run": {"dscv_epochs": 5}
+  }
+}

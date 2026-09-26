@@ -1,0 +1,46 @@
+{
+  "profile": "full",
+  "tasks": ["ode", "pde"],
+  "models": ["sindy", "pysindy"],
+  "datasets": ["*"],
+  "seeds": [0],
+  "timeout": 180,
+  "resume": true,
+  "output_dir": "results/tuning/sindy_polynomial_adaptive",
+  "overrides": {
+    "models": {
+      "sindy": {
+        "polynomial_degree": 2,
+        "threshold": 0.05,
+        "alpha": 0.000001,
+        "max_iter": 100
+      },
+      "pysindy": {
+        "polynomial_degree": 2,
+        "reg_weight_lam": 0.005,
+        "tolerance": 0.00001,
+        "max_iter": 100
+      }
+    },
+    "model_datasets": {
+      "sindy": {
+        "ode_core_oscillator": {"polynomial_degree": 1},
+        "ode_core_rational": {"polynomial_degree": 3},
+        "ode_core_damped_oscillator": {"polynomial_degree": 1},
+        "ode_core_duffing": {"polynomial_degree": 3},
+        "ode_core_van_der_pol": {"polynomial_degree": 3},
+        "ode_core_fitzhugh_nagumo": {"polynomial_degree": 3},
+        "ode_core_brusselator": {"polynomial_degree": 3}
+      },
+      "pysindy": {
+        "ode_core_oscillator": {"polynomial_degree": 1},
+        "ode_core_rational": {"polynomial_degree": 3},
+        "ode_core_damped_oscillator": {"polynomial_degree": 1},
+        "ode_core_duffing": {"polynomial_degree": 3},
+        "ode_core_van_der_pol": {"polynomial_degree": 3},
+        "ode_core_fitzhugh_nagumo": {"polynomial_degree": 3},
+        "ode_core_brusselator": {"polynomial_degree": 3}
+      }
+    }
+  }
+}

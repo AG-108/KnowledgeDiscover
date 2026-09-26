@@ -57,7 +57,6 @@ BASELINES = {
     "pdefind": {"tasks": ("pde",), "example": "kd_PDEfind_example.py", "accelerator": "cpu"},
     "pdenet": {"tasks": ("pde",), "example": "kd_PDENet_example.py", "accelerator": "cuda"},
     "weakform": {"tasks": ("pde",), "example": "kd_weakform_example.py", "accelerator": "cpu"},
-    "integral_weak_pde": {"tasks": ("pde",), "example": "kd_integral_weak_pde_example.py", "accelerator": "cpu"},
     "eqgpt": {"tasks": ("pde",), "example": "kd_eqgpt_example.py", "accelerator": "cuda"},
     "dso": {"tasks": ("sr", "ode"), "example": "kd_dso_example.py", "accelerator": "cuda"},
     "e2e": {"tasks": ("sr", "ode"), "example": "kd_e2e_example.py", "accelerator": "cuda"},
@@ -98,7 +97,7 @@ MODEL_CLASSES = {
     "pysr": ("pysr", "PySRRegressor"),
     "sindy": ("kd.model.kd_sindy", "SINDyModel"),
     "pysindy": ("kd.model.kd_sindy", "PySINDyModel"),
-    "integral_weak_pde": ("kd.model.kd_wsindy", "IntegralWeakPDEModel"),
+    "weakform": ("kd.model.kd_wsindy", "WSINDyPDEModel"),
     "llmsr": ("kd.model.kd_llmsr", "KD_LLMSR"),
     "pyoperon": ("pyoperon.sklearn", "SymbolicRegressor"),
 }
@@ -122,8 +121,9 @@ PDE_REFERENCE_RHS = {
     "kdv": "-u*u_x - 0.0025*u_xxx",
     "chafee-infante": "u_xx - u + u**3",
 }
-METRIC_PROTOCOL_VERSION = "2.0"
+METRIC_PROTOCOL_VERSION = "2.1"
 PDE_SUPPORT_METRIC_VERSION = "2.0"
+SR_STRUCTURE_METRIC_VERSION = "1.0"
 
 
 def _deep_update(target, changes):
@@ -321,8 +321,8 @@ def validate_benchmark_config(value, catalog):
     for model, device in value["devices"].items():
         validate_device_assignment(model, device)
     overrides = value["overrides"]
-    if set(overrides) - {"models", "datasets", "run", "evaluation"}:
-        raise ValueError("overrides supports only models, datasets, run, evaluation")
+    if set(overrides) - {"models", "model_datasets", "datasets", "run", "evaluation"}:
+        raise ValueError("overrides supports only models, model_datasets, datasets, run, evaluation")
     for key, choices in (("models", BASELINES), ("datasets", catalog)):
         section = overrides.get(key, {})
         if not isinstance(section, dict) or any(not isinstance(v, dict) for v in section.values()):
@@ -330,6 +330,19 @@ def validate_benchmark_config(value, catalog):
         unknown = set(section) - set(choices)
         if unknown:
             raise ValueError(f"Unknown overrides.{key}: {sorted(unknown)}")
+    model_datasets = overrides.get("model_datasets", {})
+    if not isinstance(model_datasets, dict) or set(model_datasets) - set(BASELINES):
+        raise ValueError("overrides.model_datasets must map known models to dataset patterns")
+    for model, patterns in model_datasets.items():
+        if not isinstance(patterns, dict):
+            raise ValueError(f"overrides.model_datasets.{model} must be a JSON object")
+        for pattern, model_params in patterns.items():
+            if not isinstance(pattern, str) or not any(
+                fnmatch.fnmatchcase(name, pattern) for name in catalog
+            ):
+                raise ValueError(f"No dataset matches overrides.model_datasets.{model}.{pattern}")
+            if not isinstance(model_params, dict) or "device" in model_params:
+                raise ValueError("Dataset-specific model overrides must be objects without device")
     if not isinstance(overrides.get("run", {}), dict):
         raise ValueError("overrides.run must be a JSON object")
     evaluation = overrides.get("evaluation", {})
@@ -467,6 +480,9 @@ def build_experiments(
                 model_override = copy.deepcopy(config.get("models", {}).get(model, {}))
                 override_device = model_override.pop("device", None)
                 _deep_update(model_params, model_override)
+                for pattern, dataset_override in config.get("model_datasets", {}).get(model, {}).items():
+                    if fnmatch.fnmatchcase(name, pattern):
+                        _deep_update(model_params, copy.deepcopy(dataset_override))
                 if model == "e2e":
                     for key in ("checkpoint_path", "source_dir"):
                         if model_params.get(key):
@@ -546,7 +562,7 @@ def check_compatibility(cases, excluded=None, progress=False):
                     _new_model(model, next(c["model_params"] for c in cases if c["model"] == model)).check_available()
                 elif model == "pysindy":
                     importlib.import_module("pysindy")
-                elif model != "weakform":
+                else:
                     module, attribute = MODEL_CLASSES[model]
                     getattr(importlib.import_module(module), attribute)
             runtime[model] = {"status": "ok", "seconds": time.perf_counter() - start}
@@ -631,15 +647,6 @@ def check_compatibility(cases, excluded=None, progress=False):
                 try:
                     prepared = prepare_pde(dataset, case["model"])
                     temporal_block_holdout(prepared, case["run_params"]["test_size"])
-                    if case["model"] == "sga" and dataset_name not in {
-                        "burgers",
-                        "kdv",
-                        "chafee-infante",
-                    }:
-                        raise SkipCase(
-                            "SGA SolverConfig currently defines only burgers, kdv and "
-                            "chafee-infante presets"
-                        )
                 except SkipCase as exc:
                     row.update(status="incompatible", reason=str(exc))
                 except Exception as exc:
@@ -790,7 +797,9 @@ def regression_problems(dataset, case):
             d[k] for k in ("X_train", "y_train", "X_test", "y_test")
         )
         names = [f"x{i + 1}" for i in range(X_train.shape[1])]
-        split, targets, metadata = "provided_benchmark_split", ["y"], {}
+        split, targets, metadata = "provided_benchmark_split", ["y"], {
+            "benchmark_function_set": list(dataset.function_set),
+        }
         ground_truth = case.get("ground_truth")
     elif case["dataset"] == "rubber_train":
         test = load_dataset("rubber_test")
@@ -884,9 +893,11 @@ _PREFIX_ARITY = {
     "cos": 1,
     "tan": 1,
     "exp": 1,
+    "expneg": 1,
     "log": 1,
     "sqrt": 1,
     "abs": 1,
+    "tanh": 1,
 }
 
 
@@ -928,9 +939,11 @@ def _prefix_sympy(text):
                 "cos": sp.cos,
                 "tan": sp.tan,
                 "exp": sp.exp,
+                "expneg": lambda a: sp.exp(-a),
                 "log": sp.log,
                 "sqrt": sp.sqrt,
                 "abs": sp.Abs,
+                "tanh": sp.tanh,
             }
             return operations[lower](*args)
         if lower == "const":
@@ -947,6 +960,35 @@ def _prefix_sympy(text):
     return result
 
 
+_PRETTY_SUBSCRIPT_DIGITS = str.maketrans("₀₁₂₃₄₅₆₇₈₉", "0123456789")
+_PRETTY_SUPERSCRIPT_DIGITS = str.maketrans("⁰¹²³⁴⁵⁶⁷⁸⁹⁺⁻", "0123456789+-")
+
+
+def _normalize_pretty_expression(text):
+    """Translate unambiguous single-line PhySO display glyphs to infix text.
+
+    Multi-line SymPy pretty output encodes fractions and powers by position;
+    flattening it would change the expression, so leave it unparsed.
+    """
+    if text.isascii():
+        return text
+    if "\n" in text or "\r" in text:
+        return None
+    text = text.translate(_PRETTY_SUBSCRIPT_DIGITS)
+    text = (
+        text.replace("⋅", "*")
+        .replace("×", "*")
+        .replace("−", "-")
+        .replace("π", "pi")
+    )
+    text = re.sub(
+        r"(?<=[\w)])([⁰¹²³⁴⁵⁶⁷⁸⁹⁺⁻]+)",
+        lambda match: f"**({match.group(1).translate(_PRETTY_SUPERSCRIPT_DIGITS)})",
+        text,
+    )
+    return text if text.isascii() else None
+
+
 def expression_sympy(text, variable_names=()):
     """Convert common baseline expression formats to one SymPy expression."""
     import sympy as sp
@@ -958,6 +1000,9 @@ def expression_sympy(text, variable_names=()):
         return None
     if "=" in text:
         text = text.split("=", 1)[1].strip()
+    text = _normalize_pretty_expression(text)
+    if text is None:
+        return None
     try:
         prefix = _prefix_sympy(text)
         if prefix is not None:
@@ -1000,8 +1045,10 @@ def expression_sympy(text, variable_names=()):
         "cos": sp.cos,
         "tan": sp.tan,
         "exp": sp.exp,
+        "expneg": lambda a: sp.exp(-a),
         "log": sp.log,
         "sqrt": sp.sqrt,
+        "tanh": sp.tanh,
         "pi": sp.pi,
     }
     text = re.sub(r"\b(?:numpy|np|math)\.", "", text).replace("^", "**")
@@ -1011,8 +1058,118 @@ def expression_sympy(text, variable_names=()):
         return None
 
 
-def expression_metrics(expression, ground_truth=None, variable_names=()):
-    """Return a syntax-tree-like token count and algebraic recovery flag."""
+def _structural_node(node, variable_symbols):
+    """Return a coefficient-free expression signature and aligned coefficients.
+
+    Numeric exponents are retained because they define term form (``x**2`` is
+    structurally different from ``x**3``).  Other numeric constants are treated
+    as coefficients, including scales and offsets inside function arguments.
+    """
+    import sympy as sp
+
+    variables = set(variable_symbols)
+    if not (node.free_symbols & variables) and node.is_number:
+        try:
+            value = float(node.evalf())
+        except (TypeError, ValueError, OverflowError):
+            value = None
+        return ("constant",), ([] if value is None else [value])
+    if isinstance(node, sp.Symbol):
+        return ("symbol", str(node)), []
+    if isinstance(node, sp.Add):
+        records = [_structural_term_record(arg, variables) for arg in node.args]
+        records.sort(key=lambda item: repr(item[0]))
+        return (
+            ("add", tuple(item[0] for item in records)),
+            [value for _, values in records for value in values],
+        )
+    if isinstance(node, sp.Mul):
+        scale = sp.S.One
+        children = []
+        for arg in node.args:
+            if not (arg.free_symbols & variables) and arg.is_number:
+                scale *= arg
+            else:
+                children.append(_structural_node(arg, variables))
+        try:
+            coefficients = [float(scale.evalf())]
+        except (TypeError, ValueError, OverflowError):
+            coefficients = []
+        children.sort(key=lambda item: repr(item[0]))
+        signatures = tuple(item[0] for item in children)
+        coefficients.extend(value for _, values in children for value in values)
+        if not signatures:
+            return ("constant",), coefficients
+        if len(signatures) == 1:
+            return signatures[0], coefficients
+        return ("mul", signatures), coefficients
+    if isinstance(node, sp.Pow):
+        base_signature, coefficients = _structural_node(node.base, variables)
+        # The exponent is part of the term definition, not a fitted coefficient.
+        exponent_signature = sp.srepr(sp.simplify(node.exp))
+        return ("pow", base_signature, exponent_signature), coefficients
+    if isinstance(node, sp.Function):
+        arguments = [_structural_term_record(arg, variables) for arg in node.args]
+        return (
+            (node.func.__name__, tuple(item[0] for item in arguments)),
+            [value for _, values in arguments for value in values],
+        )
+    children = [_structural_node(arg, variables) for arg in node.args]
+    return (
+        (node.func.__name__, tuple(item[0] for item in children)),
+        [value for _, values in children for value in values],
+    )
+
+
+def _structural_term_record(term, variable_symbols):
+    """Return one additive term's signature and coefficient vector."""
+    import sympy as sp
+
+    signature, coefficients = _structural_node(term, variable_symbols)
+    if not isinstance(term, sp.Mul) and not (
+        not (term.free_symbols & set(variable_symbols)) and term.is_number
+    ):
+        # Every nonconstant additive term has an amplitude, even when it is 1.
+        coefficients = [1.0, *coefficients]
+    return signature, coefficients
+
+
+def _structural_terms(expression, variable_symbols):
+    """Expand algebraic sums and return sorted term records."""
+    import sympy as sp
+
+    # Full simplify can be extremely expensive for large GP expressions and is
+    # unnecessary for term-support extraction. SymPy parsing has already
+    # canonicalized elementary arithmetic; expansion exposes additive support.
+    expanded = sp.expand(expression)
+    terms = sp.Add.make_args(expanded)
+    records = [_structural_term_record(term, set(variable_symbols)) for term in terms]
+    return sorted(records, key=lambda item: (repr(item[0]), tuple(item[1])))
+
+
+def _relative_coefficient_error(discovered_records, truth_records):
+    """Return aligned relative L2 error after structural equivalence is known."""
+    import numpy as np
+
+    discovered = np.asarray(
+        [value for _, values in discovered_records for value in values], dtype=float
+    )
+    truth = np.asarray([value for _, values in truth_records for value in values], dtype=float)
+    if discovered.shape != truth.shape or not np.isfinite(discovered).all() or not np.isfinite(truth).all():
+        return None
+    denominator = float(np.linalg.norm(truth))
+    numerator = float(np.linalg.norm(discovered - truth))
+    return numerator / denominator if denominator else numerator
+
+
+def expression_metrics(expression, ground_truth=None, variable_names=(), evaluate_algebraic=True):
+    """Return complexity, structural recovery, and separate coefficient error.
+
+    ``exact_recovery`` is retained as the public compatibility field, but from
+    protocol 2.1 it means exact additive-term structural recovery while ignoring
+    numeric coefficients.  Strict algebraic equality remains available as
+    ``algebraic_exact_recovery``.
+    """
     import sympy as sp
 
     discovered = expression_sympy(expression, variable_names)
@@ -1022,21 +1179,250 @@ def expression_metrics(expression, ground_truth=None, variable_names=()):
         complexity_text,
     )
     complexity = len(tokens) if tokens else None
-    exact = None
+    structural = None
+    algebraic = None
+    coefficient_error = None
     truth = expression_sympy(ground_truth, variable_names)
     if discovered is not None and truth is not None:
         try:
-            exact = int(sp.simplify(discovered - truth) == 0)
+            algebraic = (
+                int(sp.simplify(discovered - truth) == 0)
+                if evaluate_algebraic else None
+            )
         except (TypeError, ValueError, NotImplementedError):
-            exact = None
+            algebraic = None
+        try:
+            symbols = [sp.Symbol(name) for name in variable_names]
+            if not symbols:
+                symbols = sorted(discovered.free_symbols | truth.free_symbols, key=str)
+            discovered_records = _structural_terms(discovered, symbols)
+            truth_records = _structural_terms(truth, symbols)
+            structural = int(
+                [record[0] for record in discovered_records]
+                == [record[0] for record in truth_records]
+            )
+            if structural:
+                coefficient_error = _relative_coefficient_error(
+                    discovered_records, truth_records
+                )
+        except (TypeError, ValueError, NotImplementedError, OverflowError):
+            structural = None
     return {
         "ground_truth_expression": ground_truth,
         "expression_complexity": complexity,
-        "exact_recovery": exact,
+        "exact_recovery": structural,
+        "structural_recovery": structural,
+        "exact_recovery_semantics": "additive_term_structure_ignoring_numeric_coefficients",
+        "structural_recovery_metric_version": SR_STRUCTURE_METRIC_VERSION,
+        "algebraic_exact_recovery": algebraic,
+        "coefficient_error": coefficient_error,
+        "recovery_evaluator_status": (
+            "not_applicable"
+            if ground_truth in (None, "")
+            else ("evaluated" if structural is not None else "unparsed")
+        ),
     }
 
 
+def _gplearn_protected_exp(values):
+    """Finite exponential primitive for gplearn's closed function set."""
+    import numpy as np
+
+    return np.exp(np.clip(values, -100.0, 100.0))
+
+
+def _gplearn_expneg(values):
+    import numpy as np
+
+    return np.exp(np.clip(-values, -100.0, 100.0))
+
+
+def _gplearn_square(values):
+    return values * values
+
+
+def _gplearn_cube(values):
+    return values * values * values
+
+
+def _gplearn_tanh(values):
+    import numpy as np
+
+    return np.tanh(values)
+
+
+def _dataset_search_space(params, metadata, model_name, reference_expression=None):
+    """Resolve a declared benchmark grammar, optionally repairing missing unary functions.
+
+    The reference-informed mode is an explicit oracle-assisted diagnostic; its results
+    must not be pooled with runs using only the published function-set metadata.
+    """
+    params = copy.deepcopy(params)
+    policy = params.pop("search_space_policy", "declared")
+    keep_constant_range = params.pop("keep_constant_range", False)
+    keep_free_constants = params.pop("keep_free_constants", False)
+    keep_fixed_consts = params.pop("keep_fixed_consts", False)
+    if policy not in {"declared", "declared_plus_reference"}:
+        raise ValueError(f"Unknown search_space_policy: {policy!r}")
+    if not params.pop("use_dataset_function_set", False):
+        return params
+    declared = metadata.get("benchmark_function_set")
+    if not declared:
+        return params
+    operations, constants = [], []
+    has_free_constant = False
+    for token in declared:
+        token = str(token).strip()
+        if token == "const":
+            has_free_constant = True
+            continue
+        if token == "poly":
+            # DSO restores this native terminal below. Other baselines must
+            # synthesize polynomial terms from their ordinary operators.
+            continue
+        try:
+            constants.append(float(token))
+            continue
+        except ValueError:
+            operations.append(token)
+    if policy == "declared_plus_reference" and isinstance(reference_expression, str):
+        # The benchmark CSV sometimes omits a function required by its own target
+        # (e.g. Nguyen-8 declares Koza operators but has sqrt(x1) as its target).
+        for operation in ("sin", "cos", "exp", "log", "sqrt", "tan", "tanh", "abs"):
+            if operation not in operations and re.search(
+                rf"(?<![A-Za-z]){operation}\s*\(", reference_expression
+            ):
+                operations.append(operation)
+    if model_name == "gplearn":
+        supported = {
+            "add", "sub", "mul", "div", "sqrt", "log", "abs", "neg", "inv",
+            "max", "min", "sin", "cos", "tan", "tanh", "exp", "expneg", "n2", "n3",
+        }
+        params["function_set"] = [op for op in operations if op in supported]
+        if not keep_constant_range and not has_free_constant and not constants:
+            params["const_range"] = None
+    elif model_name == "physo":
+        params["op_names"] = operations
+        fixed = list(params.get("fixed_consts", [])) if keep_fixed_consts else []
+        params["fixed_consts"] = list(dict.fromkeys(fixed + constants))
+        if not has_free_constant and not keep_free_constants:
+            params.pop("free_consts_names", None)
+            params.pop("free_consts_init_val", None)
+            params.pop("free_consts_units", None)
+    elif model_name == "pyoperon":
+        # Operon uses different names for powers and always needs terminal nodes.
+        aliases = {
+            "n2": ("square",),
+            "n3": ("pow",),
+            "inv": ("div",),
+            "neg": ("sub",),
+            "expneg": ("exp", "sub"),
+        }
+        supported = {
+            "add", "sub", "mul", "div", "sin", "cos", "exp", "log",
+            "sqrt", "tan", "tanh", "abs", "square", "pow",
+        }
+        resolved = []
+        for operation in operations:
+            for symbol in aliases.get(operation, (operation,)):
+                if symbol in supported and symbol not in resolved:
+                    resolved.append(symbol)
+        params["allowed_symbols"] = ",".join(resolved + ["constant", "variable"])
+    elif model_name == "pysr":
+        binary_aliases = {
+            "add": "+", "sub": "-", "mul": "*", "div": "/",
+            "inv": "/", "neg": "-", "expneg": "-",
+        }
+        unary_aliases = {"n2": "square", "n3": "cube", "expneg": "exp"}
+        unary_supported = {
+            "sin", "cos", "exp", "log", "sqrt", "tan", "tanh", "abs",
+            "square", "cube",
+        }
+        binary, unary = [], []
+        for operation in operations:
+            mapped_binary = binary_aliases.get(operation)
+            mapped_unary = unary_aliases.get(operation, operation)
+            if mapped_binary and mapped_binary not in binary:
+                binary.append(mapped_binary)
+            if mapped_unary in unary_supported and mapped_unary not in unary:
+                unary.append(mapped_unary)
+        params["binary_operators"] = binary
+        params["unary_operators"] = unary
+    elif model_name == "dso":
+        # DSO's native vocabulary also accepts fitted constants, fixed numeric
+        # terminals, and its optimized polynomial terminal.
+        tokens = list(operations)
+        tokens.extend(str(value) for value in constants)
+        if has_free_constant:
+            tokens.append("const")
+        if "poly" in declared:
+            tokens.append("poly")
+        params["function_set"] = list(dict.fromkeys(tokens))
+    elif model_name in {"dscv", "spr"}:
+        binary_supported = {"add", "sub", "mul", "div"}
+        unary_supported = {
+            "sin", "cos", "tan", "exp", "log", "sqrt", "n2", "n3",
+            "neg", "abs", "tanh", "inv", "expneg",
+        }
+        suffix = "_t" if model_name == "spr" else ""
+        binary = [op + suffix for op in operations if op in binary_supported]
+        unary = [
+            op + suffix for op in operations
+            if op in (unary_supported if model_name == "dscv" else {"n2", "n3"})
+        ]
+        if not binary and not unary:
+            raise SkipCase(f"{model_name} has no supported operators in the declared function set")
+        params["binary_operators"] = list(dict.fromkeys(binary))
+        params["unary_operators"] = list(dict.fromkeys(unary))
+    elif model_name == "symbolicgpt":
+        # This wrapper builds a fresh training corpus from these operators.
+        # Its generator has no native tan/tanh/abs, nor DSO's poly terminal.
+        aliases = {
+            "n2": ("pow",), "n3": ("pow",), "inv": ("div",),
+            "neg": ("sub",), "expneg": ("exp", "sub"),
+        }
+        supported = {"add", "sub", "mul", "div", "sin", "cos", "exp", "log", "sqrt", "pow"}
+        resolved = []
+        for operation in operations:
+            for symbol in aliases.get(operation, (operation,)):
+                if symbol in supported and symbol not in resolved:
+                    resolved.append(symbol)
+        params["op_list"] = resolved or ["id"]
+    return params
+
+
 def _new_model(name, params):
+    params = copy.deepcopy(params)
+    if name == "gplearn":
+        # JSON has no tuple type, while gplearn validates these two options as
+        # tuples rather than generic two-element sequences.
+        for key in ("const_range", "init_depth"):
+            if isinstance(params.get(key), list):
+                params[key] = tuple(params[key])
+        custom_functions = {
+            "exp": (_gplearn_protected_exp, 1),
+            "expneg": (_gplearn_expneg, 1),
+            "n2": (_gplearn_square, 1),
+            "n3": (_gplearn_cube, 1),
+            "tanh": (_gplearn_tanh, 1),
+        }
+        requested_custom = set(params.get("function_set", ())) & set(custom_functions)
+        if requested_custom:
+            from gplearn.functions import make_function
+
+            resolved = {
+                function_name: make_function(
+                    function=custom_functions[function_name][0],
+                    name=function_name,
+                    arity=custom_functions[function_name][1],
+                    wrap=True,
+                )
+                for function_name in requested_custom
+            }
+            params["function_set"] = [
+                resolved.get(function, function)
+                for function in params["function_set"]
+            ]
     module, attr = MODEL_CLASSES[name]
     model = getattr(importlib.import_module(module), attr)(**params)
     if name == "e2e":
@@ -1045,6 +1431,16 @@ def _new_model(name, params):
         except RuntimeError as exc:
             raise SkipCase(str(exc)) from exc
     return model
+
+
+def _physo_expression_text(expression):
+    """Return a machine-readable PhySO expression with fitted constants."""
+    symbolic = expression.get_infix_sympy(do_simplify=True, evaluate_consts=True)
+    if hasattr(symbolic, "flat"):
+        symbolic = next(iter(symbolic.flat))
+    elif isinstance(symbolic, (list, tuple)):
+        symbolic = symbolic[0]
+    return str(symbolic)
 
 
 def _score_regression(result, target, predict):
@@ -1135,8 +1531,12 @@ def _train_dscv_regression(problem, case, params):
     }
 
 
-def run_regression(problem, case):
+def run_regression(problem, case, *, pretrain_cache=None):
     name, params = case["model"], copy.deepcopy(case["model_params"])
+    if name in {"gplearn", "physo", "pyoperon", "pysr", "dso", "dscv", "spr", "symbolicgpt"}:
+        params = _dataset_search_space(
+            params, problem["metadata"], name, problem.get("ground_truth")
+        )
     if name == "dscv":
         result = _train_dscv_regression(problem, case, params)
     elif name == "physo":
@@ -1151,7 +1551,17 @@ def run_regression(problem, case):
         options.setdefault(
             "fixed_consts_units", [[0, 0, 0] for _ in options.get("fixed_consts", [])]
         )
-        options.setdefault("run_config", copy.deepcopy(physo.config.config0.config0))
+        options.setdefault(
+            "free_consts_units", [[0, 0, 0] for _ in options.get("free_consts_names", [])]
+        )
+        run_config_overrides = options.pop("run_config_overrides", {})
+        preset_name = options.pop("run_config_preset", "config0")
+        if preset_name not in {"config0", "config1", "config2"}:
+            raise ValueError(f"Unknown PhySO run_config_preset: {preset_name!r}")
+        preset = getattr(getattr(physo.config, preset_name), preset_name)
+        run_config = copy.deepcopy(options.get("run_config", preset))
+        _deep_update(run_config, run_config_overrides)
+        options["run_config"] = run_config
         options.setdefault(
             "get_run_logger", lambda: monitoring.RunLogger(save_path="physo.log", do_save=True)
         )
@@ -1166,7 +1576,7 @@ def run_regression(problem, case):
             raise RuntimeError("PhySO did not return an expression")
         result = _score_regression(
             {
-                "expression": str(expr.get_infix_pretty()),
+                "expression": _physo_expression_text(expr),
                 "notes": "Dimensionless PhySO configuration; physical units require explicit configuration.",
             },
             problem["y_test"],
@@ -1196,6 +1606,8 @@ def run_regression(problem, case):
         if name in {"sindy", "pysindy"}:
             params.pop("derivative_order", None)
             params.pop("trim_boundary", None)
+        if name == "symbolicgpt":
+            reuse_pretraining = params.pop("reuse_pretraining_within_case", False)
         model = _new_model(name, params)
         if name in {"llmsr", "sindy", "pysindy", "e2e"}:
             model.fit(
@@ -1203,6 +1615,8 @@ def run_regression(problem, case):
                 problem["y_train"],
                 variable_names=problem["variable_names"],
             )
+        elif name == "symbolicgpt" and reuse_pretraining and pretrain_cache is not None:
+            model.fit(problem["X_train"], problem["y_train"], pretrain_cache=pretrain_cache)
         else:
             model.fit(problem["X_train"], problem["y_train"])
         if name == "gplearn":
@@ -1245,8 +1659,39 @@ def run_regression(problem, case):
         variable_names=problem["variable_names"],
         details=problem["metadata"],
     )
+    if name in {"gplearn", "physo", "pyoperon", "pysr", "dso", "dscv", "spr", "symbolicgpt"}:
+        operators = (
+            params.get("allowed_symbols", "").split(",")
+            if name == "pyoperon"
+            else (
+                {"binary": params.get("binary_operators", []),
+                 "unary": params.get("unary_operators", [])}
+                if name in {"pysr", "dscv", "spr"}
+                else params.get(
+                    "function_set" if name in {"gplearn", "dso"}
+                    else "op_list" if name == "symbolicgpt" else "op_names", []
+                )
+            )
+        )
+        result["search_space"] = {
+            "policy": (
+                case["model_params"].get("search_space_policy", "declared")
+                if case["model_params"].get("use_dataset_function_set") and
+                problem["metadata"].get("benchmark_function_set")
+                else "configured_fallback"
+            ),
+            "operators": operators,
+            "declared_function_set": problem["metadata"].get("benchmark_function_set"),
+        }
+        if name == "physo":
+            result["search_space"]["fixed_consts"] = params.get("fixed_consts", [])
+            result["search_space"]["free_consts_names"] = params.get("free_consts_names", [])
     if name == "e2e":
         result["method_provenance"] = model.provenance_
+    if name == "symbolicgpt":
+        result["method_provenance"] = dict(model.pretraining_)
+        result["candidate_validation"] = dict(model.candidate_validation_)
+        result["unique_accepted_skeletons"] = len({row[1] for row in model.candidates_})
     ic_config = case.get("evaluation", {}).get("information_criteria")
     if isinstance(ic_config, dict) and isinstance(ic_config.get("targets"), dict):
         ic_config = ic_config["targets"].get(problem["target"])
@@ -1281,21 +1726,20 @@ def prepare_pde(dataset, model_name):
             "PDE grid contains NaN/Inf (e.g. masked geometry); an explicit mask adapter is required"
         )
     dim = len(dataset.spatial_vars)
-    if model_name in {"pdenet", "weakform"}:
+    if model_name == "pdenet":
         if dim != 2:
             raise SkipCase(f"{model_name} example adapter requires two spatial dimensions")
-        if model_name == "pdenet":
-            if any(
-                not np.allclose(np.diff(c), np.diff(c)[0], rtol=1e-3, atol=1e-10) for c in coords
-            ):
-                raise SkipCase("PDE-Net requires uniform spatial and time axes")
+        if any(
+            not np.allclose(np.diff(c), np.diff(c)[0], rtol=1e-3, atol=1e-10) for c in coords
+        ):
+            raise SkipCase("PDE-Net requires uniform spatial and time axes")
         return dataset
     if dim != 1 or dataset.n_response != 1:
         raise SkipCase(f"{model_name} adapter supports a scalar field in one spatial dimension")
-    if model_name in {"dscv", "spr", "sga"} and any(
+    if model_name in {"dscv", "spr", "sga", "weakform"} and any(
         not np.allclose(np.diff(c), np.diff(c)[0], rtol=1e-3, atol=1e-10) for c in coords
     ):
-        raise SkipCase(f"{model_name} finite-difference adapter requires uniform axes")
+        raise SkipCase(f"{model_name} adapter requires uniform axes")
     u = dataset.usol if dataset.legacy else dataset.usol[0]
     result = GridPDEDataset(
         equation_name=dataset.equation_name,
@@ -1858,93 +2302,32 @@ def _linear_expression(names, coeffs):
     return " + ".join(f"({float(c):.8g})*{n}" for n, c in zip(names, coeffs) if c != 0) or "0"
 
 
-def run_weakform(dataset, params):
-    """Example finite-difference/lstsq library, not integral weak form/WSINDy.
-
-    Fit every response independently, without cross-channel terms.
-    """
-    import numpy as np
-
-    step, time_step = params["spatial_stride"], params["time_stride"]
-    if step < 1 or time_step < 1:
-        raise ValueError("Weakform strides must be positive")
-    spatial = list(dataset.coords_spatial.values())
-    x, y, t = spatial[0][::step], spatial[1][::step], dataset.t[::time_step]
-    if min(len(x), len(y), len(t)) < 3:
-        raise SkipCase("Weakform downsampled axes need >=3 points; reduce the strides")
-    fields = dataset.usol[None] if dataset.legacy else dataset.usol
-    names = [
-        "1",
-        "u",
-        "u_x",
-        "u_y",
-        "u_xx",
-        "u_yy",
-        "u_xy",
-        "u^2",
-        "u*u_x",
-        "u*u_y",
-        "u_x^2",
-        "u_y^2",
-        "u_x*u_y",
-    ]
-    equations, residuals = [], []
-    for c, field in enumerate(fields):
-        u = field[::step, ::step, ::time_step]
-        ux, uy, ut = np.gradient(u, x, y, t, edge_order=2)
-        uxx = np.gradient(ux, x, axis=0, edge_order=2)
-        uyy = np.gradient(uy, y, axis=1, edge_order=2)
-        uxy = np.gradient(ux, y, axis=1, edge_order=2)
-        terms = [
-            np.ones_like(u),
-            u,
-            ux,
-            uy,
-            uxx,
-            uyy,
-            uxy,
-            u * u,
-            u * ux,
-            u * uy,
-            ux * ux,
-            uy * uy,
-            ux * uy,
-        ]
-        theta = np.column_stack([v.ravel() for v in terms])
-        coeffs, *_ = np.linalg.lstsq(theta, ut.ravel(), rcond=None)
-        coeffs[np.abs(coeffs) <= params["threshold"]] = 0
-        equations.append(f"d(u{c})/dt = " + _linear_expression(names, coeffs))
-        residuals.append(float(np.mean((theta @ coeffs - ut.ravel()) ** 2)))
-    return {
-        "expression": "; ".join(equations),
-        "train_residual_mse": float(np.mean(residuals)),
-        "notes": "Example finite-difference + thresholded least squares, not integral weak form; channels fitted independently.",
-    }
-
-
 def run_pde(dataset, case):
     import numpy as np
 
     name, params, options = case["model"], copy.deepcopy(case["model_params"]), case["run_params"]
+    candidate_space_label = params.pop("candidate_space_label", "configured_fallback")
     dataset = prepare_pde(dataset, name)
     train_dataset, evaluation_dataset, split_index = temporal_block_holdout(
         dataset, options["test_size"]
     )
     model = None
-    if name == "sga" and case["dataset"] not in {"burgers", "kdv", "chafee-infante"}:
-        raise SkipCase(
-            "SGA SolverConfig currently defines only burgers, kdv and chafee-infante presets"
-        )
     if name == "weakform":
-        result = run_weakform(train_dataset, params)
-    elif name == "integral_weak_pde":
         model = _new_model(name, params)
         model.fit(train_dataset.usol, train_dataset.x, train_dataset.t)
         result = {
             "expression": "u_t = " + model.best_expression_,
             "weak_expression": model.weak_expression_,
             "train_residual_mse": float(model.weak_residual_mse_),
-            "notes": "Native integral weak-form scalar 1D baseline; bounded adaptation, not the complete upstream WSINDy-PDE algorithm.",
+            "train_relative_residual": float(model.weak_relative_residual_),
+            "wsindy_selected_lambda": float(model.selected_lambda_),
+            "wsindy_mstls_loss": float(model.mstls_loss_),
+            "wsindy_support": model.support_,
+            "wsindy_test_function_powers": model.test_function_powers_,
+            "wsindy_query_stride": model.query_stride_,
+            "wsindy_n_weak_samples": model.n_weak_samples_,
+            "method_provenance": model.method_provenance_,
+            "notes": "WSINDy-PDE scalar-1D adaptation: convolutional weak derivatives and MSTLS model selection.",
         }
     else:
         sindy_pde_options = None
@@ -2078,6 +2461,26 @@ def run_pde(dataset, case):
                 result[
                     "notes"
                 ] += " PDE-Net follows the example wrapper: one x-derived dx for both axes and periodic padding, including rectangular grids."
+    library_fields = {
+        "dscv": ("binary_operators", "unary_operators"),
+        "spr": ("binary_operators", "unary_operators"),
+        "sga": ("depth", "width"),
+        "dlga": ("operators",),
+        "deepmod": ("poly_order", "diff_order"),
+        "pdefind": ("derivative_order", "terms"),
+        "pdenet": ("derivative_order",),
+        "weakform": ("terms", "polynomial_degree", "max_derivative"),
+        "sindy": ("polynomial_degree", "derivative_order"),
+        "pysindy": ("polynomial_degree", "derivative_order"),
+    }
+    library = {
+        field: case["model_params"][field]
+        for field in library_fields.get(name, ())
+        if field in case["model_params"]
+    }
+    if name == "pdefind":
+        library["resolved_terms"] = list(model._feature_names)
+    result["search_space"] = {"policy": candidate_space_label, "library": library}
     structural_truth = getattr(dataset, "sym_true", None)
     if not structural_truth:
         try:
@@ -2244,6 +2647,15 @@ def _base_row(case, instance=None, target=None):
         ground_truth_expression=case.get("ground_truth"),
         expression_complexity=None,
         exact_recovery=None,
+        structural_recovery=None,
+        exact_recovery_semantics=(
+            "additive_term_structure_ignoring_numeric_coefficients"
+            if case.get("task") != "pde" else None
+        ),
+        structural_recovery_metric_version=(
+            SR_STRUCTURE_METRIC_VERSION if case.get("task") != "pde" else None
+        ),
+        algebraic_exact_recovery=None,
         test_mse=None,
         test_rmse=None,
         test_nrmse=None,
@@ -2283,6 +2695,15 @@ def _base_row(case, instance=None, target=None):
         status="error",
         error="",
     )
+    if case["model"] == "symbolicgpt":
+        row["method_provenance"] = {
+            "protocol": (
+                "synthetic_case_instance_reuse"
+                if case["model_params"].get("reuse_pretraining_within_case")
+                else "synthetic_per_fit"
+            ),
+            "cache_hit": None,
+        }
     return row
 
 
@@ -2320,6 +2741,13 @@ def run_case(case, work_dir=None, checkpoint=None):
         check_device_available(case["device"])
         for instance_index, (instance, dataset) in enumerate(_load_instances(case)):
             instance_row_start = len(rows)
+            # Explicitly scoped to this instance; never shared between cases,
+            # seeds or datasets. An empty cache still counts as enabled.
+            pretrain_cache = (
+                {} if case["model"] == "symbolicgpt"
+                and case["model_params"].get("reuse_pretraining_within_case")
+                else None
+            )
             try:
                 problems = regression_problems(dataset, case) if case["task"] != "pde" else [None]
                 for target_index, problem in enumerate(problems):
@@ -2343,8 +2771,6 @@ def run_case(case, work_dir=None, checkpoint=None):
                                     "pysindy",
                                     "pysr",
                                     "sindy",
-                                    "weakform",
-                                    "integral_weak_pde",
                                 }:
                                     import torch
 
@@ -2352,7 +2778,7 @@ def run_case(case, work_dir=None, checkpoint=None):
                                 result = (
                                     run_pde(dataset, case)
                                     if problem is None
-                                    else run_regression(problem, case)
+                                    else run_regression(problem, case, pretrain_cache=pretrain_cache)
                                 )
                             row = _base_row(case, instance, target)
                             row["status"] = "ok"
@@ -2438,6 +2864,10 @@ CSV_FIELDS = [
     "ground_truth_expression",
     "expression_complexity",
     "exact_recovery",
+    "structural_recovery",
+    "exact_recovery_semantics",
+    "structural_recovery_metric_version",
+    "algebraic_exact_recovery",
     "test_mse",
     "test_rmse",
     "test_nrmse",
@@ -2556,6 +2986,8 @@ AGGREGATE_FIELDS = [
     "exact_recovery_conditional_rate",
     "exact_recovery_lower_bound",
     "exact_recovery_rate",
+    "algebraic_exact_recovery_evaluable",
+    "algebraic_exact_recovery_conditional_rate",
     "test_nrmse_mean",
     "test_r2_mean",
     "equation_residual_nrmse_mean",
@@ -2619,6 +3051,7 @@ def aggregate_results(rows):
         ]
         exact_valid = [row for row in exact_eligible if row.get("status") == "ok"]
         recovered = _numeric_values(exact_valid, "exact_recovery")
+        algebraic_recovered = _numeric_values(exact_valid, "algebraic_exact_recovery")
         support_valid = [row for row in support_eligible if row.get("status") == "ok"]
         support_recovered = [
             float(row.get("pde_support_recovery") if row.get("pde_support_recovery") is not None
@@ -2677,6 +3110,11 @@ def aggregate_results(rows):
                 ),
                 "exact_recovery_lower_bound": (
                     sum(recovered) / len(exact_eligible) if exact_eligible else None
+                ),
+                "algebraic_exact_recovery_evaluable": len(algebraic_recovered),
+                "algebraic_exact_recovery_conditional_rate": (
+                    sum(algebraic_recovered) / len(algebraic_recovered)
+                    if algebraic_recovered else None
                 ),
                 "test_nrmse_mean": mean("test_nrmse"),
                 "test_r2_mean": mean("test_r2"),
@@ -2852,6 +3290,11 @@ def main(argv=None):
     parser.add_argument("--seeds", nargs="+", type=int)
     parser.add_argument("--profile", choices=("smoke", "full"))
     parser.add_argument(
+        "--search-space-policy",
+        choices=("declared", "declared_plus_reference"),
+        help="Override the dataset-grammar policy for supported SR baselines",
+    )
+    parser.add_argument(
         "--config", type=Path, help=f"Total JSON config (default: {DEFAULT_CONFIG_FILE})"
     )
     parser.add_argument("--output-dir", type=Path)
@@ -2912,6 +3355,12 @@ def main(argv=None):
         profile = args.profile or settings["profile"]
         tasks = args.tasks if args.tasks is not None else settings["tasks"]
         models = args.models if args.models is not None else settings["models"]
+        if args.search_space_policy:
+            for model in _select(models, BASELINES, "model"):
+                if model in {"gplearn", "pyoperon", "pysr", "physo", "dso"}:
+                    settings["overrides"].setdefault("models", {}).setdefault(model, {})[
+                        "search_space_policy"
+                    ] = args.search_space_policy
         datasets = args.datasets if args.datasets is not None else settings["datasets"]
         seeds = args.seeds if args.seeds is not None else settings["seeds"]
         timeout = args.timeout if args.timeout is not None else settings["timeout"]
@@ -2981,6 +3430,7 @@ def main(argv=None):
         "seeds": seeds,
         "timeout": timeout,
         "resume": resume_enabled,
+        "search_space_policy_override": args.search_space_policy,
         "python": sys.executable,
         "devices": assigned,
         "datasets": catalog,

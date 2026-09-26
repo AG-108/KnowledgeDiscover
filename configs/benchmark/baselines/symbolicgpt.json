@@ -21,7 +21,7 @@
         "pretrain_epochs": 50,
         "num_candidates": 100,
         "candidate_batch_size": 32,
-        "dataloader_workers": 2
+        "dataloader_workers": 0
       }
     }
   }

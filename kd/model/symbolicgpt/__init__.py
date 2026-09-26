@@ -4,7 +4,7 @@ encoder), then fits numeric constants against the target data.
 
 Adapted from the original SymbolicGPT repo (Valipour et al., "SymbolicGPT:
 A Generative Transformer Model for Symbolic Regression", 2021), vendored
-unmodified at `kd/dataset/SymbolicGPT/`. See each module's docstring here
+optionally stored locally at `kd/dataset/SymbolicGPT/`. See each module's docstring here
 for exactly what changed during adaptation (`models.py`, `trainer.py`,
 `generator.py`, `utils.py`).
 

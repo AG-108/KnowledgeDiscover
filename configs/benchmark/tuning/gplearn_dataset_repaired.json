@@ -1,0 +1,44 @@
+{
+  "profile": "full",
+  "tasks": ["sr", "ode"],
+  "models": ["gplearn"],
+  "datasets": ["*"],
+  "seeds": [0],
+  "timeout": 240,
+  "resume": true,
+  "output_dir": "results/tuning/gplearn_dataset_declared",
+  "overrides": {
+    "models": {
+      "gplearn": {
+        "use_dataset_function_set": true,
+        "search_space_policy": "declared",
+        "keep_constant_range": true,
+        "population_size": 1000,
+        "generations": 20,
+        "tournament_size": 20,
+        "function_set": ["add", "sub", "mul", "div", "sqrt", "log", "abs", "sin", "cos", "exp"],
+        "const_range": [-10.0, 10.0],
+        "init_depth": [2, 6],
+        "init_method": "half and half",
+        "parsimony_coefficient": 0.001,
+        "p_crossover": 0.75,
+        "p_subtree_mutation": 0.10,
+        "p_hoist_mutation": 0.05,
+        "p_point_mutation": 0.10,
+        "max_samples": 1.0,
+        "n_jobs": 1,
+        "low_memory": true
+      }
+    },
+    "model_datasets": {
+      "gplearn": {
+        "Korns-*": {
+          "population_size": 600,
+          "generations": 12,
+          "init_depth": [2, 5],
+          "parsimony_coefficient": 0.005
+        }
+      }
+    }
+  }
+}

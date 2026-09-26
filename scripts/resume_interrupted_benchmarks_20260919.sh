@@ -1,13 +1,17 @@
 #!/usr/bin/env bash
 
+# Override these for a historical worktree or a separate persistent volume.
+KD_PROJECT="${KD_PROJECT:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)}"
+KD_STORAGE_ROOT="${KD_STORAGE_ROOT:-$HOME/.local/share/kd}"
+
 # Resume the September 18 benchmark outputs after a container replacement.
 # Successful case directories are reused in place; only interrupted, failed,
 # or timed-out cases are executed again.
 
 set -uo pipefail
 
-PROJECT_DIR="/2501001sjlkff1/pdebench/KnowledgeDiscover_run_20260917"
-PYTHON="/opt/conda/envs/pdebench/bin/python"
+PROJECT_DIR="$KD_PROJECT"
+PYTHON="${KD_PYTHON:-python}"
 GPU_MANIFEST="results/full_benchmark_20260917/gpu/benchmark_manifest.json"
 CPU_CLASSICAL_MANIFEST="results/full_benchmark_20260917/cpu_classical/benchmark_manifest.json"
 CPU_SPARSE_MANIFEST="results/full_benchmark_20260917/cpu_sparse/benchmark_manifest.json"
@@ -22,7 +26,7 @@ export MKL_NUM_THREADS=1
 export OPENBLAS_NUM_THREADS=1
 export NUMEXPR_NUM_THREADS=1
 export JULIA_NUM_THREADS=1
-export JULIA_DEPOT_PATH=/2501001sjlkff1/pdebench/.julia
+export JULIA_DEPOT_PATH=$KD_STORAGE_ROOT/.julia
 export JULIA_PKG_SERVER=https://mirrors.nju.edu.cn/julia
 export JULIA_PKG_PRECOMPILE_AUTO=0
 

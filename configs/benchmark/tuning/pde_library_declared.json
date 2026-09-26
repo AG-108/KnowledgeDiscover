@@ -1,0 +1,108 @@
+{
+  "profile": "full",
+  "tasks": [
+    "pde"
+  ],
+  "models": [
+    "dscv",
+    "spr",
+    "sga",
+    "dlga",
+    "deepmod",
+    "pdefind",
+    "pdenet",
+    "weakform",
+    "eqgpt",
+    "sindy",
+    "pysindy"
+  ],
+  "datasets": [
+    "*"
+  ],
+  "seeds": [
+    0
+  ],
+  "timeout": 300,
+  "resume": true,
+  "output_dir": "results/tuning/pde_library_main",
+  "overrides": {
+    "models": {
+      "dscv": {
+        "n_iterations": 10,
+        "n_samples_per_batch": 100
+      },
+      "spr": {
+        "n_iterations": 10,
+        "n_samples_per_batch": 50
+      },
+      "sga": {
+        "sga_run": 5,
+        "num": 15,
+        "depth": 3,
+        "width": 3
+      },
+      "dlga": {
+        "max_iter": 3000,
+        "operators": [
+          "u",
+          "u_x",
+          "u_xx",
+          "u_xxx"
+        ],
+        "verbose": false
+      },
+      "deepmod": {
+        "poly_order": 3,
+        "diff_order": 3,
+        "epochs": 10,
+        "batch_size": 256
+      },
+      "pdefind": {
+        "derivative_order": 3,
+        "threshold": 0.03
+      },
+      "pdenet": {
+        "max_iter": 20,
+        "batch_size": 4
+      },
+      "weakform": {
+        "polynomial_degree": 3,
+        "max_derivative": 3,
+        "max_weak_samples": 3000,
+        "n_thresholds": 30
+      },
+      "eqgpt": {
+        "gpt_pretrain_epochs": 8,
+        "surrogate_iters": 2000,
+        "choose": 500,
+        "choose_validate": 100,
+        "optimize_epochs": 5,
+        "samples": 80
+      },
+      "sindy": {
+        "polynomial_degree": 2,
+        "threshold": 0.05,
+        "alpha": 0.000001,
+        "max_iter": 100,
+        "derivative_order": 3
+      },
+      "pysindy": {
+        "polynomial_degree": 2,
+        "reg_weight_lam": 0.005,
+        "tolerance": 0.00001,
+        "max_iter": 100,
+        "derivative_order": 3
+      }
+    },
+    "run": {
+      "max_train_samples": 3000,
+      "dscv_epochs": 10,
+      "spr_pretrain_epochs": 20,
+      "spr_pinn_epochs": 10,
+      "spr_iterations": 1,
+      "dlga_samples": 500,
+      "dlga_population": 40,
+      "dlga_generations": 20
+    }
+  }
+}

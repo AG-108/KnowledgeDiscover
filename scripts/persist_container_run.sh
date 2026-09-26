@@ -1,10 +1,14 @@
 #!/usr/bin/env bash
 
+# Override these for a historical worktree or a separate persistent volume.
+KD_PROJECT="${KD_PROJECT:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)}"
+KD_STORAGE_ROOT="${KD_STORAGE_ROOT:-$HOME/.local/share/kd}"
+
 set -u
 
-source_dir=/root/KnowledgeDiscover
-persist_root=/2501001sjlkff1/pdebench
-destination="$persist_root/KnowledgeDiscover_run_20260917"
+source_dir=$KD_PROJECT
+persist_root=$KD_STORAGE_ROOT
+destination="${KD_PERSIST_DIR:-$persist_root/KnowledgeDiscover_run_20260917}"
 sync_log="$persist_root/persistence_sync_20260917.log"
 
 log() {
@@ -25,7 +29,7 @@ cp -a "$source_dir"/. "$destination"/
   > "$destination/environment/conda-explicit.txt" 2>&1 || true
 /opt/conda/bin/conda env export -n pdebench \
   > "$destination/environment/conda-environment.yml" 2>&1 || true
-/opt/conda/envs/pdebench/bin/python -m pip freeze \
+"${KD_PYTHON:-python}" -m pip freeze \
   > "$destination/environment/pip-freeze.txt" 2>&1 || true
 sync
 log "initial persistent copy complete"
@@ -40,7 +44,7 @@ log "stopping benchmark for final consistent checkpoint"
 tmux has-session -t kd_full_no_llmsr 2>/dev/null \
   && tmux kill-session -t kd_full_no_llmsr || true
 sleep 5
-pkill -TERM -f '/root/KnowledgeDiscover/run_benchmark.py --_case-file' 2>/dev/null || true
+pkill -TERM -f "$KD_PROJECT/run_benchmark.py --_case-file" 2>/dev/null || true
 pkill -TERM -f 'scripts/run_parallel_benchmark.py' 2>/dev/null || true
 sleep 5
 
@@ -64,7 +68,7 @@ saved_bytes=$(du -sb "$destination" | awk '{print $1}')
   printf 'source_bytes=%s\n' "$source_bytes"
   printf 'saved_bytes=%s\n' "$saved_bytes"
   printf 'resume_command=%s\n' \
-    '/bin/bash /root/KnowledgeDiscover/scripts/launch_full_no_llmsr.sh'
+    "/bin/bash $KD_PROJECT/scripts/launch_full_no_llmsr.sh"
 } > "$destination/PERSISTENCE_CHECKPOINT.txt"
 sync
 log "final checkpoint complete: source_results=$source_results saved_results=$saved_results"

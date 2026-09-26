@@ -97,7 +97,7 @@ configs/benchmark/
 | `dscv` | 当前仅 CPU | 当前 controller/state 代码没有完整设备迁移 |
 | `sga` | 当前仅 CPU | 当前集成没有稳定的显式设备接口 |
 | `pdefind` | CPU | NumPy/SciPy 回归 |
-| `weakform` | CPU | NumPy 有限差分和最小二乘 |
+| `weakform` | CPU | 标量一维 WSINDy-PDE：紧支撑测试函数、FFT 弱卷积与 MSTLS |
 | `gplearn` | CPU | scikit-learn/joblib 风格的 CPU 遗传编程 |
 | `pysr` | CPU | Julia 多线程/多进程符号搜索；当前 PySR 后端不使用 CUDA |
 | `sindy` | CPU | 仓库内 NumPy 多项式库与 STLSQ 稀疏回归 |
@@ -142,11 +142,19 @@ echo $!
 tail -f logs/benchmark.log
 ```
 
-仓库当前开发环境是 Windows/Python 3.9，PyOperon 0.6.1 没有适用的官方 wheel，因此该
-baseline 在本机兼容性预检中会显示为依赖错误。Linux/Python 3.9 可以使用兼容版
-PyOperon 0.5.0，`requirements.txt` 已通过平台标记处理；新服务器仍推荐 Python 3.10 或
-3.11 与 PyOperon 0.6.1。其余 baseline 配置可在缺少 PyOperon 时正常读取，对应 case 会独立
-标记为 `skipped`。
+仓库主环境 `kd-env` 是 Windows/Python 3.9，无法安装要求 Python >=3.10 的
+PyOperon 0.6.1。PyPI 现提供 Windows/Python 3.10 wheel；本机已在独立的
+`kd-operon` 环境安装 PyOperon 0.6.1、NumPy 2.0.2 等运行依赖，并通过 ODE smoke
+验证。单独运行 PyOperon 时需使用该环境的 Python；主环境继续运行其他方法，避免
+把 NumPy 2 引入既有环境。Linux/Python 3.9 仍可使用 PyOperon 0.5.0。
+
+可用 `conda create -n kd-operon python=3.10 pip` 建立独立环境，再执行
+`conda run -n kd-operon python -m pip install -r requirements-operon-py310.txt`。
+Core ODE Track 的 PyOperon 批次应单独使用该解释器运行，例如：
+
+```powershell
+conda run -n kd-operon python run_benchmark.py --config configs/benchmark/core_ode_track.json --models pyoperon --output-dir results/core_ode_track_pyoperon
+```
 
 命令行可以临时覆盖总配置，无需改 JSON：
 

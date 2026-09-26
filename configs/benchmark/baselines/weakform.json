@@ -2,9 +2,17 @@
   "name": "weakform",
   "device": "cpu",
   "model": {
-    "threshold": 0.01,
-    "spatial_stride": 2,
-    "time_stride": 4
+    "polynomial_degree": 3,
+    "max_derivative": 3,
+    "support_fraction": 0.15,
+    "test_function_tolerance": 1e-10,
+    "max_weak_samples": 5000,
+    "n_thresholds": 50,
+    "threshold_min": 1e-4,
+    "threshold_max": 1.0,
+    "sparsity_tradeoff": 0.5,
+    "ridge": 0.0,
+    "max_iter": 20
   },
   "profiles": {}
 }

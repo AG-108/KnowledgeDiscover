@@ -73,6 +73,9 @@ class SolverConfig:
 
     def __post_init__(self):
         """Post-initialization to set up derived attributes."""
+        supplied = [self.u_data is not None, self.x_data is not None, self.t_data is not None]
+        if any(supplied) and not all(supplied):
+            raise ValueError("u_data, x_data and t_data must be supplied together")
         # Set random seed
         np.random.seed(self.seed)
         
@@ -129,8 +132,22 @@ class SolverConfig:
             self.left_side = 'left_side = ut'
             self.right_side_origin = 'right_side_origin = -0.0025*uxxx_origin-u_origin*ux_origin'
             self.left_side_origin = 'left_side_origin = ut_origin'
+        elif self.u_data is not None:
+            # Framework mode supplies the field directly.  The solver only
+            # needs these arrays to discover an equation; the right/left-side
+            # expressions below are diagnostics used by ProblemContext.
+            self.u = self.u_data
+            self.x = self.x_data
+            self.t = self.t_data
+            self.right_side = 'right_side = ut'
+            self.left_side = 'left_side = ut'
+            self.right_side_origin = 'right_side_origin = ut_origin'
+            self.left_side_origin = 'left_side_origin = ut_origin'
         else:
-            raise ValueError(f"Unknown problem: {self.problem_name}")
+            raise ValueError(
+                f"Unknown built-in problem: {self.problem_name}; "
+                "provide u_data, x_data and t_data for a custom dataset"
+            )
             
     @staticmethod
     def divide(up, down, eta=1e-10):

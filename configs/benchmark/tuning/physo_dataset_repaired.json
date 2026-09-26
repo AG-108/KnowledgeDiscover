@@ -1,0 +1,27 @@
+{
+  "profile": "full",
+  "tasks": ["sr", "ode"],
+  "models": ["physo"],
+  "datasets": ["*"],
+  "seeds": [0],
+  "timeout": 300,
+  "resume": true,
+  "output_dir": "results/tuning/physo_dataset_declared",
+  "overrides": {
+    "models": {
+      "physo": {
+        "use_dataset_function_set": true,
+        "search_space_policy": "declared",
+        "keep_free_constants": true,
+        "keep_fixed_consts": true,
+        "epochs": 30,
+        "run_config_preset": "config2",
+        "op_names": ["add", "sub", "mul", "div", "sin", "cos", "exp", "log", "sqrt"],
+        "fixed_consts": [1.0],
+        "free_consts_names": ["c0", "c1"],
+        "free_consts_init_val": [1.0, 1.0],
+        "parallel_mode": false
+      }
+    }
+  }
+}

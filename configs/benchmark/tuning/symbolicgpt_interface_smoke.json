@@ -1,0 +1,29 @@
+{
+  "profile": "full",
+  "tasks": ["sr"],
+  "models": ["symbolicgpt"],
+  "datasets": ["Nguyen-8"],
+  "seeds": [0],
+  "timeout": 90,
+  "resume": false,
+  "output_dir": "results/tuning/symbolicgpt_interface_smoke",
+  "overrides": {
+    "models": {
+      "symbolicgpt": {
+        "use_dataset_function_set": true,
+        "search_space_policy": "declared",
+        "embedding_size": 16,
+        "n_layer": 1,
+        "n_head": 1,
+        "n_levels": 2,
+        "pretrain_corpus_size": 24,
+        "pretrain_epochs": 1,
+        "batch_size": 8,
+        "num_candidates": 2,
+        "candidate_batch_size": 2,
+        "max_conditioning_points": 32,
+        "dataloader_workers": 0
+      }
+    }
+  }
+}

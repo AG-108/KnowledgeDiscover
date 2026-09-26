@@ -1,0 +1,32 @@
+{
+  "profile": "full",
+  "tasks": ["sr", "ode"],
+  "models": ["dso"],
+  "datasets": ["*"],
+  "seeds": [0],
+  "timeout": 240,
+  "resume": true,
+  "output_dir": "results/tuning/dso_dataset_declared",
+  "overrides": {
+    "models": {
+      "dso": {
+        "use_dataset_function_set": true,
+        "search_space_policy": "declared",
+        "n_samples": 20000,
+        "batch_size": 500,
+        "function_set": ["add", "sub", "mul", "div", "sin", "cos", "exp", "log", "sqrt", "const"],
+        "max_length": 32,
+        "learning_rate": 0.001,
+        "protected": true,
+        "early_stopping": true,
+        "verbose": false
+      }
+    },
+    "model_datasets": {
+      "dso": {
+        "Korns-*": {"n_samples": 8000},
+        "Livermore2-*": {"n_samples": 10000}
+      }
+    }
+  }
+}

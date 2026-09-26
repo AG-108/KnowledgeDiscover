@@ -4,8 +4,8 @@
 # - Input: `dataset.get_data()` must return a dict with `x`, `t`, `usol`
 #   (a regular grid, matching the GridPDEDataset convention used elsewhere
 #   in kd/dataset).
-# - `fit()` builds a fixed library of terms up to 3rd-order spatial
-#   derivatives (u, u_x, u_xx, u_xxx and their pairwise products) and
+# - `fit()` builds a selectable library of terms up to 3rd-order spatial
+#   derivatives (u, u_x, u_xx, u_xxx, products, and u^3) and
 #   solves for u_t = Theta * coeffs via least squares, then hard-thresholds
 #   small coefficients to zero.
 # - `predict()` advances u(x, t0) to u(x, t0+dt) via a single explicit
@@ -15,12 +15,12 @@
 # plain `np.linalg.lstsq` + hard threshold, not PySINDy's actual STLSQ/
 # STRidge optimizer. `function_library`, `differentiation_method`, and
 # `alpha` are accepted in `__init__` for API compatibility but are not
-# used by `fit()`; only `threshold` and `derivative_order`-implied terms
-# take effect. Picking a `threshold` that's too large relative to the
+# used by `fit()`; only `threshold`, `derivative_order`, and `terms` take
+# effect. Picking a `threshold` that's too large relative to the
 # true coefficients will silently zero out every term (degenerate
 # `u_t = 0` result). A future implementation should use a real STRidge/STLSQ solver.
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Sequence
 
 import numpy as np
 import pysindy as ps
@@ -30,6 +30,12 @@ from pysindy.differentiation import FiniteDifference
 class PDEFindModel:
     """A stable PDE-FIND wrapper for 1D grid datasets."""
 
+    LIBRARY_NAMES = (
+        "1", "u", "u_x", "u_xx", "u_xxx", "u^2", "u*u_x", "u*u_xx",
+        "u*u_xxx", "u_x^2", "u_x*u_xx", "u_xx^2", "u^3",
+    )
+    LIBRARY_ORDERS = (0, 0, 1, 2, 3, 0, 1, 2, 3, 1, 2, 2, 0)
+
     def __init__(
         self,
         derivative_order: int = 2,
@@ -38,8 +44,19 @@ class PDEFindModel:
         threshold: float = 0.05,
         alpha: float = 1e-5,
         max_iter: int = 50,
+        terms: Optional[Sequence[str]] = None,
     ):
+        if derivative_order not in (0, 1, 2, 3):
+            raise ValueError("derivative_order must be 0, 1, 2, or 3")
+        if terms is not None:
+            terms = tuple(terms)
+            unknown = set(terms) - set(self.LIBRARY_NAMES)
+            if not terms or unknown:
+                raise ValueError(f"terms must be nonempty known library names; unknown={sorted(unknown)}")
+            if len(terms) != len(set(terms)):
+                raise ValueError("terms must be unique")
         self.derivative_order = derivative_order
+        self.terms = terms
         self.function_library = function_library or ps.PolynomialLibrary(
             degree=2, include_bias=False
         )
@@ -92,21 +109,17 @@ class PDEFindModel:
             ux * ux,
             ux * uxx,
             uxx * uxx,
+            U * U * U,
         ]
-        names = [
-            "1",
-            "u",
-            "u_x",
-            "u_xx",
-            "u_xxx",
-            "u^2",
-            "u*u_x",
-            "u*u_xx",
-            "u*u_xxx",
-            "u_x^2",
-            "u_x*u_xx",
-            "u_xx^2",
+        names = self.LIBRARY_NAMES
+        selected = [
+            index for index, (name, order) in enumerate(zip(names, self.LIBRARY_ORDERS))
+            if order <= self.derivative_order and (self.terms is None or name in self.terms)
         ]
+        if not selected:
+            raise ValueError("No configured PDE-FIND terms satisfy derivative_order")
+        candidate_terms = [candidate_terms[index] for index in selected]
+        names = [names[index] for index in selected]
 
         theta = np.column_stack([term.ravel() for term in candidate_terms])
         target = ut.ravel()
@@ -165,6 +178,11 @@ class PDEFindModel:
             ux * ux,
             ux * uxx,
             uxx * uxx,
+            U0 * U0 * U0,
         ]
-        ut = sum(coeff * term for coeff, term in zip(self._coeffs, candidate_terms))
+        terms_by_name = dict(zip(self.LIBRARY_NAMES, candidate_terms))
+        ut = sum(
+            coeff * terms_by_name[name]
+            for coeff, name in zip(self._coeffs, self._feature_names)
+        )
         return U0 + dt * ut

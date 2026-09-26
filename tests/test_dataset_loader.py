@@ -95,6 +95,10 @@ def test_symbolic_regression_keeps_large_finite_targets():
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.external_data(
+    "kd/dataset/discovery-of-physics-from-data/data/Ball_drops_data.xls",
+    "kd/dataset/discovery-of-physics-from-data/data/balls.txt",
+)
 def test_load_ball_drop_dataset_shapes():
     pytest.importorskip("pandas")
     pytest.importorskip("openpyxl")
@@ -114,6 +118,10 @@ def test_load_ball_drop_dataset_shapes():
         assert traj["params"]["diameter"] > 0
 
 
+@pytest.mark.external_data(
+    "kd/dataset/discovery-of-physics-from-data/data/Ball_drops_data.xls",
+    "kd/dataset/discovery-of-physics-from-data/data/balls.txt",
+)
 def test_ball_drop_falls_downward():
     pytest.importorskip("pandas")
     pytest.importorskip("openpyxl")
@@ -127,6 +135,10 @@ def test_ball_drop_falls_downward():
         assert (v < 0).mean() > 0.5
 
 
+@pytest.mark.external_data(
+    "kd/dataset/discovery-of-physics-from-data/data/Ball_drops_data.xls",
+    "kd/dataset/discovery-of-physics-from-data/data/balls.txt",
+)
 def test_ode_dataset_to_regression_arrays_shapes():
     pytest.importorskip("pandas")
     pytest.importorskip("openpyxl")
@@ -144,6 +156,10 @@ def test_ode_dataset_to_regression_arrays_shapes():
     assert names_no_params == ["h", "v"]
 
 
+@pytest.mark.external_data(
+    "kd/dataset/discovery-of-physics-from-data/data/Ball_drops_data.xls",
+    "kd/dataset/discovery-of-physics-from-data/data/balls.txt",
+)
 def test_ode_dataset_sample():
     pytest.importorskip("pandas")
     pytest.importorskip("openpyxl")
@@ -159,6 +175,9 @@ def test_ode_dataset_sample():
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.external_data(
+    "kd/dataset/Discovery_of_soild_consititutive/data/data_rubber/train/*.xlsx"
+)
 def test_load_rubber_dataset_shapes():
     pytest.importorskip("pandas")
     pytest.importorskip("openpyxl")
@@ -177,6 +196,9 @@ def test_load_rubber_dataset_shapes():
     assert np.all(lam >= 1.0)
 
 
+@pytest.mark.external_data(
+    "kd/dataset/Discovery_of_soild_consititutive/data/data_rubber/train/*.xlsx"
+)
 def test_rubber_dataset_train_test_split():
     pytest.importorskip("pandas")
     pytest.importorskip("openpyxl")
@@ -190,6 +212,10 @@ def test_rubber_dataset_train_test_split():
     assert dataset.X_train.shape[1] == dataset.X_test.shape[1] == 3
 
 
+@pytest.mark.external_data(
+    "kd/dataset/Discovery_of_soild_consititutive/data/data_rubber/train/*.xlsx",
+    "kd/dataset/Discovery_of_soild_consititutive/data/data_rubber/test/*.xlsx",
+)
 def test_rubber_dataset_test_split_loads_separately():
     pytest.importorskip("pandas")
     pytest.importorskip("openpyxl")
@@ -251,18 +277,25 @@ def test_load_dataset_pde_registry_matches_load_pde_grid():
     np.testing.assert_allclose(via_catalog.usol, via_direct.usol)
 
 
+@pytest.mark.external_data("kd/dataset/TLC/heat/heat_complex.csv")
 def test_load_dataset_tlc_returns_scatter_dataset():
     dataset = load_dataset("tlc_heat_complex")
     assert isinstance(dataset, ScatterPDEDataset)
     assert dataset.n_times > 1
 
 
+@pytest.mark.external_data("kd/dataset/WDwake/TI8_U.npy", "kd/dataset/WDwake/TI8_V.npy")
 def test_load_dataset_wdwake_returns_grid_dataset():
     dataset = load_dataset("wdwake")
     assert isinstance(dataset, GridPDEDataset)
     assert dataset.n_response == 2
 
 
+@pytest.mark.external_data(
+    "kd/dataset/discovery-of-physics-from-data/data/Ball_drops_data.xls",
+    "kd/dataset/discovery-of-physics-from-data/data/balls.txt",
+    "kd/dataset/Discovery_of_soild_consititutive/data/data_rubber/train/*.xlsx",
+)
 def test_load_dataset_ode_and_regression():
     pytest.importorskip("pandas")
     pytest.importorskip("openpyxl")
@@ -314,6 +347,7 @@ _CYT_EXPECTED_COLUMNS = [
 ]
 
 
+@pytest.mark.external_data("kd/dataset/CYT/FlatPlate_lk0.215andPplus/Output/FlowFeature.dat")
 def test_load_cyt_flowfeature_raw_columns():
     raw = load_cyt_flowfeature_raw("flatplate")
     assert set(raw.keys()) == set(_CYT_EXPECTED_COLUMNS)
@@ -325,6 +359,7 @@ def test_load_cyt_flowfeature_raw_columns():
         assert np.all(np.isfinite(raw[col]))
 
 
+@pytest.mark.external_data("kd/dataset/CYT/FlatPlate_lk0.215andPplus/Output/FlowFeature.dat")
 def test_load_cyt_dataset_default_target():
     dataset = load_cyt_dataset("flatplate")
     assert isinstance(dataset, TabularRegressionDataset)
@@ -354,6 +389,10 @@ def test_load_cyt_dataset_default_target():
     assert np.all(data["y"] >= 0)
 
 
+@pytest.mark.external_data(
+    "kd/dataset/CYT/FlatPlate_lk0.215andPplus/Output/FlowFeature.dat",
+    "kd/dataset/CYT/NACA0012_Re4e5_MLen_BEST/Output/FlowFeature.dat",
+)
 def test_load_cyt_dataset_alternate_target_and_case():
     dataset = load_cyt_dataset("naca0012", target="Txx")
     data = dataset.get_data()
@@ -364,6 +403,7 @@ def test_load_cyt_dataset_alternate_target_and_case():
     assert dataset.X.shape[0] != flatplate.X.shape[0]
 
 
+@pytest.mark.external_data("kd/dataset/CYT/FlatPlate_lk0.215andPplus/Output/FlowFeature.dat")
 def test_load_cyt_dataset_custom_feature_columns():
     dataset = load_cyt_dataset("flatplate", target="Mut", feature_columns=["X", "Y"])
     data = dataset.get_data()
@@ -371,9 +411,15 @@ def test_load_cyt_dataset_custom_feature_columns():
     assert data["X"].shape[1] == 2
 
 
-def test_load_cyt_dataset_unknown_target_raises():
-    with pytest.raises(ValueError):
+def test_load_cyt_dataset_unknown_columns_fail_before_reading_data(monkeypatch):
+    def unexpected_read(*args, **kwargs):
+        raise AssertionError("Invalid columns must be rejected before reading external data")
+
+    monkeypatch.setattr("kd.dataset._base.load_cyt_flowfeature_raw", unexpected_read)
+    with pytest.raises(ValueError, match="Unknown target column"):
         load_cyt_dataset("flatplate", target="not_a_real_column")
+    with pytest.raises(ValueError, match="Unknown feature column"):
+        load_cyt_dataset("flatplate", feature_columns=["not_a_real_column"])
 
 
 def test_load_cyt_dataset_unknown_case_raises():
@@ -381,6 +427,7 @@ def test_load_cyt_dataset_unknown_case_raises():
         load_cyt_dataset("not_a_real_case")
 
 
+@pytest.mark.external_data("kd/dataset/CYT/FlatPlate_lk0.215andPplus/Output/FlowFeature.dat")
 def test_load_dataset_cyt_cases_registered():
     assert "cyt_flatplate" in list_datasets()
     assert "cyt_naca0012" in list_datasets()
@@ -395,6 +442,7 @@ def test_load_dataset_cyt_cases_registered():
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.external_data("kd/dataset/Discovery_of_soild_consititutive/data/data_DIF/*.xlsx")
 def test_load_solid_dif_dataset_shapes():
     pytest.importorskip("pandas")
     pytest.importorskip("openpyxl")
@@ -415,6 +463,9 @@ def test_load_solid_dif_dataset_shapes():
     assert data["y"].min() > 0.5
 
 
+@pytest.mark.external_data(
+    "kd/dataset/Discovery_of_soild_consititutive/data/data_strain_stress/*.xlsx"
+)
 def test_load_solid_strain_stress_dataset_shapes():
     pytest.importorskip("pandas")
     pytest.importorskip("openpyxl")
@@ -435,6 +486,9 @@ def test_load_solid_strain_stress_dataset_shapes():
     assert np.any(np.isclose(data["X"][:, 1], 1e-4))
 
 
+@pytest.mark.external_data(
+    "kd/dataset/Discovery_of_soild_consititutive/data/saved_data_hardening_strain_rate/*.pkl"
+)
 def test_load_solid_hardening_dataset_shapes():
     pytest.importorskip("pandas")
 
@@ -447,6 +501,7 @@ def test_load_solid_hardening_dataset_shapes():
     assert np.all(data["X"][:, 1] > 0)  # strain_rate
 
 
+@pytest.mark.external_data("kd/dataset/Discovery_of_soild_consititutive/data/data_DIF/*.xlsx")
 def test_load_dataset_solid_registered():
     for name in ("solid_dif", "solid_strain_stress", "solid_hardening"):
         assert name in list_datasets()
@@ -470,6 +525,12 @@ def test_load_dataset_solid_registered():
         ("II", "1000-2000"),
     ],
 )
+@pytest.mark.external_data(
+    "kd/dataset/ViscousGravityCurrent/data/vgs_I_0-100.dat",
+    "kd/dataset/ViscousGravityCurrent/data/vgs_I_100-200.dat",
+    "kd/dataset/ViscousGravityCurrent/data/vgs_II_0-1000.dat",
+    "kd/dataset/ViscousGravityCurrent/data/vgs_II_1000-2000.dat",
+)
 def test_load_vgs_dataset_shapes(case, window):
     dataset = load_vgs_dataset(case=case, window=window)
     assert isinstance(dataset, GridPDEDataset)
@@ -483,6 +544,12 @@ def test_load_vgs_dataset_shapes(case, window):
     assert np.all(np.diff(dataset.t) > 0)
 
 
+@pytest.mark.external_data(
+    "kd/dataset/ViscousGravityCurrent/data/vgs_I_0-100.dat",
+    "kd/dataset/ViscousGravityCurrent/data/vgs_I_100-200.dat",
+    "kd/dataset/ViscousGravityCurrent/data/vgs_II_0-1000.dat",
+    "kd/dataset/ViscousGravityCurrent/data/vgs_II_1000-2000.dat",
+)
 def test_load_vgs_dataset_default_window():
     default_I = load_vgs_dataset(case="I")
     explicit_I = load_vgs_dataset(case="I", window="0-100")
@@ -493,6 +560,7 @@ def test_load_vgs_dataset_default_window():
     np.testing.assert_array_equal(default_II.usol, explicit_II.usol)
 
 
+@pytest.mark.external_data("kd/dataset/ViscousGravityCurrent/data/vgs_I_0-100.dat")
 def test_load_vgs_dataset_case_aliases():
     via_alias = load_vgs_dataset(case="1")
     via_name = load_vgs_dataset(case="I")
@@ -509,6 +577,10 @@ def test_load_vgs_dataset_unknown_window_raises():
         load_vgs_dataset(case="I", window="not_a_window")
 
 
+@pytest.mark.external_data(
+    "kd/dataset/ViscousGravityCurrent/data/vgs_I_0-100.dat",
+    "kd/dataset/ViscousGravityCurrent/data/vgs_I_100-200.dat",
+)
 def test_load_vgs_dataset_windows_are_distinct():
     # Different windows of the same case should not hold identical data.
     a = load_vgs_dataset(case="I", window="0-100")
@@ -516,6 +588,7 @@ def test_load_vgs_dataset_windows_are_distinct():
     assert not np.array_equal(a.usol, b.usol)
 
 
+@pytest.mark.external_data("kd/dataset/ViscousGravityCurrent/data/vgs_I_0-100.dat")
 def test_load_dataset_vgs_registered():
     vgs_names = [n for n in list_datasets() if n.startswith("vgs_")]
     assert set(vgs_names) == {

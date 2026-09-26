@@ -1,5 +1,7 @@
 # kd/model/kd_symbolicgpt.py
 
+import copy
+import pickle
 import random
 from typing import Any, List, Optional, Sequence, Tuple
 
@@ -199,7 +201,7 @@ class KD_SymbolicGPT(BaseEstimator):
             )
         return corpus
 
-    def fit(self, X: Any, y: Any) -> "KD_SymbolicGPT":
+    def fit(self, X: Any, y: Any, *, pretrain_cache=None) -> "KD_SymbolicGPT":
         """
         Discover a symbolic expression for (X, y).
 
@@ -207,7 +209,29 @@ class KD_SymbolicGPT(BaseEstimator):
         ----------
         X : array-like, shape (n_samples, n_vars) or (n_samples,)
         y : array-like, shape (n_samples,)
+        pretrain_cache : dict or None
+            Optional caller-owned, single-entry cache for one dataset instance.
+            Reuses only synthetic pretraining with identical parameters and
+            shape. Each target still samples and fits constants independently.
+            The benchmark creates and discards this cache within one case;
+            ordinary fit calls continue to train from scratch.
         """
+        # A failed refit must not leave a previous successful solution usable.
+        for attribute in (
+            "best_expression_", "best_skeleton_", "train_loss_", "test_mse_",
+            "model_", "train_dataset_", "conditioning_indices_",
+        ):
+            self.__dict__.pop(attribute, None)
+        self.candidates_ = []
+        self.pretraining_ = {
+            "protocol": ("synthetic_case_instance_reuse" if pretrain_cache is not None
+                         else "synthetic_per_fit"),
+            "cache_hit": False,
+        }
+        self.candidate_validation_ = dict(
+            sampled=0, invalid_tokens=0, fit_failed=0,
+            nonfinite_loss=0, invalid_predictions=0, accepted=0,
+        )
         random.seed(self.seed)
         np.random.seed(self.seed)
         torch.manual_seed(self.seed)
@@ -218,9 +242,13 @@ class KD_SymbolicGPT(BaseEstimator):
         if X.ndim == 1:
             X = X.reshape(-1, 1)
         y = np.asarray(y, dtype=float).reshape(-1)
+        if X.ndim != 2 or not X.size:
+            raise ValueError("X must be a nonempty two-dimensional array")
         num_vars = X.shape[1]
         if len(X) != len(y):
             raise ValueError(f"X and y have different lengths: {len(X)} != {len(y)}")
+        if not np.isfinite(X).all() or not np.isfinite(y).all():
+            raise ValueError("SymbolicGPT requires finite X and y training values")
 
         if self.max_conditioning_points is not None and len(X) > self.max_conditioning_points:
             # Evenly spaced indices are deterministic and retain coverage of
@@ -238,7 +266,45 @@ class KD_SymbolicGPT(BaseEstimator):
         num_points = len(conditioning_X)
         self.conditioning_indices_ = conditioning_indices
 
-        # Build a synthetic corpus and pretrain a small GPT.
+        # Pretraining uses only configuration, shape and seed, never real X/y.
+        # Pickle is used solely to create an exact in-memory key; no data is
+        # deserialized. Include every estimator parameter conservatively.
+        cache_key = pickle.dumps((
+            type(self).__module__, type(self).__qualname__, self.get_params(deep=False),
+            num_vars, num_points, str(device), str(torch.get_default_dtype()),
+            torch.cuda.current_device() if device.type == "cuda" else None,
+        ), protocol=4) if pretrain_cache is not None else None
+        if pretrain_cache is not None and pretrain_cache.get("key") == cache_key:
+            model = copy.deepcopy(pretrain_cache["model"])
+            train_dataset = pretrain_cache["dataset"]
+            random.setstate(pretrain_cache["python_rng"])
+            np.random.set_state(pretrain_cache["numpy_rng"])
+            torch.set_rng_state(pretrain_cache["torch_rng"])
+            if pretrain_cache["cuda_rng"] is not None:
+                torch.cuda.set_rng_state_all(pretrain_cache["cuda_rng"])
+            self.pretraining_["cache_hit"] = True
+        else:
+            if pretrain_cache is not None:
+                pretrain_cache.clear()
+            model, train_dataset = self._pretrain(num_vars, num_points, device)
+            if pretrain_cache is not None:
+                # Snapshot before target-conditioned sampling; inference never
+                # mutates the corpus. Copy weights so an estimator cannot alter
+                # the cached model through its public model_ attribute.
+                pretrain_cache.update(
+                    key=cache_key, model=copy.deepcopy(model), dataset=train_dataset,
+                    python_rng=random.getstate(), numpy_rng=np.random.get_state(),
+                    torch_rng=torch.get_rng_state(),
+                    cuda_rng=(torch.cuda.get_rng_state_all()
+                              if torch.cuda.is_initialized() else None),
+                )
+
+        return self._fit_candidates(
+            model, train_dataset, X, y, conditioning_X, conditioning_y, device,
+        )
+
+    def _pretrain(self, num_vars, num_points, device):
+        """Generate a synthetic corpus and train independently of target values."""
         corpus = self._build_pretrain_corpus(num_vars, num_points)
 
         text = "".join("<" + str(rec["Skeleton"]) + ">" for rec in corpus)
@@ -283,8 +349,12 @@ class KD_SymbolicGPT(BaseEstimator):
         )
         trainer = Trainer(model, train_dataset, None, tconf, device)
         trainer.train()
-        model = model.eval()
+        return model.eval(), train_dataset
 
+    def _fit_candidates(self, model, train_dataset, X, y,
+                        conditioning_X, conditioning_y, device):
+        num_vars = X.shape[1]
+        num_points = len(conditioning_X)
         # Sample candidate skeletons conditioned on the observed data.
         real_points = points_tensor_from_xy(
             conditioning_X,
@@ -296,7 +366,8 @@ class KD_SymbolicGPT(BaseEstimator):
         real_vars = torch.tensor([[num_vars]], dtype=torch.long).to(device)
         seed_input = torch.tensor([[train_dataset.stoi["<"]]], dtype=torch.long).to(device)
 
-        candidates = []
+        candidates = self.candidates_
+        validation = self.candidate_validation_
         remaining = self.num_candidates
         while remaining > 0:
             batch_size = min(self.candidate_batch_size, remaining)
@@ -314,26 +385,42 @@ class KD_SymbolicGPT(BaseEstimator):
             remaining -= batch_size
 
             for sampled in sampled_batch:
-                skeleton = "".join(train_dataset.itos[int(i)] for i in sampled)
-                skeleton = (
-                    skeleton.strip(train_dataset.paddingToken)
-                    .split(">")[0]
-                    .strip("<")
-                    .strip(">")
-                )
+                validation["sampled"] += 1
+                decoded = "".join(train_dataset.itos[int(i)] for i in sampled)
+                prefix, end_token, _ = decoded.partition(">")
+                if not prefix.startswith("<") or not end_token:
+                    validation["invalid_tokens"] += 1
+                    continue
+                skeleton = prefix[1:]
                 if skeleton == "" or "x" not in skeleton:
+                    validation["invalid_tokens"] += 1
                     continue
                 try:
                     # Constant fitting intentionally uses the complete input,
                     # not the capped conditioning point cloud.
                     expression, loss = fit_constants(skeleton, X, y)
+                    loss = float(loss)
                 except Exception:
+                    validation["fit_failed"] += 1
+                    continue
+                if not np.isfinite(loss):
+                    validation["nonfinite_loss"] += 1
+                    continue
+                try:
+                    predictions = evaluate_expression(expression, X)
+                    if predictions.shape != y.shape or not np.isfinite(predictions).all():
+                        raise ValueError("Invalid training predictions")
+                except Exception:
+                    validation["invalid_predictions"] += 1
                     continue
                 candidates.append((loss, skeleton, expression))
+                validation["accepted"] += 1
 
         if not candidates:
             raise RuntimeError(
-                "None of the sampled equation skeletons could be fit to the data; "
+                f"No valid SymbolicGPT candidates (0/{validation['sampled']} accepted; "
+                f"validation={validation}). Candidates must have valid equation syntax, "
+                "finite fitted loss and finite predictions on every training row; "
                 "try increasing pretrain_epochs/pretrain_corpus_size or num_candidates."
             )
         candidates.sort(key=lambda c: c[0])

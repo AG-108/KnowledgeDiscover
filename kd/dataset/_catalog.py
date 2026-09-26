@@ -161,7 +161,14 @@ for _name, _rel_path in _TLC_TIME_SERIES_FILES.items():
 DATASET_REGISTRY["wdwake"] = {"category": "pde", "loader": _load_wdwake}
 DATASET_REGISTRY["ball_drop"] = {"category": "ode", "loader": _load_ball_drop}
 for _system, _family in (("oscillator", "oscillatory"), ("population", "population"),
-                         ("chaotic", "chaotic"), ("rational", "rational")):
+                         ("chaotic", "chaotic"), ("rational", "rational"),
+                         ("damped_oscillator", "damped_oscillatory"),
+                         ("pendulum", "nonlinear_oscillatory"),
+                         ("duffing", "nonlinear_oscillatory"),
+                         ("van_der_pol", "nonlinear_oscillatory"),
+                         ("sir", "epidemic"), ("fitzhugh_nagumo", "excitable"),
+                         ("brusselator", "chemical"),
+                         ("robertson", "stiff_chemical")):
     DATASET_REGISTRY[f"ode_core_{_system}"] = {
         "category": "ode", "family": _family,
         "loader": _make_ode_core_loader(_system),

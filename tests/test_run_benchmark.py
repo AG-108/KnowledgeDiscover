@@ -41,10 +41,10 @@ def test_domain_datasets_are_included_in_the_full_matrix():
         "solid_dif": ("sr", 9),
         "solid_strain_stress": ("sr", 9),
         "solid_hardening": ("sr", 9),
-        "vgs_I_0-100": ("pde", 12),
-        "vgs_I_100-200": ("pde", 12),
-        "vgs_II_0-1000": ("pde", 12),
-        "vgs_II_1000-2000": ("pde", 12),
+        "vgs_I_0-100": ("pde", 11),
+        "vgs_I_100-200": ("pde", 11),
+        "vgs_II_0-1000": ("pde", 11),
+        "vgs_II_1000-2000": ("pde", 11),
     }
 
     cases = benchmark.build_experiments(catalog, datasets=list(expected))
@@ -160,10 +160,249 @@ def test_regression_metrics_and_exact_symbolic_recovery():
     assert scores["test_r2"] == pytest.approx(0.5)
     recovered = benchmark.expression_metrics("add(mul(X0, X0), sub(X0, X0))", "x1**2", ["x1"])
     assert recovered["exact_recovery"] == 1
+    assert recovered["structural_recovery"] == 1
+    assert recovered["algebraic_exact_recovery"] == 1
+    assert recovered["coefficient_error"] == 0
+    assert recovered["recovery_evaluator_status"] == "evaluated"
     assert recovered["expression_complexity"] == 7
     partial = benchmark.regression_metrics([1, 2, 3], [1, np.nan, 3])
     assert partial["prediction_finite_coverage"] == pytest.approx(2 / 3)
     assert "test_mse" not in partial
+
+
+def test_sr_recovery_separates_structure_from_coefficients():
+    close = benchmark.expression_metrics(
+        "sin(1.4999994*x1)*cos(0.49999747*x2)",
+        "sin(1.5*x1)*cos(0.5*x2)",
+        ["x1", "x2"],
+    )
+    assert close["exact_recovery"] == 1
+    assert close["structural_recovery"] == 1
+    assert close["algebraic_exact_recovery"] == 0
+    assert close["coefficient_error"] < 1e-5
+
+    approximate_constant = benchmark.expression_metrics(
+        "x1 + sin(x1**2) + 0.33333334",
+        "1/3 + x1 + sin(x1**2)",
+        ["x1"],
+    )
+    assert approximate_constant["exact_recovery"] == 1
+    assert approximate_constant["algebraic_exact_recovery"] == 0
+    assert approximate_constant["coefficient_error"] < 1e-7
+
+    wrong = benchmark.expression_metrics("2*x1**3", "3*x1**2", ["x1"])
+    assert wrong["exact_recovery"] == 0
+    assert wrong["coefficient_error"] is None
+
+
+def test_physo_legacy_pretty_expression_parsing():
+    recovered = benchmark.expression_metrics(
+        "x₁⋅(x₁ + x₁ + x₁)", "3.14159265358979323846*x1*x1", ["x1"]
+    )
+    assert recovered["recovery_evaluator_status"] == "evaluated"
+    assert recovered["exact_recovery"] == 1
+    assert recovered["coefficient_error"] == pytest.approx(abs(3 - np.pi) / np.pi)
+
+    missing_constant = benchmark.expression_metrics(
+        "x₁ + sin(x₁⋅x₁)", "1/3 + x1 + sin(x1**2)", ["x1"]
+    )
+    assert missing_constant["exact_recovery"] == 0
+    assert str(benchmark.expression_sympy("x₁² + x₂⁻³", ["x1", "x2"])) == "x1**2 + x2**(-3)"
+
+    # A line-positioned fraction cannot be flattened without changing meaning.
+    assert benchmark.expression_sympy(" x₁\n────\n x₂", ["x1", "x2"]) is None
+
+
+def test_physo_legacy_log_recovery_requires_exact_display_match(tmp_path):
+    import sympy as sp
+    from scripts.recompute_recovery_metrics import matched_physo_log_expression, reevaluate
+
+    program = "(x1+1)/x1"
+    display = sp.pretty(sp.sympify(program, evaluate=False), use_unicode=True)
+    log_path = tmp_path / "physo.log"
+    log_path.write_text(
+        "epoch,reward,complexity,program\n"
+        "0,0.2,1,x1\n"
+        f"0,0.9,2,{program}\n"
+        "1,0.8,2,(x1+2)/x1\n",
+        encoding="utf-8",
+    )
+    assert matched_physo_log_expression(log_path, display) == program
+    assert matched_physo_log_expression(log_path, display + " ") is None
+
+    row = reevaluate("formal", "physo_full_20260918", {
+        "task": "sr", "model": "physo", "status": "ok", "expression": display,
+        "ground_truth_expression": "1 + 1/x1", "variable_names": ["x1"],
+        "physo_log_path": log_path,
+    })
+    assert row["recovery_evaluable"] is True
+    assert row["structural_recovery"] == 1
+    assert row["evaluation_expression"] == program
+    assert row["recovery_expression_provenance"] == "exact_display_match_to_physo_log"
+
+
+def test_gplearn_exp_primitive_and_physo_machine_expression():
+    model = benchmark._new_model(
+        "gplearn",
+        {
+            "population_size": 10,
+            "generations": 1,
+            "function_set": ["add", "exp"],
+            "const_range": [-10.0, 10.0],
+            "init_depth": [2, 6],
+            "random_state": 0,
+        },
+    )
+    assert {
+        function if isinstance(function, str) else function.name
+        for function in model.function_set
+    } == {"add", "exp"}
+    assert model.const_range == (-10.0, 10.0)
+    assert model.init_depth == (2, 6)
+
+    class FakeExpression:
+        def get_infix_sympy(self, **kwargs):
+            import sympy as sp
+
+            assert kwargs == {"do_simplify": True, "evaluate_consts": True}
+            return np.asarray([sp.Symbol("x1") + sp.Float("0.33333334")], dtype=object)
+
+    assert benchmark._physo_expression_text(FakeExpression()) == "x1 + 0.33333334"
+
+
+def test_declared_benchmark_search_space_is_adapted_without_truth_inspection():
+    metadata = {"benchmark_function_set": ["add", "mul", "n2", "exp", "1.0", "const"]}
+    gp = benchmark._dataset_search_space(
+        {"use_dataset_function_set": True, "function_set": ["sin"], "const_range": [-1, 1]},
+        metadata,
+        "gplearn",
+    )
+    assert gp["function_set"] == ["add", "mul", "n2", "exp"]
+    assert gp["const_range"] == [-1, 1]
+
+    physo = benchmark._dataset_search_space(
+        {
+            "use_dataset_function_set": True,
+            "op_names": ["sin"],
+            "fixed_consts": [9.0],
+            "free_consts_names": ["c0"],
+        },
+        metadata,
+        "physo",
+    )
+    assert physo["op_names"] == ["add", "mul", "n2", "exp"]
+    assert physo["fixed_consts"] == [1.0]
+    assert physo["free_consts_names"] == ["c0"]
+
+
+def test_reference_repair_is_opt_in_and_keeps_fit_constants():
+    metadata = {"benchmark_function_set": ["add", "mul", "sin"]}
+    base = {"use_dataset_function_set": True, "const_range": [-10, 10]}
+    declared = benchmark._dataset_search_space(base, metadata, "gplearn", "sqrt(x1)")
+    assert declared["function_set"] == ["add", "mul", "sin"]
+    assert declared["const_range"] is None
+
+    repaired = benchmark._dataset_search_space(
+        {
+            **base,
+            "search_space_policy": "declared_plus_reference",
+            "keep_constant_range": True,
+        },
+        metadata,
+        "gplearn",
+        "sqrt(x1)",
+    )
+    assert repaired["function_set"] == ["add", "mul", "sin", "sqrt"]
+    assert repaired["const_range"] == [-10, 10]
+    assert "search_space_policy" not in repaired
+    assert "keep_constant_range" not in repaired
+
+
+def test_pyoperon_uses_declared_grammar_with_native_operator_names():
+    params = benchmark._dataset_search_space(
+        {"use_dataset_function_set": True, "allowed_symbols": "add,variable"},
+        {"benchmark_function_set": ["add", "n2", "n3", "expneg", "const"]},
+        "pyoperon",
+    )
+    assert params["allowed_symbols"] == "add,square,pow,exp,sub,constant,variable"
+
+
+def test_model_dataset_overrides_apply_only_to_matching_cases():
+    config = {"models": {"gplearn": {"population_size": 1000}},
+              "model_datasets": {"gplearn": {"Korns-*": {"population_size": 600}}}}
+    assert make_case(dataset="Korns-1", config=config)["model_params"]["population_size"] == 600
+    assert make_case(dataset="Nguyen-8", config=config)["model_params"]["population_size"] == 1000
+
+
+def test_pysr_uses_declared_grammar_with_native_operator_names():
+    params = benchmark._dataset_search_space(
+        {"use_dataset_function_set": True},
+        {"benchmark_function_set": ["add", "mul", "inv", "n2", "n3", "expneg"]},
+        "pysr",
+    )
+    assert params["binary_operators"] == ["+", "*", "/", "-"]
+    assert params["unary_operators"] == ["square", "cube", "exp"]
+
+
+def test_physo_can_retain_fit_constants_when_adapting_operators():
+    params = benchmark._dataset_search_space(
+        {"use_dataset_function_set": True, "keep_free_constants": True,
+         "keep_fixed_consts": True, "fixed_consts": [1.0],
+         "free_consts_names": ["c0", "c1"],
+         "free_consts_init_val": [1.0, 1.0]},
+        {"benchmark_function_set": ["add", "sqrt", "2.0"]},
+        "physo",
+    )
+    assert params["op_names"] == ["add", "sqrt"]
+    assert params["fixed_consts"] == [1.0, 2.0]
+    assert params["free_consts_names"] == ["c0", "c1"]
+
+
+def test_dso_preserves_declared_constant_and_poly_terminals():
+    params = benchmark._dataset_search_space(
+        {"use_dataset_function_set": True},
+        {"benchmark_function_set": ["add", "n2", "2.0", "const", "poly"]},
+        "dso",
+    )
+    assert params["function_set"] == ["add", "n2", "2.0", "const", "poly"]
+
+
+def test_discover_and_symbolicgpt_resolve_only_executable_dataset_operators():
+    metadata = {"benchmark_function_set": ["add", "sin", "n2", "sqrt", "tanh", "const"]}
+    params = {"use_dataset_function_set": True, "search_space_policy": "declared"}
+    dscv = benchmark._dataset_search_space(params, metadata, "dscv")
+    assert dscv["binary_operators"] == ["add"]
+    assert dscv["unary_operators"] == ["sin", "n2", "sqrt", "tanh"]
+
+    spr = benchmark._dataset_search_space(params, metadata, "spr")
+    assert spr["binary_operators"] == ["add_t"]
+    assert spr["unary_operators"] == ["n2_t"]
+
+    symbolicgpt = benchmark._dataset_search_space(params, metadata, "symbolicgpt")
+    assert symbolicgpt["op_list"] == ["add", "sin", "pow", "sqrt"]
+
+
+def test_symbolicgpt_reference_repair_is_opt_in():
+    metadata = {"benchmark_function_set": ["add", "sin"]}
+    base = {"use_dataset_function_set": True}
+    declared = benchmark._dataset_search_space(base, metadata, "symbolicgpt", "sqrt(x1)")
+    repaired = benchmark._dataset_search_space(
+        {**base, "search_space_policy": "declared_plus_reference"},
+        metadata, "symbolicgpt", "sqrt(x1)",
+    )
+    assert declared["op_list"] == ["add", "sin"]
+    assert repaired["op_list"] == ["add", "sin", "sqrt"]
+
+
+def test_cli_search_space_policy_override_is_recorded(tmp_path):
+    config = benchmark.ROOT / "configs/benchmark/tuning/gplearn_dataset_repaired.json"
+    assert benchmark.main([
+        "--config", str(config), "--datasets", "Nguyen-8", "--dry-run",
+        "--search-space-policy", "declared", "--output-dir", str(tmp_path),
+    ]) == 0
+    manifest = json.loads((tmp_path / "benchmark_manifest.json").read_text(encoding="utf-8"))
+    assert manifest["search_space_policy_override"] == "declared"
+    assert manifest["cases"][0]["model_params"]["search_space_policy"] == "declared"
 
 
 def test_ode_holds_out_whole_trajectories_and_fits_each_derivative():
@@ -269,6 +508,34 @@ def test_sindy_pde_adapter_aligns_derivatives_and_discovers_rhs():
     row = benchmark.run_pde(data, case)
     assert row["expression"].startswith("u_t = ")
     assert row["equation_residual_mse"] == pytest.approx(0, abs=1e-8)
+
+
+def test_pdefind_uses_configured_terms_for_fit_and_rollout():
+    from kd.model.kd_pdefind import PDEFindModel
+
+    data = scalar_grid()
+    model = PDEFindModel(derivative_order=1, terms=["u_x"], threshold=0)
+    model.fit(data)
+    assert model._feature_names == ["u_x"]
+    np.testing.assert_allclose(
+        model.predict(data.usol[:, 0], 0.1), data.usol[:, 0] + 0.1, atol=1e-10
+    )
+    restricted = PDEFindModel(derivative_order=2, threshold=0)
+    restricted.fit(data)
+    assert "u_xxx" not in restricted._feature_names
+    assert "u*u_xxx" not in restricted._feature_names
+
+    case = make_case(
+        model="pdefind", dataset="kdv",
+        config={"models": {"pdefind": {
+            "terms": ["u_x"], "candidate_space_label": "reference_diagnostic",
+        }}},
+    )
+    row = benchmark.run_pde(data, case)
+    assert row["search_space"] == {
+        "policy": "reference_diagnostic",
+        "library": {"derivative_order": 3, "terms": ["u_x"], "resolved_terms": ["u_x"]},
+    }
 
 
 def test_deepmod_uses_time_first_and_aligned_targets(monkeypatch):
@@ -460,7 +727,7 @@ def test_aggregate_does_not_pool_protocol_versions():
     legacy = {**current, "metric_protocol_version": None, "exact_recovery": 0}
     groups = [item for item in benchmark.aggregate_results([current, legacy])
               if item["task"] == "sr" and item["model"] == "gplearn"]
-    assert {item["metric_protocol_version"] for item in groups} == {"2.0", "legacy/unknown"}
+    assert {item["metric_protocol_version"] for item in groups} == {"2.1", "legacy/unknown"}
 
 
 def test_coefficient_recovery_has_declared_tolerances():
@@ -676,6 +943,23 @@ def test_worker_timeout_preserves_remaining_ode_target_denominator(monkeypatch, 
     assert all(row["status"] == "timeout" and row["recovery_eligible"] for row in rows)
 
 
+@pytest.mark.parametrize("reuse,protocol", [
+    (False, "synthetic_per_fit"),
+    (True, "synthetic_case_instance_reuse"),
+])
+def test_symbolicgpt_timeout_preserves_configured_protocol(monkeypatch, tmp_path, reuse, protocol):
+    case = make_case(model="symbolicgpt", dataset="ode_core_oscillator")
+    case["model_params"]["reuse_pretraining_within_case"] = reuse
+    def timeout(*args, **kwargs):
+        raise subprocess.TimeoutExpired("mock-worker", 10)
+    monkeypatch.setattr(benchmark.subprocess, "run", timeout)
+    rows = benchmark.execute_case(case, tmp_path, timeout=10)
+    assert len(rows) == 2
+    assert all(row["method_provenance"] == {
+        "protocol": protocol, "cache_hit": None,
+    } for row in rows)
+
+
 def test_partial_worker_timeout_does_not_duplicate_completed_targets(monkeypatch, tmp_path):
     case = make_case(model="sindy", dataset="ode_core_oscillator")
     directory = tmp_path / "cases" / case["name"]
@@ -774,3 +1058,34 @@ def test_spr_external_data_never_load_builtin_field(monkeypatch):
     benchmark.run_pde(scalar_grid(), case)
     assert len(created) == 2
     assert all(p.pretrain_epoch == case["run_params"]["spr_pretrain_epochs"] for p in created)
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+def test_symbolicgpt_cache_is_scoped_to_case_and_instance(monkeypatch, tmp_path, enabled):
+    case = make_case(model="symbolicgpt", dataset="ode_core_damped_oscillator")
+    case["model_params"]["reuse_pretraining_within_case"] = enabled
+    instances = [object(), object()]
+    seen = []
+
+    def regress(problem, case, *, pretrain_cache=None):
+        seen.append(pretrain_cache)
+        if pretrain_cache is not None:
+            pretrain_cache["used"] = True
+        return {"expression": "x1"}
+
+    monkeypatch.setattr(benchmark, "_load_instances",
+                        lambda case: [("first", instances[0]), ("second", instances[1])])
+    monkeypatch.setattr(benchmark, "regression_problems",
+                        lambda dataset, case: iter([{"target": "a"}, {"target": "b"}]))
+    monkeypatch.setattr(benchmark, "run_regression", regress)
+    for index in range(2):
+        rows = benchmark.run_case(case, tmp_path / str(index))
+        assert len(rows) == 4
+        assert all(row["status"] == "ok" for row in rows)
+    if enabled:
+        assert seen[0] is seen[1]
+        assert seen[2] is seen[3]
+        assert seen[0] is not seen[2]
+        assert seen[0] is not seen[4]
+    else:
+        assert seen == [None] * 8

@@ -9,7 +9,7 @@ average-case performance.
 Petersen et al., "Deep symbolic regression: Recovering mathematical expressions
 from data via risk-seeking policy gradients", ICLR 2021.
 Original repo (BSD-3-Clause): https://github.com/dso-org/deep-symbolic-optimization
-vendored unmodified at `kd/dataset/DeepSymbolicOptimization/`.
+optionally stored locally at `kd/dataset/DeepSymbolicOptimization/`.
 
 Port notes
 ----------

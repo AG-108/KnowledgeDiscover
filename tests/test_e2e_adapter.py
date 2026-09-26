@@ -2,6 +2,9 @@
 
 from types import SimpleNamespace
 import hashlib
+import io
+from pathlib import PosixPath, WindowsPath
+import sys
 import numpy as np
 import pytest
 import sympy as sp
@@ -33,6 +36,14 @@ def test_checkpoint_requires_explicit_trust_and_hash(tmp_path):
         model.check_available()
     model.checkpoint_sha256 = hashlib.sha256(checkpoint.read_bytes()).hexdigest()
     assert model.check_available() == (checkpoint, source)
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows checkpoint path compatibility")
+def test_official_checkpoint_path_remapping_is_local():
+    unpickler = kd_e2e._windows_path_pickle_module().Unpickler(io.BytesIO())
+    assert unpickler.find_class("pathlib", "PosixPath") is WindowsPath
+    assert unpickler.find_class("builtins", "int") is int
+    assert PosixPath is not WindowsPath
 
 
 def test_tree_conversion_preserves_original_feature_mapping():

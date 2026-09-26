@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
 
+# Override these for a historical worktree or a separate persistent volume.
+KD_PROJECT="${KD_PROJECT:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)}"
+KD_STORAGE_ROOT="${KD_STORAGE_ROOT:-$HOME/.local/share/kd}"
+
 # Launch or resume the optimized full SymbolicGPT benchmark. Successful cases
 # are discovered only in OUTPUT_DIR; legacy benchmark directories are not used.
 
@@ -7,7 +11,7 @@ set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
-PYTHON="${PYTHON:-/opt/conda/envs/pdebench/bin/python}"
+PYTHON="${PYTHON:-${KD_PYTHON:-python}}"
 MANIFEST="results/symbolicgpt_optimized_manifest_20260921/benchmark_manifest.json"
 COMPATIBILITY="results/compatibility_20260917/compatibility_report.json"
 OUTPUT_DIR="results/symbolicgpt_full_20260918"

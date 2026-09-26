@@ -28,6 +28,25 @@ def _sha256(path):
     return digest.hexdigest()
 
 
+def _windows_path_pickle_module():
+    """Map Linux paths in the official checkpoint without patching global pathlib."""
+    import pickle
+    from pathlib import WindowsPath
+    from types import ModuleType
+
+    class WindowsPathUnpickler(pickle.Unpickler):
+        def find_class(self, module, name):
+            if module == "pathlib" and name == "PosixPath":
+                return WindowsPath
+            return super().find_class(module, name)
+
+    compatible = ModuleType("pickle_windows_path")
+    for name in ("Pickler", "load", "loads", "dump", "dumps"):
+        setattr(compatible, name, getattr(pickle, name))
+    compatible.Unpickler = WindowsPathUnpickler
+    return compatible
+
+
 def _load_official(source_dir, checkpoint, device):
     import torch
 
@@ -39,7 +58,10 @@ def _load_official(source_dir, checkpoint, device):
         if not actual.is_relative_to(Path(source)):
             raise E2EUnavailable("another symbolicregression package is already loaded")
         wrapper = importlib.import_module("symbolicregression.model.sklearn_wrapper")
-        model = torch.load(str(checkpoint), map_location=device, weights_only=False)
+        load_options = {"map_location": device, "weights_only": False}
+        if sys.platform == "win32":
+            load_options["pickle_module"] = _windows_path_pickle_module()
+        model = torch.load(str(checkpoint), **load_options)
     finally:
         sys.path.remove(source)
     model = model.to(device)

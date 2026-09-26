@@ -1,0 +1,25 @@
+{
+  "profile": "full",
+  "tasks": ["sr"],
+  "models": ["physo"],
+  "datasets": ["GrammarVAE-1", "Nguyen-7", "Nguyen-8", "Korns-7"],
+  "seeds": [0],
+  "timeout": 180,
+  "resume": false,
+  "devices": {"physo": "cuda:0"},
+  "output_dir": "results/tuning/physo_one_constant",
+  "overrides": {
+    "models": {
+      "physo": {
+        "epochs": 10,
+        "op_names": ["add", "sub", "mul", "div", "inv", "n2", "n3", "sqrt", "neg", "exp", "log", "sin", "cos"],
+        "fixed_consts": [1.0, 3.141592653589793],
+        "free_consts_names": ["c0"],
+        "free_consts_init_val": [1.0],
+        "stop_reward": 0.999999,
+        "stop_after_n_epochs": 3,
+        "parallel_mode": false
+      }
+    }
+  }
+}

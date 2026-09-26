@@ -15,6 +15,7 @@ _MODEL_MODULES = {
     "SINDyModel": ".kd_sindy",
     "PySINDyModel": ".kd_sindy",
     "KD_LLMSR": ".kd_llmsr",
+    "WSINDyPDEModel": ".kd_wsindy",
     "IntegralWeakPDEModel": ".kd_wsindy",
     "E2ETransformerModel": ".kd_e2e",
 }
@@ -45,6 +46,7 @@ __all__ = [
     "SINDyModel",
     "PySINDyModel",
     "KD_LLMSR",
+    "WSINDyPDEModel",
     "IntegralWeakPDEModel",
     "E2ETransformerModel",
 ]

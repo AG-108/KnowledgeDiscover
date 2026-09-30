@@ -1,0 +1,116 @@
+{
+  "baseline_config_dir": "configs/benchmark/baselines",
+  "profile": "smoke",
+  "tasks": [
+    "pde",
+    "steady_pde"
+  ],
+  "models": [
+    "pdefind_nd",
+    "implicit_pde"
+  ],
+  "datasets": [
+    "tlc_heat_longtime",
+    "tlc_heat_multiscale_lesspoints",
+    "burgers2d",
+    "wave",
+    "klein_gordon",
+    "implicit_mixed",
+    "pdeformer_sinus",
+    "laplace_disk",
+    "laplace_smile",
+    "poisson_eitech",
+    "tlc_burgers2d",
+    "tlc_ns_long",
+    "wdwake",
+    "tlc_steady_ns2d",
+    "tlc_steady_poisson_classic",
+    "tlc_steady_poisson_3d"
+  ],
+  "seeds": [
+    0
+  ],
+  "output_dir": "results/a3_a4_smoke",
+  "timeout": 30.0,
+  "timeout_grace": 5.0,
+  "setup_timeout": 180.0,
+  "score_timeout": 120.0,
+  "resume": false,
+  "devices": {
+    "dscv": "cpu",
+    "spr": "cpu",
+    "sga": "cpu",
+    "dlga": "cpu",
+    "deepmod": "cpu",
+    "pdefind": "cpu",
+    "pdenet": "cpu",
+    "weakform": "cpu",
+    "eqgpt": "cpu",
+    "dso": "cpu",
+    "symbolicgpt": "cpu",
+    "gplearn": "cpu",
+    "physo": "cpu",
+    "pysr": "cpu",
+    "sindy": "cpu",
+    "pysindy": "cpu",
+    "llmsr": "cpu",
+    "pyoperon": "cpu",
+    "pdefind_nd": "cpu",
+    "implicit_pde": "cpu"
+  },
+  "profiles": {
+    "smoke": {
+      "run": {
+        "test_size": 0.2,
+        "max_train_samples": 2000,
+        "dscv_epochs": 2,
+        "colloc_num": 256,
+        "sample_ratio": 0.05,
+        "spr_pretrain_epochs": 50,
+        "spr_pinn_epochs": 20,
+        "spr_iterations": 1,
+        "dlga_samples": 200,
+        "dlga_population": 20,
+        "dlga_generations": 2
+      }
+    },
+    "full": {
+      "run": {
+        "test_size": 0.2,
+        "max_train_samples": null,
+        "dscv_epochs": 50,
+        "colloc_num": 256,
+        "sample_ratio": 0.05,
+        "spr_pretrain_epochs": 200000,
+        "spr_pinn_epochs": 1000,
+        "spr_iterations": 2,
+        "dlga_samples": 0.1,
+        "dlga_population": 400,
+        "dlga_generations": 100
+      }
+    }
+  },
+  "overrides": {
+    "models": {},
+    "datasets": {},
+    "run": {},
+    "model_datasets": {
+      "pdefind_nd": {
+        "pdeformer_sinus": {
+          "coordinate_basis": [
+            "x",
+            "x**2",
+            "sin(1*pi*x)",
+            "cos(1*pi*x)",
+            "sin(2*pi*x)",
+            "cos(2*pi*x)",
+            "sin(3*pi*x)",
+            "cos(3*pi*x)",
+            "sin(4*pi*x)",
+            "cos(4*pi*x)"
+          ]
+        }
+      }
+    }
+  }
+}

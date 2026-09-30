@@ -11,11 +11,13 @@ from kd.model.kd_llmsr import KD_LLMSR
 dataset = SymbolicRegressionDataset(name="Koza-2")
 data = dataset.get_data()
 
-if not os.environ.get("LLMSR_ENDPOINT"):
-    raise RuntimeError("Start an LLM-SR-compatible completion server and set LLMSR_ENDPOINT first")
+# Start the backbone first, for example with scripts/serve_llmsr_backbone.sh.
+endpoint = os.environ.get("LLMSR_ENDPOINT", "http://127.0.0.1:10005/v1/chat/completions")
 
-model = KD_LLMSR(max_samples=8, samples_per_prompt=2, random_state=0)
-model.fit(data["X_train"], data["y_train"], variable_names=["x1"])
+# Protocol defaults (Llama-3.1-8B-Instruct, 4 programs per prompt, 10 islands,
+# BFGS over at most 10 parameters); a small call budget keeps the example short.
+model = KD_LLMSR(endpoint=endpoint, max_llm_calls=8, random_state=0)
+model.fit(data["X_train"], data["y_train"], variable_names=["x1"], target_name="y")
 
 prediction = model.predict(data["X_test"])
 print(f"Expression: {model.best_expression_}")

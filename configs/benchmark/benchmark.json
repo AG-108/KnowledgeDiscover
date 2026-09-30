@@ -1,12 +1,26 @@
 {
   "baseline_config_dir": "configs/benchmark/baselines",
   "profile": "smoke",
-  "tasks": ["sr", "ode", "pde"],
-  "models": ["*"],
-  "datasets": ["*"],
-  "seeds": [0],
+  "tasks": [
+    "sr",
+    "ode",
+    "pde",
+    "steady_pde"
+  ],
+  "models": [
+    "*"
+  ],
+  "datasets": [
+    "*"
+  ],
+  "seeds": [
+    0
+  ],
   "output_dir": "results/benchmark",
   "timeout": null,
+  "timeout_grace": 5.0,
+  "setup_timeout": 300.0,
+  "score_timeout": 300.0,
   "resume": false,
   "devices": {
     "dscv": "cpu",
@@ -26,7 +40,9 @@
     "sindy": "cpu",
     "pysindy": "cpu",
     "llmsr": "cpu",
-    "pyoperon": "cpu"
+    "pyoperon": "cpu",
+    "pdefind_nd": "cpu",
+    "implicit_pde": "cpu"
   },
   "profiles": {
     "smoke": {

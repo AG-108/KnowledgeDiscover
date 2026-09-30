@@ -1,0 +1,51 @@
+{
+  "profile": "smoke",
+  "tasks": [
+    "green",
+    "sr"
+  ],
+  "models": [
+    "green_dso",
+    "green_basis",
+    "gplearn"
+  ],
+  "datasets": [
+    "green_advection",
+    "green_helmholtz",
+    "green_negative_helmholtz",
+    "green_laplace",
+    "green_periodic_helmholtz",
+    "green_jump_green",
+    "green_periodic_helmholtz_k6",
+    "green_laplace_noise_1",
+    "pyqg_subgrid",
+    "dso_file_Custom-2",
+    "dso_file_Test-1",
+    "dso_file_PiecewiseFunction-1"
+  ],
+  "seeds": [
+    0
+  ],
+  "output_dir": "results/a5_a6_smoke",
+  "timeout": 90,
+  "setup_timeout": 120,
+  "score_timeout": 90,
+  "overrides": {
+    "models": {
+      "gplearn": {
+        "population_size": 80,
+        "generations": 3,
+        "function_set": [
+          "add",
+          "sub",
+          "mul",
+          "div",
+          "sin",
+          "cos",
+          "log",
+          "abs"
+        ]
+      }
+    }
+  }
+}

@@ -30,9 +30,8 @@ class PDENetModel:
       - dataset.y:    np.ndarray, shape (Ny,)  (optional but recommended)
         OR dataset.domain provides bounds.
 
-    Important constraint from original repo:
-      - setenv assumes a square 2D grid and single spacing '--dx' for both dims.
-        Practically: Nx == Ny and dx == dy (uniform grids).
+    Rectangular uniform grids use actual per-axis spacing. Periodic padding
+    requires a verified periodic, endpoint-excluded observation declaration.
     """
 
     def __init__(
@@ -102,48 +101,13 @@ class PDENetModel:
             raise ValueError("t must be strictly increasing.")
         dt = float(np.median(dt_arr))
 
-        # spatial bounds + dx (repo expects single dx and square mesh)
-        x = getattr(dataset, "x", None)
-        y = getattr(dataset, "y", None)
-        domain = getattr(dataset, "domain", None)
-
-        x_min, x_max, y_min, y_max = self._infer_bounds_xy(x, y, domain)
-        x_len = x_max - x_min
-        y_len = y_max - y_min
-        if x_len <= 0 or y_len <= 0:
-            raise ValueError("Invalid spatial bounds.")
-
-        # Reject grids that the rectangular-grid adapter cannot represent safely.
-        # if Nx != Ny:
-        #     raise ValueError(
-        #         f"Original PDE-Net-2.0 setenv assumes square mesh; got Nx={Nx}, Ny={Ny}. "
-        #         "You need to modify setenv/polypde to support rectangular grids."
-        #     )
-
-        dx_x = x_len / Nx
-        # dx_y = y_len / Ny
-        # if not np.isclose(dx_x, dx_y, rtol=1e-3, atol=1e-12):
-        #     raise ValueError(
-        #         f"Original setenv uses a single --dx; need dx==dy. Got dx_x={dx_x}, dx_y={dx_y}. "
-        #         "You need to refactor setenv/polypde for anisotropic spacing."
-        #     )
-
-        dx = float(dx_x)
-
-        # choose eps so that bound = eps*cell_num equals the "domain size"
-        # setenv uses: bound = eps*cell_num, mesh_bound = [[0,0],[bound,bound]]
-        # We'll map your [x_min,x_max] and [y_min,y_max] to [0,bound] by assuming periodic/shifted domain.
-        # So we use bound = x_len (== y_len).
-        bound = float(x_len)
-
-        # channel_names: default "u,v,w,..."
-        channel_names = self.channel_names
-        if channel_names is None:
-            base = "u v w p q r s".split()
-            if C <= len(base):
-                channel_names = ",".join(base[:C])
-            else:
-                channel_names = ",".join([f"u{i}" for i in range(C)])
+        from kd.evaluation.equation import periodic_grid_options
+        grid = periodic_grid_options(dataset)
+        dx = grid["dx"][0]
+        bound = grid["mesh_bound"][1][0]-grid["mesh_bound"][0][0]
+        channel_names = self.channel_names or ",".join(getattr(dataset, "state_vars", ["u", "v", "p"][:C]))
+        if len(channel_names.split(",")) != C:
+            raise ValueError("PDE-Net channel names disagree with observations")
 
         kw = {
             "--name": "PDENetModel",
@@ -159,6 +123,9 @@ class PDENetModel:
             "--kernel_size": self.kernel_size,
             "--max_order": self.derivative_order,
             "--dx": dx,
+            "--dx_axes": grid["dx"],
+            "--mesh_size": grid["mesh_size"],
+            "--mesh_bound": grid["mesh_bound"],
             "--hidden_layers": self.hidden_layers,
             "--scheme": self.scheme,
             # required by schema (not used for your dataset-driven training)
@@ -190,7 +157,7 @@ class PDENetModel:
         options = conf.setoptions(argv=[], kw=kw, configfile=None)
         self.options = options
 
-        globalnames, callback, model, data_model, sampling, addnoise = setenv.setenv(options)
+        globalnames, callback, model = setenv._set_model(options)
         self.globalnames = globalnames
         self.callback = callback
         self.model = model

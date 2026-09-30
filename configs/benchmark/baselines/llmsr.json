@@ -2,31 +2,32 @@
   "name": "llmsr",
   "device": "cpu",
   "model": {
-    "endpoint": null,
-    "use_api": false,
-    "api_model": null,
+    "endpoint": "http://127.0.0.1:10005/v1/chat/completions",
+    "use_api": true,
+    "api_model": "meta-llama/Llama-3.1-8B-Instruct",
     "api_key_env": "LLMSR_API_KEY",
-    "max_samples": 4,
-    "samples_per_prompt": 2,
-    "num_islands": 2,
+    "max_llm_calls": 8,
+    "samples_per_prompt": 4,
+    "num_islands": 10,
     "functions_per_prompt": 2,
-    "prompt_samples": 12,
-    "max_parameters": 8,
-    "optimizer_iterations": 100,
-    "optimizer_restarts": 2,
-    "temperature": 0.7,
-    "max_tokens": 512,
-    "request_timeout": 120
+    "num_evaluators": 4,
+    "evaluation_timeout": 30,
+    "max_parameters": 10,
+    "prompt_samples": 0,
+    "temperature": 0.8,
+    "top_p": null,
+    "max_tokens": 1024,
+    "request_timeout": 120,
+    "max_request_retries": 3,
+    "request_seed": true,
+    "reset_period": 14400,
+    "cluster_sampling_temperature_init": 0.1,
+    "cluster_sampling_temperature_period": 30000
   },
   "profiles": {
     "full": {
       "model": {
-        "max_samples": 10000,
-        "samples_per_prompt": 4,
-        "num_islands": 10,
-        "functions_per_prompt": 3,
-        "optimizer_iterations": 500,
-        "optimizer_restarts": 5
+        "max_llm_calls": 1000
       }
     }
   }

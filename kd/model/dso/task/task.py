@@ -224,6 +224,9 @@ def make_task(task_type, **config_task):
     if task_type == "regression":
         from .regression.regression import RegressionTask
         task_class = RegressionTask
+    elif task_type == "green":
+        from .green import GreenTask
+        task_class = GreenTask
     elif task_type in ("binding", "control"):
         # The original repo's binding/ and control/ task subpackages were NOT
         # ported: control/ is an episodic RL task depending on gym/pybullet

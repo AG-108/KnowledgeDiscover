@@ -1,180 +1,142 @@
 # 统一 benchmark
 
-指标定义与聚合口径见 [Benchmark 指标协议](benchmark_metrics.md)。
+当前工程验收见 [验收摘要](validation.md)，来源条件见 [待解决问题](deferred_source_issues.md)。数据 domain-v4；新增轨指标 2.3。
 
-`run_benchmark.py` 统一组织 symbolic regression（`sr`）、ODE discovery（`ode`）和 PDE discovery（`pde`）任务。数据清单来自 `kd.dataset.DATASET_REGISTRY`、`kd/dataset/data/benchmarks.csv` 和 WaveBreaking 适配器；模型按需导入，每个 model/dataset/seed 组合在独立子进程和工作目录中运行。
+`run_benchmark.py` 统一组织 symbolic regression（`sr`）、ODE discovery（`ode`）和 PDE
+discovery（`pde`）任务。数据清单来自 `kd.dataset.DATASET_REGISTRY`、
+`kd/dataset/data/benchmarks.csv` 和 WaveBreaking 适配器；模型按需导入，每个
+model/dataset/seed 组合（case）先枚举 instance/target，再为每个 target 启动独立子进程与工作目录。
 
-## 领域数据集
-
-以下三组数据已通过统一的 `load_dataset(name)` 接口进入 catalog；总配置中的
-`"datasets": ["*"]` 会自动包含全部 9 个入口。
-
-| 数据来源 | Benchmark 名称 | 任务 | 默认输入与目标 |
-| --- | --- | --- | --- |
-| CYT | `cyt_flatplate`、`cyt_naca0012` | SR | 15 个局部流场特征预测涡黏度 `Mut` |
-| Discovery of solid constitutive laws | `solid_dif` | SR | 应变率预测动态增长因子 DIF |
-| Discovery of solid constitutive laws | `solid_strain_stress` | SR | 塑性应变和应变率预测塑性应力 |
-| Discovery of solid constitutive laws | `solid_hardening` | SR | 应变、应变率和 DIF 预测塑性应力 |
-| VGS | `vgs_I_0-100`、`vgs_I_100-200`、`vgs_II_0-1000`、`vgs_II_1000-2000` | PDE | 500 × 500 自由界面高度场 `h(x,t)` |
-
-固体本构数据使用源文件或材料曲线作为分组，benchmark 按组切分训练集与测试集，避免同一条
-实验曲线同时出现在两边。可以只检查或运行这三组数据：
-
-```bash
-python -u run_benchmark.py --datasets "cyt_*" "solid_*" "vgs_*" --dry-run
-python -u run_benchmark.py --datasets "cyt_*" "solid_*" "vgs_*" \
-  --check-compatibility --output-dir results/domain_datasets
-```
+指标定义见 [指标协议](benchmark_metrics.md)，方法变体与适用范围见
+[方法与数据卡片](methods.md)，预算公平性规则与主实验计划见 [计划](benchmark_plan.md)。
 
 ## 配置结构
 
-配置不再硬编码在运行脚本中：
-
 ```text
 configs/benchmark/
-├── benchmark.json          # 总配置：任务选择、profile、设备、输出和通用运行参数
-└── baselines/
-    ├── deepmod.json        # 每个 baseline 的模型参数及 smoke/full 差异
-    ├── dlga.json
-    ├── dscv.json
-    └── ...                 # 共 18 个 baseline 配置
+├── benchmark.json                # 总配置：任务、profile、设备、输出和通用运行参数
+├── core_ode_track.json           # Core ODE：8 系统 × 11 方法 × 5 seeds = 440 cases
+├── core_v2*.json                 # 集成测试套件
+├── llmsr_llama31_8b_1k.json      # LLM-SR 严格 1k-call 对照批次
+├── baselines/<name>.json         # 23 个方法键 的模型参数及 smoke/full 差异
+└── tuning/                       # 探索性配置（含 per-dataset override），不进主表
 ```
 
-总配置 [benchmark.json](../configs/benchmark/benchmark.json) 的主要字段如下：
+总配置 [benchmark.json](../configs/benchmark/benchmark.json) 的主要字段：
 
 | 字段 | 作用 |
 | --- | --- |
 | `profile` | 选择 `smoke` 或 `full` 预算 |
-| `tasks` | 选择 `sr`、`ode`、`pde` |
-| `models` / `datasets` | 名称或通配符列表；`["*"]` 表示全选 |
+| `tasks` | 选择 `sr`、`ode`、`pde`、`steady_pde`、`green` |
+| `models` / `datasets` | 名称或通配符列表；`["*"]` 选择默认轨；A5/A6 新增名称须显式指定名称或模式 |
 | `seeds` | 随机种子列表 |
 | `devices` | 每个 baseline 的 `cpu`、`cuda` 或 `cuda:N` |
-| `output_dir` / `timeout` / `resume` | 输出目录、单个 case 超时秒数和断点恢复 |
+| `output_dir` / `timeout` / `resume` | 输出目录、每个 target 的 fit 上限 T（秒）和断点恢复 |
+| `timeout_grace` | fit 硬终止前的宽限，默认 5 秒；硬上限 T + grace |
+| `setup_timeout` / `score_timeout` | 准备/启动与拟合后评分各自的上限，默认各 300 秒；不占用 T |
 | `profiles.*.run` | benchmark 适配层的通用预算 |
-| `overrides` | 对具体模型、数据集或 run 参数做最终覆盖 |
+| `overrides` | 对 `models`、`datasets`、`model_datasets` 或 `run` 做最终覆盖 |
 
-每个 baseline 文件包含基础 `model` 参数、默认 `device`，以及 `profiles.smoke/full` 下的增量参数。自定义 `--config` 会覆盖仓库总配置，因此服务器任务通常只需写少量字段：
+每个 baseline 文件包含基础 `model` 参数、默认 `device`，以及 `profiles.smoke/full` 下的
+增量参数。自定义 `--config` 覆盖仓库总配置，因此批次配置通常只需少量字段：
 
 ```json
 {
   "profile": "full",
   "tasks": ["sr", "ode"],
-  "models": ["dso", "symbolicgpt", "physo"],
-  "datasets": ["Koza-*", "Keijzer-*", "ball_drop"],
+  "models": ["dso", "physo"],
+  "datasets": ["Koza-*", "ode_core_*"],
   "seeds": [0, 1, 2],
   "output_dir": "results/server_sr",
   "timeout": 21600,
   "resume": true,
-  "devices": {
-    "dso": "cuda:0",
-    "symbolicgpt": "cuda:1",
-    "physo": "cuda:1"
-  },
-  "overrides": {
-    "models": {
-      "dso": {"n_samples": 500000}
-    },
-    "datasets": {},
-    "run": {"max_train_samples": 10000}
-  }
+  "devices": {"dso": "cuda:0", "physo": "cuda:0"},
+  "overrides": {"models": {}, "datasets": {}, "run": {}}
 }
 ```
 
-命令行选择和 `--device` 高于总配置；总配置的 `overrides` 高于对应 baseline profile。最终解析出的 `device` 和全部参数会写入 manifest、`case.json` 和结果行。
+命令行选择和 `--device` 高于总配置；总配置的 `overrides` 高于 baseline profile。
+解析后的 `device` 和参数写入 manifest、`case.json`；计时策略另存 `execution.json` 及结果行。
+执行协议为 `target-v1`，进入 case 身份哈希。新增计时选项也接受同名连字符 CLI 参数。
+T 计入适配器的 `fit` / `train` / 搜索调用；启动、数据准备与模型构造记为 setup，
+调用返回后的预测、表达式提取、指标及辅助评估记为 score。各阶段单独限时，超时终止进程树。
+当前只有硬上限；到 T 返回当前最优的软截止钩子仍是计划 C3。
+
+`--resume` 保留所有已落盘终态（`ok` / `error` / `timeout` / `skipped`），只补没有终态的 target。
+中断尝试的日志和工作目录保留，新尝试写入递增的 `attempts/0002` 等目录。
+worker 已写出结果而父进程尚未合并时，续跑会恢复该结果。对同一 case 的并发调度由文件锁拒绝。
+已有尝试需要 `--resume`；换预算或重做失败项必须使用新的输出目录。旧执行协议的结果和
+manifest 不可用于新 runner 的续跑，历史批次须继续使用原工作树。
+
+并行脚本 `--reuse-dir` 可复制相同配置及计时策略的完整/中断历史，包含失败和超时；
+已有目标目录不会被覆盖。`--retries` 只接受 `0`，默认也是 `0`。
+
+## 领域数据集
+
+物理任务与数值 dispatch 分列；工程交付见 [验收](validation.md)，来源条件见 [问题清单](deferred_source_issues.md)，
+当前与待接入实例通过 scripts/export_dataset_inventory.py 导出。下表明确区分可运行能力与来源阻塞。
+
+| 数据来源 / 名称 | 物理任务 | 当前接口 | 接入状态与目标 |
+| --- | --- | --- | --- |
+| CYT：`cyt_flatplate`、`cyt_naca0012` | 湍流闭合关系发现 | `sr` | 15 个局部特征 → `Mut`；按坐标递归划分 16 个空间块、整块留出；跨工况 OOD 和单位仍待验证 |
+| 固体：`solid_dif` | 应变率相关本构关系发现 | `sr` | 63 个源曲线实例，各自以应变率 → DIF；按观测应变率留出，重复应变率不跨集合 |
+| 固体：`solid_strain_stress` | 应力–应变本构关系发现 | `sr` | 12 个源材料/研究实例，各自以应变、应变率 → 应力；整应变率曲线留出 |
+| 固体：`solid_hardening` | 硬化与应变率本构发现 | `sr` | 10 个源材料/研究实例；应变、应变率 → 应力，默认排除预匹配 DIF；整应变率留出 |
+| 橡胶：`rubber_train` + `rubber_test` | 条件化橡胶本构发现 | `sr` | stretch、组分、温度 → 应力；已使用官方划分，test 不单独计任务 |
+| 落球：`ball_drop` | 实验 ODE 动力学发现 | `ode` | 位置、速度、质量、直径 → 位置/速度导数；整轨迹留出 |
+| VGS：`vgs_I_0-100`、`vgs_I_100-200`、`vgs_II_0-1000`、`vgs_II_1000-2000` | 自由界面时变 PDE 发现 | `pde` | 各 500 × 500 的 `h(x,t)`；相邻窗口需按同一物理家族管理 |
+| 波破碎：`wave_breaking` | 实验波面 PDE 发现 | `pde` | runner 专用加载器；23 个原始实例，需验证插值投影与边界 |
+| TLC：9 个 `tlc_*` 名称 | 一维/二维时变 PDE，含多场系统 | `pde` | 3 项已无损恢复规则网格；`tlc_burgers1d` 可进入一维适配器；二维两项接入 pdefind_nd；散点六项保留来源阻塞 |
+| TLC：另 9 个稳态文件 | 二维/三维稳态 PDE 与稳态流动约束 | steady_pde | 独立稳态接口已接入；有效域/界面来源仍阻塞 |
+| WDwake：`wdwake` | 二维双速度场 PDE 发现 | `pde` | 坐标来源、不同方向步长和边界未解决；现在预检查明确阻止不正确的 PDE-Net 拟合 |
+| Green function：6 基础家族及参数/噪声变体 | Green 核函数 / 算子反演 | green，opt-in | 23 算子实例，联合 forcing 积分响应损失；两份身份未明副本不注册 |
+| Green 目录中的 2 个 pyqg NetCDF | 亚网格闭合关系发现 | sr，opt-in | run0→run1，q_subgrid_forcing 两层独立目标；离线评分 |
+
+另新增 `heat`、`allen_cahn`、`convection_diffusion`、`burgers_sine` 四个一维 PDE 名称。
+Heat 缺发布的系数真值；不把从数据拟合的扩散系数登记为真值。EqGPT 的 PDE_compound
+仍因说明符号冲突及较大参考残差留在待核验清单。
+
+当前数据协议为 `domain-v4`，物理任务、来源、实例、目标和划分写入 catalog、case 与 manifest；
+结果按数据协议和物理任务分组，配对比较也隔离协议。该字段参与 case 身份哈希，新旧协议不能续跑混用。
+固体原始 `load_dataset` / `load_solid_*` API 保留合并表用于数据检查；benchmark 始终通过
+`load_constitutive_instances` 展开，材料身份依据文件名而非跨研究的人工身份核验。
+空间块划分只使用坐标，不使用标签；这仍是同工况空间泛化，不声称跨几何 OOD。
+
+默认 `full` 单 seed 枚举 **330 个独立名称、3024 cases、4470 个 target fits**（含不适用组合）。
+TLC 当前 89/99 组合不适用；矩阵枚举不等于正式主轨已经冻结。
+已接入、来源阻塞、opt-in 名称及重复资产可用以下命令导出；无需训练模型：
+
+```bash
+python scripts/export_dataset_inventory.py --expand-instances --output-dir results/dataset_inventory
+```
+
+生成 `dataset_inventory.json` / `.csv`，包括来源可用性、物理任务、阻塞项、实例/target 数；
+加 `--sha256` 可记录源资产哈希。正式矩阵还需完成 [计划中的接入与冻结项](benchmark_plan.md#4-容量与预算冻结)。
 
 ## GPU 支持
 
-| Baseline | 当前 GPU 支持 | GPU 上运行的主要部分 |
+| Baseline | 设备 | GPU 上运行的主要部分 |
 | --- | --- | --- |
-| `dso` | 支持指定设备 | PyTorch 策略网络；表达式奖励仍含 CPU/NumPy 计算 |
-| `symbolicgpt` | 支持指定设备 | Transformer 训练和生成；候选表达式计算仍含 CPU 工作 |
-| `eqgpt` | 支持指定设备 | GPT、代理网络和自动微分 |
-| `pdenet` | 支持指定设备 | PDE-Net 模型训练和预测 |
-| `deepmod` | 支持指定设备 | 神经网络、自动微分和稀疏约束 |
-| `dlga` | 支持指定设备 | 神经网络和导数计算；遗传搜索在 CPU |
-| `physo` | 支持指定设备 | `physo.SR(..., device=...)` 的张量计算 |
-| `spr` | 部分支持 | PINN 训练和自动微分；DISCOVER 搜索部分仍在 CPU |
-| `dscv` | 当前仅 CPU | 当前 controller/state 代码没有完整设备迁移 |
-| `sga` | 当前仅 CPU | 当前集成没有稳定的显式设备接口 |
-| `pdefind` | CPU | NumPy/SciPy 回归 |
-| `weakform` | CPU | 标量一维 WSINDy-PDE：紧支撑测试函数、FFT 弱卷积与 MSTLS |
-| `gplearn` | CPU | scikit-learn/joblib 风格的 CPU 遗传编程 |
-| `pysr` | CPU | Julia 多线程/多进程符号搜索；当前 PySR 后端不使用 CUDA |
-| `sindy` | CPU | 仓库内 NumPy 多项式库与 STLSQ 稀疏回归 |
-| `pysindy` | CPU | PySINDy 多项式库与 SR3 稀疏回归 |
-| `llmsr` | CPU + 外部 LLM 服务 | 常数优化和候选评分在 CPU；本地 LLM 服务可自行配置 GPU |
-| `pyoperon` | CPU | Operon C++ 遗传编程和多线程候选评分 |
+| `dso` | 可指定 | PyTorch 策略网络；表达式奖励仍含 CPU 计算 |
+| `symbolicgpt` | 可指定 | Transformer 训练和生成 |
+| `e2e` | 可指定 | 预训练 Transformer 推理 |
+| `eqgpt` | 可指定 | GPT、代理网络和自动微分 |
+| `pdenet` | 可指定 | PDE-Net 训练和预测 |
+| `deepmod` | 可指定 | 神经网络、自动微分和稀疏约束 |
+| `dlga` | 可指定 | 神经网络和导数；遗传搜索在 CPU |
+| `physo` | 可指定 | `physo.SR(..., device=...)` 的张量计算 |
+| `spr` | 部分 | PINN 训练；DISCOVER 搜索在 CPU |
+| `llmsr` | CPU + 外部服务 | 候选评分和 BFGS 在 CPU；vLLM backbone 占用 GPU |
+| 其余（`dscv`、`sga`、`pdefind`、`weakform`、`gplearn`、`pysr`、`pyoperon`、`sindy`、`pysindy`） | CPU | — |
 
-总配置默认全部使用 CPU，保证没有 GPU 的环境也能生成和运行任务。迁移到服务器后修改 `devices` 即可。普通执行会在启动 case 前检查 CUDA 是否可用及编号是否越界；也可以只做检查：
+总配置默认全部使用 CPU。启动前会检查 CUDA 可用性和编号；也可只做检查：
 
 ```bash
-python -u run_benchmark.py --config configs/benchmark/benchmark.json \
-  --models dso eqgpt --device dso=cuda:0 --device eqgpt=cuda:1 \
-  --check-devices
+python -u run_benchmark.py --models dso --device dso=cuda:0 --check-devices
 ```
 
-`run_benchmark.py` 当前按 case 串行调度。设备映射保证每个 baseline 使用指定显卡，但不会自动让多个 case 并发。需要同时使用多张卡时，可以启动多个进程并给它们不同的模型集合和输出目录。
-
-## SSH 运行
-
-先检查任务矩阵和设备，再用仓库提供的启动脚本运行：
-
-```bash
-source ~/miniconda3/etc/profile.d/conda.sh
-conda activate kd-env
-
-# PySR 需要 Julia 1.10 或更高版本；首次导入会安装 Julia 侧依赖。
-juliaup add 1.10
-juliaup default 1.10
-python -c "from pysr import PySRRegressor; print('PySR ready')"
-
-# PyOperon 0.6.1 需要 Python >=3.10；新服务器环境应使用 3.10 或 3.11。
-pip install -r requirements-server-py310.txt
-python -c "from pyoperon.sklearn import SymbolicRegressor; print('PyOperon ready')"
-
-python -u run_benchmark.py --config configs/benchmark/benchmark.json --dry-run
-python -u run_benchmark.py --config configs/benchmark/benchmark.json --check-devices
-
-mkdir -p logs
-nohup bash scripts/run_benchmark.sh configs/benchmark/benchmark.json \
-  > logs/benchmark.log 2>&1 &
-echo $!
-tail -f logs/benchmark.log
-```
-
-仓库主环境 `kd-env` 是 Windows/Python 3.9，无法安装要求 Python >=3.10 的
-PyOperon 0.6.1。PyPI 现提供 Windows/Python 3.10 wheel；本机已在独立的
-`kd-operon` 环境安装 PyOperon 0.6.1、NumPy 2.0.2 等运行依赖，并通过 ODE smoke
-验证。单独运行 PyOperon 时需使用该环境的 Python；主环境继续运行其他方法，避免
-把 NumPy 2 引入既有环境。Linux/Python 3.9 仍可使用 PyOperon 0.5.0。
-
-可用 `conda create -n kd-operon python=3.10 pip` 建立独立环境，再执行
-`conda run -n kd-operon python -m pip install -r requirements-operon-py310.txt`。
-Core ODE Track 的 PyOperon 批次应单独使用该解释器运行，例如：
-
-```powershell
-conda run -n kd-operon python run_benchmark.py --config configs/benchmark/core_ode_track.json --models pyoperon --output-dir results/core_ode_track_pyoperon
-```
-
-命令行可以临时覆盖总配置，无需改 JSON：
-
-```bash
-bash scripts/run_benchmark.sh configs/benchmark/benchmark.json \
-  --profile full --models dso --datasets Koza-2 --seeds 0 1 2 \
-  --device dso=cuda:0 --resume
-```
-
-两个 GPU 并行运行时必须使用不同输出目录，避免两个进程同时改写同一份 summary：
-
-```bash
-nohup bash scripts/run_benchmark.sh configs/benchmark/benchmark.json \
-  --models dso symbolicgpt --device dso=cuda:0 --device symbolicgpt=cuda:0 \
-  --output-dir results/gpu0 --resume > logs/gpu0.log 2>&1 &
-
-nohup bash scripts/run_benchmark.sh configs/benchmark/benchmark.json \
-  --models eqgpt deepmod --device eqgpt=cuda:1 --device deepmod=cuda:1 \
-  --output-dir results/gpu1 --resume > logs/gpu1.log 2>&1 &
-```
+`run_benchmark.py` 按 case 串行调度；`scripts/run_parallel_benchmark.py` 可按 manifest
+分 CPU/GPU 池并发。计划中的资源槽规则（计划 D2、C5）尚未实现。
 
 ## 常用命令
 
@@ -182,91 +144,69 @@ nohup bash scripts/run_benchmark.sh configs/benchmark/benchmark.json \
 python -u run_benchmark.py --list
 python -u run_benchmark.py --dry-run
 python -u run_benchmark.py --tasks sr --models gplearn dso --datasets Koza-2 Keijzer-2
-python -u run_benchmark.py --tasks ode --models physo --datasets ball_drop
-python -u run_benchmark.py --tasks ode --models sindy pysindy --datasets ball_drop
-python -u run_benchmark.py --tasks sr --models pysr --datasets Koza-2
-python -u run_benchmark.py --tasks sr --models pyoperon --datasets Koza-2
-python -u run_benchmark.py --tasks pde --models pdefind deepmod --datasets kdv burgers
-python -u run_benchmark.py --profile full --seeds 0 1 2 --resume
+python -u run_benchmark.py --tasks ode --models sindy pysindy --datasets ode_core_duffing
+python -u run_benchmark.py --tasks pde --models pdefind weakform --datasets kdv burgers
+python -u run_benchmark.py --config configs/benchmark/core_ode_track.json --dry-run
+python -u run_benchmark.py --check-compatibility --output-dir results/compatibility_audit
 ```
 
-## LLM-SR 服务配置
-
-`llmsr` 使用官方 LLM-SR 的程序骨架、多岛候选搜索和数值常数拟合思路，但通过统一
-`fit(X, y)` 适配器读取本 benchmark 的 SR 与 ODE 数据。默认不会把 API 密钥写入 JSON；
-密钥只在发送请求时从环境变量读取。
-
-使用官方本地 completion server 或同协议服务：
-
-```bash
-export LLMSR_ENDPOINT=http://127.0.0.1:5000/completions
-python -u run_benchmark.py --models llmsr --datasets Koza-2 --timeout 3600
-```
-
-使用 OpenAI 兼容的 chat-completions API 时，可建立一个只覆盖必要参数的配置文件：
-
-```json
-{
-  "models": ["llmsr"],
-  "datasets": ["Koza-2"],
-  "overrides": {
-    "models": {
-      "llmsr": {
-        "use_api": true,
-        "api_model": "your-model-name"
-      }
-    },
-    "datasets": {},
-    "run": {}
-  }
-}
-```
-
-```bash
-export LLMSR_API_KEY='...'
-export LLMSR_ENDPOINT=https://your-host.example/v1/chat/completions
-python -u run_benchmark.py --config configs/llmsr-server.json --resume
-```
-
-也可用 `LLMSR_MODEL` 提供模型名。`endpoint`、搜索预算和超时均可在
-`configs/benchmark/baselines/llmsr.json` 或总配置的 model override 中修改。本项目只调度
-LLM-SR 的候选搜索；LLM 推理服务使用哪张 GPU 由服务启动命令控制。
-
-`--models` 和 `--datasets` 支持名称与带引号的通配符。`smoke` 和 `full` 使用同一份数据覆盖范围，仅训练预算不同。`--timeout` 限制每个 worker 的总秒数；`--resume` 只复用配置身份相同且全部成功的 case。
+服务器上先按 [服务器设置](server_setup.md) 激活环境，再用 `nohup bash
+scripts/run_benchmark.sh <config> [参数] > logs/run.log 2>&1 &` 后台运行。多个进程并行时
+必须使用不同的 `--output-dir`。LLM-SR 需要先启动 backbone 服务，见
+[方法卡片中的 LLM-SR 协议](methods.md#llm-sr-protocol-llama-31-8b-instruct-1k-calls)。
+其他 OpenAI 兼容服务可在 override 中设置 `endpoint` 与 `api_model`（或
+`LLMSR_ENDPOINT` / `LLMSR_MODEL`），密钥只从 `LLMSR_API_KEY` 等环境变量读取；
+换模型或预算即为不同协议，需单独记录。
 
 ## 输出
 
 ```text
-results/benchmark/
+results/<output_dir>/
 ├── benchmark_manifest.json
-├── benchmark_aggregate.csv
-├── benchmark_aggregate.json
-├── benchmark_summary.csv
-├── benchmark_summary.json
+├── benchmark_summary.{csv,json}       # 每个 target 一行
+├── benchmark_aggregate.{csv,json}     # method/task 聚合
+├── benchmark_seed_family.{csv,json}
+├── benchmark_paired.{csv,json}
 └── cases/<case-name>/
-    ├── case.json
-    ├── run.log
-    ├── result.json
-    └── partial.json
+    ├── case.json / execution.json / targets.json
+    ├── result.json / partial.json                 # 合并视图
+    ├── preparation/0001/                         # 枚举阶段日志
+    └── targets/i0000_t0000/
+        ├── result.json                           # 首次终态，不覆盖
+        └── attempts/0001/{target.json,phase.json,worker.json,run.log,result.json,work/}
 ```
 
-状态包括 `ok`、`skipped`、`error`、`timeout`。单个 case 失败不会中止后续实验；最终存在 `error` 或 `timeout` 时主进程返回非零退出码。PDE 的可用网格、维度和缺失值限制仍由各适配器在运行时检查，不兼容组合会记录具体的 `skipped` 原因。
+状态为 `ok`、`skipped`、`error`、`timeout`。单个 case 失败不中止后续实验；存在 `error` 或
+`timeout` 时主进程返回非零退出码。`--check-compatibility` 写出
+`compatibility_report.json` 与 `compatibility_pairs.csv`，只证明组合能进入训练阶段。
 
-验证 benchmark 结构和适配器：
+整理实验产物时保留 manifest、配置、case/target/attempt 元数据、首次终态和汇总，以及
+必要的失败诊断与环境锁定文件。仅在终态已落盘后清理对应 fit 的临时模型、缓存与重复日志；
+无终态的工作目录继续保留。重复结果归档须核对 JSON/CSV 已有相同副本后才删除，
+历史代码快照、原始数据、源权重和精简验收证据另行保留。
 
-```bash
-python -m pytest tests/test_run_benchmark.py -q
-```
+每行另有 `stop_reason`、`stop_reason_source`、`timeout_phase` 和 setup/fit/score 秒数；
+聚合输出停止原因数量及比例，语义见[指标协议](benchmark_metrics.md#resource-and-status-fields)。
 
-## 兼容性检查
+验证：`python -m pytest tests/test_run_benchmark.py -q`。
 
-以下命令会为每个选中的 baseline/dataset 组合加载一个最小实例并执行适配器预检，不进行
-模型优化：
+A1/A2 来源、资格、同源观测与协议迁移见 [验收记录](validation.md)；
+旧 domain-v1/v2/v3 与新 domain-v4 结果不混用，来源不足尚未正式就绪。
 
-```bash
-python -u run_benchmark.py --check-compatibility \
-  --output-dir results/compatibility_audit
-```
+## A3/A4 方程子轨
 
-结果写入 `compatibility_report.json` 和 `compatibility_pairs.csv`。完整检查结论及 PDE 矩阵见
-[Baseline 与 Dataset 兼容性报告](compatibility_report.md)。
+pdefind_nd（pde）与 implicit_pde（pde/steady_pde）逐方程独立 fit/T；
+NS 仅声明 u/v 动量，p 为辅助场。稳态没有 t，Re 属已知参数。
+PDE-Net 为 system_diagnostic，一次联合 fit 只计一份预算；仅放行有证据的均匀周期端点排除网格。
+configs/benchmark/a3_a4_smoke.json 是有时间上限的功能验证配置，不是正式实验。
+
+## A5/A6 有界运行
+
+~~~bash
+python run_benchmark.py --config configs/benchmark/a5_a6_smoke.json
+python run_benchmark.py --tasks green --models green_dso green_basis --datasets green_laplace --timeout 90
+python run_benchmark.py --tasks sr --models gplearn --datasets pyqg_subgrid dso_file_Custom-2
+~~~
+
+新增 49 名称 opt-in；Green 仅开放 green_dso／green_basis，普通 SR 方法不声明支持积分损失。
+pyqg 每层独立 T，Green 每算子一次联合 fit。缺资产保留目标失败分母，resume 不重试终态失败。

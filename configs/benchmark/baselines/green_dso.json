@@ -1,0 +1,37 @@
+{
+  "name": "green_dso",
+  "device": "cpu",
+  "model": {
+    "n_samples": 60,
+    "batch_size": 10,
+    "max_length": 10,
+    "function_set": [
+      "add",
+      "sub",
+      "mul",
+      "div",
+      "sin",
+      "cos",
+      "exp",
+      "abs",
+      "const",
+      "lt"
+    ],
+    "const_params": {
+      "options": {
+        "maxiter": 15
+      }
+    },
+    "n_cores_batch": 1,
+    "verbose": false
+  },
+  "profiles": {
+    "full": {
+      "model": {
+        "n_samples": 20000,
+        "batch_size": 200,
+        "max_length": 24
+      }
+    }
+  }
+}

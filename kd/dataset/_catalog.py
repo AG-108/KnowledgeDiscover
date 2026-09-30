@@ -13,9 +13,11 @@ name to the existing loader that already knows how to build it (`load_pde_grid`,
 or `load_vgs_dataset`).
 """
 
+import re
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
+from ._advanced import EVOLUTION_SPECS, STEADY_SPECS, declared_targets, load_evolution, load_steady
 from ._base import (
     _CYT_CASE_ALIASES,
     _VGS_CASE_CONFIG,
@@ -29,6 +31,10 @@ from ._base import (
     load_vgs_dataset,
     load_wake_equation,
 )
+from ._closure import load_pyqg
+from ._domain import FIELD_SPECS, load_domain_field
+from ._file_sr import FILE_SR_NAMES, load_file_sr
+from ._green import GREEN_SPECS, load_green
 from ._pdeformer_sinus import load_pdeformer_sinus_benchmark
 from ._registry import PDE_REGISTRY
 
@@ -57,7 +63,7 @@ _TLC_TIME_SERIES_FILES: Dict[str, str] = {
 # (e.g. "u @ Re=100" or no "@" suffix at all) instead of a time series.
 # GridPDEDataset/ScatterPDEDataset both require a time axis, so these are not
 # reachable through `load_dataset` yet.
-TLC_UNSUPPORTED_STEADY_STATE = (
+TLC_STEADY_STATE_FILES = (
     "ns/ns2d.csv",
     "ns/ns_0_obstacle.csv",
     "ns/ns_4_obstacle.csv",
@@ -75,6 +81,9 @@ TLC_UNSUPPORTED_STEADY_STATE = (
 # shape (634644, 1) whose format has not been reverse-engineered yet), so
 # `load_pde_dataset()` raises KeyError internally and silently returns None.
 # Remove a name from this set once its underlying loader is fixed.
+# Steady observations now have their own task; geometry may remain source-blocked.
+TLC_UNSUPPORTED_STEADY_STATE = ()
+
 KNOWN_BROKEN_DATASETS = frozenset({"advection_diffusion"})
 
 
@@ -92,9 +101,23 @@ def _make_pde_registry_loader(name: str) -> Callable[..., Any]:
 def _make_tlc_loader(rel_path: str, equation_name: str) -> Callable[..., Any]:
     def _loader(**kwargs):
         csv_path = _TLC_DIR / rel_path
-        return load_csv_tlc(
-            str(csv_path), equation_name=equation_name, return_dataset=True, **kwargs
+        dataset = load_csv_tlc(
+            str(csv_path), equation_name=equation_name, return_dataset=True,
+            **{"grid_if_cartesian": True, **kwargs},
         )
+        labels = list(getattr(dataset, "state_vars", ["u"]))
+        parsed = [re.fullmatch(r"([A-Za-z_]\w*)(?:\s+\(([^)]*)\))?", label) for label in labels]
+        if not all(parsed):
+            raise ValueError(f"Unrecognized source field labels: {labels}")
+        names = [match.group(1) for match in parsed]
+        if len(set(names)) != len(names):
+            raise ValueError("Canonical field names collide")
+        dataset.state_vars = names
+        dataset.equation_targets = declared_targets(equation_name)
+        dataset.protocol_metadata = {**getattr(dataset, "protocol_metadata", {}),
+            "source_field_labels": labels,
+            "field_units": {name: match.group(2) or "unknown" for name, match in zip(names, parsed)}}
+        return dataset
 
     return _loader
 
@@ -155,6 +178,19 @@ for _name in PDE_REGISTRY:
         continue
     DATASET_REGISTRY[_name] = {"category": "pde", "loader": _make_pde_registry_loader(_name)}
 
+
+def _make_domain_field_loader(name):
+    def loader(**kwargs):
+        if kwargs:
+            raise ValueError(f"Unsupported field loader options: {sorted(kwargs)}")
+        return load_domain_field(name)
+    return loader
+
+
+for _name, _spec in FIELD_SPECS.items():
+    DATASET_REGISTRY[_name] = {"category": "pde", "family": _spec["family"],
+                               "loader": _make_domain_field_loader(_name)}
+
 for _name, _rel_path in _TLC_TIME_SERIES_FILES.items():
     DATASET_REGISTRY[_name] = {"category": "pde", "loader": _make_tlc_loader(_rel_path, _name)}
 
@@ -205,6 +241,42 @@ DATASET_REGISTRY["pdeformer_sinus"] = {
     "loader": load_pdeformer_sinus_benchmark,
 }
 
+
+def _advanced_loader(name, steady=False):
+    def loader(**kwargs):
+        if kwargs:
+            raise ValueError(f"Unsupported checked loader options: {sorted(kwargs)}")
+        return load_steady(name) if steady else load_evolution(name)
+    return loader
+
+
+for _name in EVOLUTION_SPECS:
+    DATASET_REGISTRY[_name] = {"category": "pde", "loader": _advanced_loader(_name)}
+for _name in STEADY_SPECS:
+    DATASET_REGISTRY[_name] = {"category": "steady_pde", "loader": _advanced_loader(_name, True)}
+
+
+
+
+def _green_loader(name):
+    def loader(**kwargs):
+        return load_green(name, **kwargs)
+    return loader
+
+def _file_loader(name):
+    def loader(**kwargs):
+        return load_file_sr(name, **kwargs)
+    return loader
+
+for _name, _spec in GREEN_SPECS.items():
+    DATASET_REGISTRY[_name] = {"category":"green", "family":_spec["family"],
+                              "loader":_green_loader(_name), "opt_in":True}
+for _label in FILE_SR_NAMES:
+    _name = "dso_file_" + _label
+    DATASET_REGISTRY[_name] = {"category":"regression","family":"DSO_file_"+_label.split("-")[0],
+                             "loader":_file_loader(_name), "opt_in":True}
+DATASET_REGISTRY["pyqg_subgrid"] = {"category":"regression","family":"pyqg",
+                                  "loader":load_pyqg, "opt_in":True}
 
 def load_dataset(name: str, **kwargs) -> Any:
     """

@@ -6,6 +6,9 @@ normalized SHA256 hashes. Preserve previous worktrees and raw result directories
 
 ## Python environments
 
+- The 19 baselines registered in `run_benchmark.py` can share the Python 3.10
+  stack below. Keep their task/data compatibility rules and external runtime
+  requirements separate from Python package compatibility.
 - `requirements.txt`: portable core stack and native/example development.
 - `requirements-operon-py310.txt`: pinned Python 3.10 numeric stack and PyOperon.
 - `requirements-server-unified-py310.txt`: extra packages for the validated unified
@@ -30,6 +33,33 @@ python -m pip check
 Choose the PyTorch build for the actual device. Do not copy a Windows Conda export
 or local build-cache paths into a Linux installation.
 
+The two server requirement files are a separate installation recipe. Do not
+combine them with `requirements.txt` in one resolver invocation: the recipes
+pin different setuptools, PyYAML and graphviz versions.
+
+The shared numeric stack uses NumPy 2.0.2 and scikit-learn 1.6.1 for PyOperon
+0.6.1 and PySINDy 2.0.0. NumPy 2.0.2 also satisfies Numba 0.60.0's `<2.1`
+limit. PyTorch 2.5.1 requires SymPy 1.13.1 on Python 3.10. Keep setuptools
+80.9.0 for the DSO `pkg_resources` import. Python 3.10 is the validated
+interpreter; this recipe does not establish support for every newer Python.
+
+Current DSCV, SPR and DSO adapters use PyTorch. Historical TensorFlow 1 source
+files retained under `kd/model/discover/` are outside these registered execution
+paths and are not required by this environment.
+
+## External runtimes and services
+
+| Baseline | Requirement beyond the shared Python packages |
+| --- | --- |
+| PySR | A compatible Julia executable and its Julia project; the first import can compile packages. The activation script can select a persistent Julia installation. |
+| E2E | The reviewed upstream source, its pinned sympytorch fork, and a trusted checkpoint with a verified SHA256; configure them explicitly as described in [E2E card](methods.md#e2e-official-pretrained-adapter). |
+| LLM-SR | A vLLM server for the local Llama-3.1-8B-Instruct weights in a separate environment; see [LLM-SR protocol](methods.md#llm-sr-protocol-llama-31-8b-instruct-1k-calls). Other OpenAI-compatible services need a model name and their credentials in environment variables. Installing Python dependencies does not provide a generation service. |
+
+An import or `--check-compatibility` result verifies only the reported checks.
+Validate actual fitting/inference separately; a numerical failure, unsupported
+dataset shape or exhausted smoke budget does not by itself imply incompatible
+Python dependencies.
+
 ## Private settings and activation
 
 Copy `hpc/server.env.example` to ignored `.local/server.env` and set the actual
@@ -49,7 +79,7 @@ python run_benchmark.py --config configs/benchmark/core_ode_track.json --dry-run
 
 E2E paths in environment variables are conveniences for local setup; supply
 explicit source/checkpoint paths, trust and verified hash in the benchmark's
-local override config. See [E2E setup](benchmark_v2_e2e.md). Keep LLM-SR endpoint
+local override config. See [E2E card](methods.md#e2e-official-pretrained-adapter). Keep LLM-SR endpoint
 credentials local and validate real generation before a full batch.
 
 ## Historical launch recipes

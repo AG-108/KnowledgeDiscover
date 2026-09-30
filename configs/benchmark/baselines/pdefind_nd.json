@@ -1,0 +1,23 @@
+{
+  "name": "pdefind_nd",
+  "device": "cpu",
+  "model": {
+    "threshold": 0.02,
+    "max_iter": 30,
+    "max_terms": 3,
+    "null_tolerance": 0.01,
+    "spatial_order": 2,
+    "neighbors": 40,
+    "degree": 3,
+    "max_samples": 12000,
+    "coordinate_basis": [],
+    "seed": 0
+  },
+  "profiles": {
+    "full": {
+      "model": {
+        "max_samples": 30000
+      }
+    }
+  }
+}

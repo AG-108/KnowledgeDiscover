@@ -1,0 +1,7 @@
+{
+  "name": "green_basis",
+  "device": "cpu",
+  "model": {
+    "degree": 2
+  }
+}

@@ -1,12 +1,20 @@
 # Benchmark metric protocol
 
+当前工程验收见 [验收摘要](validation.md)，来源条件见 [待解决问题](deferred_source_issues.md)。数据 domain-v4；新增轨指标 2.3。
+
 Raw per-target records are written to `benchmark_summary.json/csv`; method/task aggregates
-are written to `benchmark_aggregate.json/csv`. New records declare
+are written to `benchmark_aggregate.json/csv`. Original adapter records declare
 `metric_protocol_version = "2.1"`. Older records remain readable, but failed legacy rows
 cannot be retroactively classified as recovery-eligible when that fact was not stored.
-Aggregates are partitioned by protocol version, so legacy and v2 rows are never silently
-pooled. `n_cases`, `n_target_rows`, and `denominator_unit = target_row` make clear that a
+Aggregates are partitioned by metric, execution (`target-v1`) and dataset
+(`domain-v4`) protocol versions, and by `scientific_task` within each method.
+Paired and seed-family reports also isolate dataset versions. CYT closure and
+material constitutive targets are separate physical tasks even though both use
+the numerical `sr` adapter. `n_cases`, `n_target_rows`, and `denominator_unit = target_row` make clear that a
 multi-target ODE contributes several target rows but only one configured case.
+The same applies to source material/curve instances expanded from one solid
+dataset name. Target-weighted means are not family-balanced statistics; the
+planned E3 analysis must account for related materials and repeated variants.
 
 ## Recovery and denominators
 
@@ -89,14 +97,17 @@ For `gaussian_mle_variance`, the estimated variance adds one free parameter and 
 separately. Syntax tokens are never treated as free parameters, and raw criteria are not
 averaged across unrelated datasets.
 
-Paired comparisons include dataset, instance, target, seed, protocol, profile, and regime;
+Paired comparisons include dataset, instance, target, seed, metric/execution protocol, profile, and regime;
 duplicates are rejected rather than overwritten. Reports expose paired and per-model
-evaluable counts. Family uncertainty is grouped by method/family/protocol/profile/regime,
+evaluable counts. Family uncertainty is grouped by method/family/metric-and-execution-protocol/profile/regime,
 first averages available targets within a seed, then reports variability across seeds.
 These are explicitly labelled available-case means, not unbiased estimates under missingness.
-Whole-worker timeouts preserve every predeclared ODE target and retain completed
-partial targets without duplication. When a timeout affects multiple remaining
-targets, leftover worker time is assigned once, not multiplied by target count.
+Each instance/target runs in its own worker. A timeout produces only that target's
+terminal row; subsequent targets still run. Resume includes terminal failures and
+recovers worker commits missed by an interrupted parent. Preparation failures preserve
+known ODE target and generated-instance counts; an unknowable remainder is explicitly
+marked `target_manifest_complete=false` and counted as `n_incomplete_target_manifests`.
+Such cases require resolution before interpreting a formal experiment's denominator.
 
 The shared rollout metadata's solver block must explicitly contain `method`,
 `rtol`, `atol` and `max_step` (`null` explicitly permits adaptive steps without an
@@ -110,9 +121,47 @@ Each row records wall-clock runtime, peak CPU RSS, optional CUDA allocator peak,
 `ok`, `timeout`, `error`, or `skipped`. Success and timeout rates use all rows. Missing
 values serialize as JSON `null`, never non-standard NaN.
 
+`target-v1` additionally records `target_id`, attempt number, execution policy,
+`setup_seconds`, `fit_seconds`, `score_seconds`, and `worker_elapsed_seconds`.
+The legacy `runtime` measures the target adapter including scoring; killed workers use
+elapsed worker time. Use `fit_seconds` when comparing the fit budget. Preparation is
+separately supervised, and fit is hard-limited to T + grace. Scoring has its own cap.
+`timeout_phase` distinguishes setup, fit and score failures; a score timeout is never a
+successful recovery. Resource-slot enforcement and CPU/GPU cost accounting remain pending.
+
+Every new row has one of six `stop_reason` values: `budget_exhausted`, `time_limit`,
+`converged`, `early_stop`, `hard_timeout`, `error`. Explicit adapter `stop_reason_`
+signals take priority: SINDy records support convergence, DSO and LLM-SR record their
+early-stopping conditions, and gplearn's shortened generation history records early stop.
+Where the backend exposes no reason, a normal return uses `budget_exhausted` with
+`stop_reason_source=native_return`; this is a fallback classification, not evidence that
+every native budget unit was consumed. Other sources are `adapter`, `generation_count`
+and `runner`. Failed/skipped rows use `error`, and hard timeouts use `hard_timeout`;
+the separate status retains the failure/skip distinction. Soft `time_limit` signals will
+be wired in C3. Aggregates include reason counts/rates and source counts. Legacy rows
+without a reason remain `unknown` in these distributions; their files are not rewritten.
+
 ## LLM evaluation scope
 
 Any optional LLM judge is scoped only to physical credibility under declared physical
 conditions and evidence provenance. It must not score scientific explanatory value,
 novelty, familiarity, or conformity to a conventional equation form. Such a judge is not
 part of the numeric recovery fields above and requires separate validation.
+
+A1/A2 来源、资格、同源观测与协议迁移见 [验收记录](validation.md)；
+旧 domain-v1 与新 domain-v3 结果不混用，来源不足尚未正式就绪。
+
+## 方程残差协议 2.2
+
+新方法使用 metric_protocol_version=2.2、equation_protocol_version=equation-v1。
+规范化残差使用训练列 RMS 与系数单位范数；整体缩放/反号不改变评分。
+固定训练尺度不依赖测试残差；保留全部观测分母及导数有限覆盖。
+与旧 2.1 的 u_t NRMSE 分别聚合；steady_pde 独立汇总。
+库秩、近零空间与 ambiguity 写入 details；未认证来源或多关系歧义不计唯一恢复。
+没有 BVP/rollout 时 prediction_status=abstain，不报告虚假场预测或全零目标 R²。
+
+## A5/A6 metric protocol 2.3
+
+Green primary score: held-out whole-forcing response MSE and RMSE divided by training (U-U_hom) RMS. Per-forcing error, inverse rank/conditioning and coverage are recorded. Reference AST is scoring-only; reference-forward floor uses all-response RMS as a separate diagnostic. Fixed offdiagonal mask abs(x-xi)>1e-12 includes exclusion fraction; forward integration retains the diagonal. No certified kernel recovery.
+
+pyqg scores physical s^-2 MSE/RMSE, held-out-run layer/frame NRMSE and finite coverage of declared sampled points. Training-only normalization, indices/weights are recorded; expressions use standardized inputs/output. Offline closure does not establish online stability. File SR keeps official pairs or fixed input-range interpolation holdout, with unknown truth. New tracks are recovery-ineligible until source certification.

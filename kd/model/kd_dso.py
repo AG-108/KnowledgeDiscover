@@ -225,6 +225,10 @@ class KD_DSO(BaseEstimator):
         else:
             self.success_ = False
 
+        self.stop_reason_ = (
+            "early_stop" if self.early_stopping and self.success_ else "budget_exhausted"
+        )
+
         if self.verbose:
             print(f"[DSO] best expression: {self.best_expression_}")
             print(f"[DSO] reward: {self.best_reward_:.6f} | success: {self.success_}")

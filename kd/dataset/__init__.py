@@ -24,6 +24,7 @@ from ._base import (
     load_vgs_dataset,
     load_wake_equation,
 )
+from ._equations import Derivative, EquationTarget, SteadyPDEDataset
 from ._pdeformer_sinus import (
     DedalusBackend,
     NumpySpectralBackend,
@@ -126,8 +127,13 @@ def load_pde_grid(name: str, **kwargs) -> GridPDEDataset:
 
 
 from ._catalog import DATASET_REGISTRY, get_dataset_category, list_datasets, load_dataset
+from ._closure import ClosureDataset
+from ._file_sr import FileRegressionDataset
+from ._green import GreenOperatorDataset
 
 __all__ = [
+    "GreenOperatorDataset", "ClosureDataset", "FileRegressionDataset",
+    "SteadyPDEDataset", "Derivative", "EquationTarget",
     "GridPDEDataset",
     "ScatterPDEDataset",
     "SymbolicRegressionDataset",
@@ -159,22 +165,4 @@ __all__ = [
     "DATASET_REGISTRY",
     "list_available_datasets",  # Export registry inspection helpers.
     "get_dataset_sym_true",  # Export registry inspection helpers.
-    "Burgers_equation_shock",
-    "KdV_equation",
-    "KdV_equation_sine",
-    "Chaffee_Infante_equation",
-    "KG_equation",
-    "Allen_Cahn_equation",
-    "Convection_diffusion_equation_solution",
-    "Convection_diffusion_equation_simulation",
-    "Wave_equation",
-    "KS_equation",
-    "Beam_equation",
-    "Heat_equation",
-    "Heat_equation_sin",
-    "Diffusion_equation",
-    "Parametric_convection_diffusion",
-    "Parametric_Burgers_equation",
-    "Parametric_wave_equation",
-    "Burgers_2D",
 ]

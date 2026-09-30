@@ -5,7 +5,7 @@
 失败原因和统计分母。
 
 [文档索引](docs/README.md) · [运行说明](docs/benchmark.md) ·
-[路线图](docs/benchmark_roadmap.md)
+[计划与交接](docs/benchmark_plan.md)
 
 ## 快速开始
 
@@ -37,10 +37,11 @@ PyOperon、官方 E2E checkpoint 和 LLM-SR 服务需要各自配置，参见
 上游参考快照、checkpoint 和实验结果保留在本地，获取与放置方式见
 [数据说明](docs/data.md)。新克隆中缺少这些数据的集成测试会明确跳过。
 
-Core ODE 的正式 440-case 实验尚未完成；候选函数协议和 Robertson 噪声导数协议
-仍待确认。当前 PIC 排序校准未通过验收，物理可信度评估是离线原型。
+正式主实验尚未运行：预算公平性规则已确定（统一资源槽与每 target 的统一时间上限），
+相应代码与协议冻结清单见 [计划](docs/benchmark_plan.md)。当前 PIC 排序校准未通过验收，
+物理可信度评估是离线原型。
 运行成功、兼容性预检和方程恢复质量分别报告。具体边界见
-[方法卡片](docs/benchmark_v2_method_cards.md) 与 [指标协议](docs/benchmark_metrics.md)。
+[方法卡片](docs/methods.md) 与 [指标协议](docs/benchmark_metrics.md)。
 
 ## 目录
 
@@ -63,7 +64,9 @@ python -m pytest -q -rs
 python -m pytest -q --require-external-data
 ~~~
 
-格式与检查规则见 [代码风格](docs/code_style.md)。本地服务器设置使用
+代码格式使用 Black，静态检查使用 Ruff，设置均在 `pyproject.toml`（排除的目录是上游
+快照，保持原格式）：`black --check run_benchmark.py kd examples tests` 与
+`ruff check run_benchmark.py kd examples tests`。本地服务器设置使用
 `hpc/server.env.example` 对应的 `.local/server.env`；不要将连接凭据、原始数据、
 模型权重或运行日志强制加入 Git。
 

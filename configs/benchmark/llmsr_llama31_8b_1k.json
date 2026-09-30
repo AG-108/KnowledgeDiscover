@@ -1,0 +1,19 @@
+{
+  "profile": "full",
+  "tasks": ["ode"],
+  "models": ["llmsr"],
+  "datasets": ["ode_core_damped_oscillator", "ode_core_pendulum", "ode_core_duffing", "ode_core_van_der_pol", "ode_core_sir", "ode_core_fitzhugh_nagumo", "ode_core_rational", "ode_core_robertson"],
+  "seeds": [0, 1, 2, 3, 4],
+  "timeout": 43200,
+  "resume": true,
+  "output_dir": "results/llmsr_llama31_8b_1k",
+  "overrides": {
+    "models": {
+      "llmsr": {
+        "endpoint": "http://127.0.0.1:10005/v1/chat/completions",
+        "api_model": "meta-llama/Llama-3.1-8B-Instruct",
+        "max_llm_calls": 1000
+      }
+    }
+  }
+}

@@ -97,13 +97,16 @@ class SINDyModel:
         ridge = self.alpha * np.eye(normalized.shape[1])
         coefficients = np.linalg.solve(gram + ridge, normalized.T @ y)
         active = np.ones(len(coefficients), dtype=bool)
+        self.stop_reason_ = "budget_exhausted"
         for _ in range(self.max_iter):
             next_active = np.abs(coefficients) >= self.threshold
             if np.array_equal(next_active, active):
+                self.stop_reason_ = "converged"
                 break
             active = next_active
             coefficients[~active] = 0.0
             if not active.any():
+                self.stop_reason_ = "converged"
                 break
             reduced = normalized[:, active]
             coefficients[active] = np.linalg.solve(

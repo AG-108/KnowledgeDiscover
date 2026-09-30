@@ -28,8 +28,9 @@ def _set_model(options):
     if not globalnames['constraint'].upper() in ['FROZEN','MOMENT','FREE']:
         # using moment matrix with globalnames['constraint']-order approximation
         globalnames['constraint'] = int(globalnames['constraint'])
-    globalnames['mesh_size'] = [round(s),]*2
-    globalnames['mesh_bound'] = [[0,0],[bound,]*2]
+    globalnames['mesh_size'] = options.get('--mesh_size', [round(s),]*2)
+    globalnames['mesh_bound'] = options.get('--mesh_bound', [[0,0],[bound,]*2])
+    globalnames['dx'] = options.get('--dx_axes', options['--dx'])
     globalnames['kernel_size'] = [options['--kernel_size'],]*2
 
     model = polypde.POLYPDE2D(

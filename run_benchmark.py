@@ -30,22 +30,39 @@ import os
 import pickle
 import random
 import re
-import subprocess
 import sys
 import threading
 import time
 import traceback
 from pathlib import Path
 
+from kd.benchmark_execution import (
+    EXECUTION_PROTOCOL_VERSION,
+    STOP_REASONS,
+    TERMINAL_STATUSES,
+    PhaseClock,
+    SkipCase,
+    atomic_json,
+    case_lock,
+    execution_policy,
+    fit_call,
+    reap_orphan,
+    supervise,
+)
+
 ROOT = Path(__file__).resolve().parent
 RESULTS_DIR = ROOT / "results" / "benchmark"
 CONFIG_DIR = ROOT / "configs" / "benchmark"
 DEFAULT_CONFIG_FILE = CONFIG_DIR / "benchmark.json"
-TASKS = ("sr", "ode", "pde")
+TASKS = ("sr", "ode", "pde", "steady_pde", "green")
 
 # Regression methods also fit individual ODE right-hand sides through our bridge.
 BASELINES = {
-    "dscv": {"tasks": TASKS, "example": "kd_dscv_example.py", "accelerator": "cpu"},
+    "green_dso":{"tasks":("green",),"example":"kd_dso_example.py","accelerator":"cuda"},
+    "green_basis":{"tasks":("green",),"example":"kd_dso_example.py","accelerator":"cpu"},
+    "pdefind_nd": {"tasks": ("pde",), "example": "kd_PDEfind_example.py", "accelerator": "cpu"},
+    "implicit_pde": {"tasks": ("pde", "steady_pde"), "example": "kd_PDEfind_example.py", "accelerator": "cpu"},
+    "dscv": {"tasks": ("sr", "ode", "pde"), "example": "kd_dscv_example.py", "accelerator": "cpu"},
     "spr": {
         "tasks": ("pde",),
         "example": "kd_dscv_spr_dataset_example.py",
@@ -82,6 +99,10 @@ BASELINES = {
     },
 }
 MODEL_CLASSES = {
+    "green_dso":("kd.model.kd_green","GreenDSO"),
+    "green_basis":("kd.model.kd_green_basis","GreenBasis"),
+    "pdefind_nd": ("kd.model.kd_equation", "SparseEquationModel"),
+    "implicit_pde": ("kd.model.kd_equation", "SparseEquationModel"),
     "dscv": ("kd.model.kd_dscv", "KD_DSCV"),
     "spr": ("kd.model.kd_dscv", "KD_DSCV_SPR"),
     "sga": ("kd.model.kd_sga", "KD_SGA"),
@@ -120,6 +141,9 @@ PDE_REFERENCE_RHS = {
     "burgers": "-u*u_x + 0.1*u_xx",
     "kdv": "-u*u_x - 0.0025*u_xxx",
     "chafee-infante": "u_xx - u + u**3",
+    "burgers_sine": "-u*u_x + 0.1*u_xx",
+    "allen_cahn": "0.003*u_xx + u - u**3",
+    "convection_diffusion": "-u_x + 0.25*u_xx",
 }
 METRIC_PROTOCOL_VERSION = "2.1"
 PDE_SUPPORT_METRIC_VERSION = "2.0"
@@ -228,6 +252,9 @@ def load_benchmark_config(path=None):
         "seeds",
         "output_dir",
         "timeout",
+        "timeout_grace",
+        "setup_timeout",
+        "score_timeout",
         "resume",
         "devices",
         "profiles",
@@ -293,6 +320,9 @@ def parse_device_overrides(values):
 
 
 def validate_benchmark_config(value, catalog):
+    execution_policy(value.get("timeout"), timeout_grace=value.get("timeout_grace", 5.0),
+                     setup_timeout=value.get("setup_timeout", 300.0),
+                     score_timeout=value.get("score_timeout", 300.0))
     if not isinstance(value.get("baseline_config_dir"), str) or not value["baseline_config_dir"]:
         raise ValueError("baseline_config_dir must be a non-empty path string")
     for key in ("tasks", "models", "datasets"):
@@ -357,14 +387,11 @@ def validate_benchmark_config(value, catalog):
         )
 
 
-class SkipCase(Exception):
-    """Unsupported dataset/model combination or missing resource."""
-
-
 def dataset_catalog():
     """All unified loaders and expressions understood by SymbolicRegressionDataset."""
     from kd.dataset import DATASET_REGISTRY
     from kd.dataset._catalog import KNOWN_BROKEN_DATASETS, TLC_UNSUPPORTED_STEADY_STATE
+    from kd.dataset._metadata import dataset_metadata, pending_datasets
 
     catalog = {
         name: {
@@ -372,6 +399,7 @@ def dataset_catalog():
             "source": "catalog",
             "role": "dataset",
             "family": info.get("family", info["category"]),
+            "opt_in":info.get("opt_in",False),
             **({"evaluation": copy.deepcopy(info["evaluation"])} if info.get("evaluation") else {}),
         }
         for name, info in sorted(DATASET_REGISTRY.items())
@@ -388,6 +416,8 @@ def dataset_catalog():
                 "role": "dataset",
             }
     catalog["wave_breaking"] = {"task": "pde", "source": "example", "role": "dataset"}
+    for name, info in catalog.items():
+        info.update(dataset_metadata(name, info["task"], family=info.get("family")))
     excluded = {n: "Broken loader; excluded by kd.dataset._catalog" for n in KNOWN_BROKEN_DATASETS}
     excluded.update(
         {
@@ -395,6 +425,8 @@ def dataset_catalog():
             for n in TLC_UNSUPPORTED_STEADY_STATE
         }
     )
+    excluded.update({row["dataset"]: "; ".join(row["requirements"])
+                     for row in pending_datasets()})
     return catalog, excluded
 
 
@@ -433,6 +465,8 @@ def build_experiments(
             run_defaults = defaults["profiles"][profile]["run"]
     selected_models = _select(models, BASELINES, "model")
     selected_data = _select(datasets, catalog, "dataset")
+    if datasets is None or list(datasets) == ["*"]:
+        selected_data = [n for n in selected_data if not catalog[n].get("opt_in")]
     selected_data = sorted({catalog[n].get("paired_with", n) for n in selected_data})
     cases = []
     for name in selected_data:
@@ -510,6 +544,7 @@ def build_experiments(
                         except (KeyError, ValueError):
                             pass
                 case = {
+                    "execution_protocol_version": EXECUTION_PROTOCOL_VERSION,
                     "task": task,
                     "model": model,
                     "dataset": name,
@@ -518,6 +553,13 @@ def build_experiments(
                     "source": catalog[name]["source"],
                     "ground_truth": declared_truth,
                     "family": catalog[name].get("family", task),
+                    "dataset_protocol_version": catalog[name]["dataset_protocol_version"],
+                    "scientific_task": catalog[name]["scientific_task"],
+                    "physical_family": catalog[name]["physical_family"],
+                    "dataset_metadata": {key: copy.deepcopy(catalog[name][key]) for key in (
+                        "target_definition", "split_protocol", "instance_policy", "benchmark_role",
+                        "reference_status", "source_paths", "source_status", "integration_status",
+                        "requirements", "source_evidence")},
                     "evaluation": _deep_update(
                         _deep_update(copy.deepcopy(catalog[name].get("evaluation", {})),
                                      config.get("evaluation", {}).get("*", {})),
@@ -528,6 +570,27 @@ def build_experiments(
                     "dataset_params": copy.deepcopy(data_params),
                     "run_params": copy.deepcopy(run),
                 }
+                if task == "green" or name == "pyqg_subgrid" or name.startswith("dso_file_"):
+                    case["metric_protocol_version"] = "2.3"
+                if model == "green_dso":
+                    case["model_params"]["seed"] = seed
+                if model in {"pdefind_nd", "implicit_pde"}:
+                    case["equation_protocol_version"] = "equation-v1"
+                    case["metric_protocol_version"] = "2.2"
+                    case["dataset_metadata"]["fit_unit"] = "one independently budgeted equation target"
+                    case["dataset_metadata"]["split_protocol"] = (
+                        "spatial_blocks_with_support_gap" if task == "steady_pde" else
+                        "temporal_blocks_with_support_gap")
+                if model == "pdenet":
+                    from kd.dataset._advanced import declared_targets
+                    case["variant"] = "system_diagnostic"
+                    case["dataset_metadata"]["fit_unit"] = "one joint system fit with one target budget"
+                    case["dataset_metadata"]["declared_equation_count"] = len(declared_targets(name))
+                    case["dataset_metadata"]["comparison_role"] = "diagnostic; excluded from independent equation fairness"
+                if name.startswith("cyt_"):
+                    target_name = data_params.get("target", "Mut")
+                    features = data_params.get("feature_columns", "default_local_flow_features")
+                    case["dataset_metadata"]["target_definition"] = f"{target_name}=f({features})"
                 digest = hashlib.sha256(json.dumps(case, sort_keys=True).encode()).hexdigest()[:12]
                 case["name"] = f"{task}_{model}_{name}_s{seed}_{digest}"
                 cases.append(case)
@@ -585,7 +648,7 @@ def check_compatibility(cases, excluded=None, progress=False):
                 io.StringIO()
             ):
                 instance_name, dataset = next(_load_instances(group[0]))
-            if group[0]["task"] == "pde":
+            if group[0]["task"] in {"pde", "steady_pde"}:
                 if isinstance(dataset, GridPDEDataset):
                     details = {
                         "class": type(dataset).__name__,
@@ -594,6 +657,10 @@ def check_compatibility(cases, excluded=None, progress=False):
                         "responses": dataset.n_response,
                         "time_points": len(dataset.t),
                     }
+                elif group[0]["task"] == "steady_pde":
+                    details = {"class": type(dataset).__name__, "field_shape": list(dataset.values.shape),
+                               "spatial_dimensions": len(dataset.spatial_vars),
+                               "responses": dataset.n_response, "time_points": 0}
                 else:
                     details = {
                         "class": type(dataset).__name__,
@@ -602,7 +669,7 @@ def check_compatibility(cases, excluded=None, progress=False):
                         "time_points": len(dataset.t),
                     }
             else:
-                problems = list(regression_problems(dataset, group[0]))
+                problems = list(_case_problems(dataset, group[0]))
                 if not problems:
                     raise ValueError("Task adapter produced no regression targets")
                 details = {
@@ -614,7 +681,7 @@ def check_compatibility(cases, excluded=None, progress=False):
                 }
             load_status = "ok"
         except Exception as exc:
-            load_status = "error"
+            load_status = "source_blocked" if "source_blocked" in str(exc) else "error"
             load_error = f"{type(exc).__name__}: {exc}"
             details = {}
 
@@ -640,9 +707,20 @@ def check_compatibility(cases, excluded=None, progress=False):
                 "reason": "",
             }
             if load_error:
-                row.update(status="error", reason=load_error)
+                row.update(status="incompatible" if "source_blocked" in load_error else "error",
+                           reason=load_error)
+                if "source_blocked" in load_error:
+                    row["capability_status"] = "source_blocked"
             elif runtime[case["model"]]["status"] != "ok":
                 row.update(status="error", reason=runtime[case["model"]]["error"])
+            elif case["model"] in {"pdefind_nd", "implicit_pde"}:
+                try:
+                    from kd.evaluation.equation import validate
+                    validate(dataset, case["model"])
+                except SkipCase as exc:
+                    row.update(status="incompatible", reason=str(exc))
+                except Exception as exc:
+                    row.update(status="error", reason=f"{type(exc).__name__}: {exc}")
             elif case["task"] == "pde":
                 try:
                     prepared = prepare_pde(dataset, case["model"])
@@ -681,7 +759,7 @@ def save_compatibility_report(output_dir, report):
     with (output_dir / "compatibility_pairs.csv").open(
         "w", encoding="utf-8-sig", newline=""
     ) as file:
-        fields = ["task", "baseline", "dataset", "instance", "status", "reason"]
+        fields = ["task", "baseline", "dataset", "instance", "status", "reason", "capability_status"]
         writer = csv.DictWriter(file, fieldnames=fields)
         writer.writeheader()
         writer.writerows(report["pairs"])
@@ -695,6 +773,10 @@ def _load_instances(case):
     if case["source"] == "symbolic":
         kwargs.setdefault("seed", case["seed"])
         yield name, SymbolicRegressionDataset(name=name, **kwargs)
+    elif name in {"solid_dif", "solid_strain_stress", "solid_hardening"}:
+        from kd.dataset._domain import load_constitutive_instances
+
+        yield from load_constitutive_instances(name, **kwargs)
     elif name == "wave_breaking":
         from examples._common import point_cloud_to_regular_grid
 
@@ -704,7 +786,7 @@ def _load_instances(case):
             waves = pickle.load(f)
         for key in keys if keys is not None else sorted(waves):
             t, x, u = point_cloud_to_regular_grid(waves[key], **kwargs)
-            yield key, GridPDEDataset(
+            dataset = GridPDEDataset(
                 equation_name="wave_breaking",
                 pde_data=None,
                 x=x,
@@ -714,6 +796,15 @@ def _load_instances(case):
                 epi=0.0,
                 legacy=True,
             )
+            from kd.dataset._provenance import source_evidence
+
+            dataset.protocol_metadata = {
+                "source_asset_id": "WaveBreaking.pkl", "source_curve_id": str(key),
+                "source_evidence": source_evidence(name),
+                "projection_parameters": copy.deepcopy(kwargs),
+                "raw_rows": len(waves[key]), "projected_shape": list(u.T.shape),
+            }
+            yield key, dataset
     else:
         if name == "pdeformer_sinus":
             kwargs.setdefault("seed", case["seed"])
@@ -724,6 +815,11 @@ def _load_instances(case):
             if not data:
                 raise ValueError(f"Loader returned an empty batch for {name}")
             for i, item in enumerate(data):
+                if name == "pdeformer_sinus":
+                    item.protocol_metadata = {**getattr(item, "protocol_metadata", {}),
+                        "unknown_coefficient_functions": ["f0(u)", "f1(u)", "source(x)", "diffusivity(x)"],
+                        "boundary": {"kind": "periodic", "verified": True, "endpoint": "excluded",
+                                     "evidence": "local _pdeformer_sinus.py spectral generator"}}
                 yield f"{name}/{i:04d}", item
         else:
             yield name, data
@@ -791,6 +887,17 @@ def regression_problems(dataset, case):
             "generation_metadata": getattr(dataset, "generation_metadata", None),
         }
         ground_truth = getattr(dataset, "sym_true", None)
+    elif case["dataset"] == "pyqg_subgrid":
+        from kd.evaluation.closure import problems
+        yield from problems(dataset, case)
+        return
+    elif case["dataset"].startswith("dso_file_"):
+        X_train,y_train,X_test,y_test=dataset.X_train,dataset.y_train,dataset.X_test,dataset.y_test
+        names=dataset.variable_names
+        targets=["y"]
+        metadata=copy.deepcopy(dataset.protocol_metadata)
+        split=metadata["split_protocol"]
+        ground_truth=None
     elif isinstance(dataset, SymbolicRegressionDataset):
         d = dataset.get_data()
         X_train, y_train, X_test, y_test = (
@@ -811,6 +918,17 @@ def regression_problems(dataset, case):
         ground_truth = getattr(dataset, "sym_true", None)
     else:
         train, test = split_indices(len(dataset.X), options["test_size"], seed, dataset.groups)
+        if case["dataset"] in {"solid_dif", "solid_strain_stress", "solid_hardening"}:
+            from kd.dataset._provenance import CONSTITUTIVE_ELIGIBILITY
+
+            rule = CONSTITUTIVE_ELIGIBILITY
+            if (len(np.unique(dataset.groups[train])) < rule["min_train_rate_groups"]
+                    or len(np.unique(dataset.groups[test])) < rule["min_test_rate_groups"]
+                    or len(train) < rule["min_train_samples"] or len(test) < rule["min_test_samples"]):
+                raise SkipCase("Constitutive eligibility: requires >=2 training rate groups, "
+                               ">=1 test rate group, >=2 training samples and >=1 test sample")
+            if np.ptp(dataset.y[train]) == 0:
+                raise SkipCase("Constitutive eligibility: constant training target")
         X_train, y_train, X_test, y_test = (
             dataset.X[train],
             dataset.y[train],
@@ -818,8 +936,13 @@ def regression_problems(dataset, case):
             dataset.y[test],
         )
         names = dataset.variable_names
-        split = "group_holdout" if dataset.groups is not None else "random_holdout"
-        targets, metadata = ["y"], {}
+        split = getattr(dataset, "split_protocol",
+                        "group_holdout" if dataset.groups is not None else "random_holdout")
+        targets = [getattr(dataset, "target_name", "y")]
+        metadata = copy.deepcopy(getattr(dataset, "protocol_metadata", {}))
+        if dataset.groups is not None:
+            metadata.update(train_groups=np.unique(dataset.groups[train]).tolist(),
+                            test_groups=np.unique(dataset.groups[test]).tolist())
         ground_truth = getattr(dataset, "sym_true", None)
     X_train, X_test = np.asarray(X_train), np.asarray(X_test)
     y_train = np.asarray(y_train).reshape(len(X_train), -1)
@@ -833,6 +956,10 @@ def regression_problems(dataset, case):
         if len(X_train) > limit:
             ids = np.random.default_rng(seed).choice(len(X_train), limit, replace=False)
             X_train, y_train = X_train[ids], y_train[ids]
+    if case["dataset"] in {"solid_dif", "solid_strain_stress", "solid_hardening"}:
+        rate_axis = 0 if case["dataset"] == "solid_dif" else 1
+        if len(np.unique(X_train[:, rate_axis])) < 2 or np.ptp(y_train) == 0:
+            raise SkipCase("Constitutive eligibility: training sample cap removed rate or target variation")
     for i, target in enumerate(targets):
         target_truth = ground_truth
         if isinstance(ground_truth, dict):
@@ -1500,6 +1627,27 @@ def _apply_information_criteria(result, configuration):
     return result
 
 
+def _model_stop_reason(model):
+    """Prefer explicit adapter evidence; label uninstrumented native returns."""
+    reason = getattr(model, "stop_reason_", None)
+    if reason in STOP_REASONS:
+        return {"stop_reason": reason, "stop_reason_source": "adapter"}
+    details = getattr(model, "run_details_", None)
+    if isinstance(details, dict) and details.get("generation"):
+        if len(details["generation"]) < getattr(model, "generations", 0):
+            return {"stop_reason": "early_stop", "stop_reason_source": "generation_count"}
+    return {"stop_reason": "budget_exhausted", "stop_reason_source": "native_return"}
+
+
+def _finalize_stop_reason(row):
+    if row["status"] != "ok":
+        row["stop_reason"] = "hard_timeout" if row["status"] == "timeout" else "error"
+        row["stop_reason_source"] = "runner"
+    elif row.get("stop_reason") not in STOP_REASONS or row.get("stop_reason") == "error":
+        row.update(stop_reason="budget_exhausted", stop_reason_source="native_return")
+    return row
+
+
 def _train_dscv_regression(problem, case, params):
     from kd.data import RegularData
 
@@ -1523,15 +1671,17 @@ def _train_dscv_regression(problem, case, params):
     from kd.model.kd_dscv import Program
 
     Program.task.x = [problem["X_train"][:, i : i + 1] for i in range(problem["X_train"].shape[1])]
-    result = model.train(n_epochs=case["run_params"]["dscv_epochs"], verbose=False)
+    result = fit_call(model.train, n_epochs=case["run_params"]["dscv_epochs"], verbose=False)
     return {
         "expression": str(result.get("expression", "")),
         "reward": result.get("r"),
+        **_model_stop_reason(model),
         "notes": "DISCOVER regression bridge; no fixed-coefficient held-out prediction API. test_mse is unavailable.",
     }
 
 
 def run_regression(problem, case, *, pretrain_cache=None):
+    model = None
     name, params = case["model"], copy.deepcopy(case["model_params"])
     if name in {"gplearn", "physo", "pyoperon", "pysr", "dso", "dscv", "spr", "symbolicgpt"}:
         params = _dataset_search_space(
@@ -1571,7 +1721,7 @@ def run_regression(problem, case, *, pretrain_cache=None):
                 epoch_refresh_rate=1, do_show=False, do_prints=False, do_save=False
             ),
         )
-        expr, _ = physo.SR(problem["X_train"].T, problem["y_train"], **options)
+        expr, _ = fit_call(physo.SR, problem["X_train"].T, problem["y_train"], **options)
         if expr is None:
             raise RuntimeError("PhySO did not return an expression")
         result = _score_regression(
@@ -1589,7 +1739,7 @@ def run_regression(problem, case, *, pretrain_cache=None):
         )
     elif name == "pysr":
         model = _new_model(name, params)
-        model.fit(
+        fit_call(model.fit,
             problem["X_train"],
             problem["y_train"],
             variable_names=problem["variable_names"],
@@ -1609,16 +1759,23 @@ def run_regression(problem, case, *, pretrain_cache=None):
         if name == "symbolicgpt":
             reuse_pretraining = params.pop("reuse_pretraining_within_case", False)
         model = _new_model(name, params)
-        if name in {"llmsr", "sindy", "pysindy", "e2e"}:
-            model.fit(
+        if name == "llmsr":
+            fit_call(model.fit,
+                problem["X_train"],
+                problem["y_train"],
+                variable_names=problem["variable_names"],
+                target_name=problem["target"],
+            )
+        elif name in {"sindy", "pysindy", "e2e"}:
+            fit_call(model.fit,
                 problem["X_train"],
                 problem["y_train"],
                 variable_names=problem["variable_names"],
             )
         elif name == "symbolicgpt" and reuse_pretraining and pretrain_cache is not None:
-            model.fit(problem["X_train"], problem["y_train"], pretrain_cache=pretrain_cache)
+            fit_call(model.fit, problem["X_train"], problem["y_train"], pretrain_cache=pretrain_cache)
         else:
-            model.fit(problem["X_train"], problem["y_train"])
+            fit_call(model.fit, problem["X_train"], problem["y_train"])
         if name == "gplearn":
             expression = str(model._program)
         elif name == "pyoperon":
@@ -1651,6 +1808,8 @@ def run_regression(problem, case, *, pretrain_cache=None):
             problem["y_test"],
             lambda: model.predict(problem["X_test"]),
         )
+    for key, value in _model_stop_reason(model).items():
+        result.setdefault(key, value)
     result.update(
         target=problem["target"],
         split=problem["split"],
@@ -1688,6 +1847,9 @@ def run_regression(problem, case, *, pretrain_cache=None):
             result["search_space"]["free_consts_names"] = params.get("free_consts_names", [])
     if name == "e2e":
         result["method_provenance"] = model.provenance_
+    if name == "llmsr":
+        result["method_provenance"] = dict(model.search_stats_)
+        result["best_program"] = model.best_program_
     if name == "symbolicgpt":
         result["method_provenance"] = dict(model.pretraining_)
         result["candidate_validation"] = dict(model.candidate_validation_)
@@ -1705,6 +1867,9 @@ def run_regression(problem, case, *, pretrain_cache=None):
     )
     if case["task"] == "ode":
         result["metric_target"] = "state_time_derivative"
+    if case["dataset"] == "pyqg_subgrid":
+        from kd.evaluation.closure import finish
+        result = finish(result, problem, model)
     return result
 
 
@@ -1733,6 +1898,8 @@ def prepare_pde(dataset, model_name):
             not np.allclose(np.diff(c), np.diff(c)[0], rtol=1e-3, atol=1e-10) for c in coords
         ):
             raise SkipCase("PDE-Net requires uniform spatial and time axes")
+        from kd.evaluation.equation import periodic_grid_options
+        periodic_grid_options(dataset)
         return dataset
     if dim != 1 or dataset.n_response != 1:
         raise SkipCase(f"{model_name} adapter supports a scalar field in one spatial dimension")
@@ -1754,9 +1921,9 @@ def prepare_pde(dataset, model_name):
         epi=dataset.epi,
         legacy=True,
     )
-    for attr in ("registry_name", "legacy_name", "sym_true", "rollout_metadata"):
+    for attr in ("registry_name", "legacy_name", "sym_true", "rollout_metadata", "state_vars", "protocol_metadata", "equation_targets", "geometry", "region_ids"):
         if hasattr(dataset, attr):
-            setattr(result, attr, getattr(dataset, attr))
+            setattr(result, attr, copy.deepcopy(getattr(dataset, attr)))
     return result
 
 
@@ -1776,15 +1943,15 @@ def _slice_pde_time(dataset, start, stop):
         equation_name=dataset.equation_name,
         pde_data=None,
         coords=coords,
-        usol=dataset.usol[..., start:stop],
+        usol=dataset.usol[..., start:stop].copy(),
         domain=domain,
         epi=dataset.epi,
         time_var=dataset.time_var,
         legacy=dataset.legacy,
     )
-    for attr in ("registry_name", "legacy_name", "sym_true"):
+    for attr in ("registry_name", "legacy_name", "sym_true", "rollout_metadata", "state_vars", "protocol_metadata", "equation_targets", "geometry", "region_ids"):
         if hasattr(dataset, attr):
-            setattr(result, attr, getattr(dataset, attr))
+            setattr(result, attr, copy.deepcopy(getattr(dataset, attr)))
     return result
 
 
@@ -1928,6 +2095,7 @@ def _apply_physics_informed_pic(result, train_dataset, case):
         return
     try:
         from dataclasses import asdict
+
         from kd.metrics import TorchPICConfig, evaluate_torch_pic, prepare_torch_pic_reference
 
         terms, original_coefficients = pde_pic_candidate(result.get("expression"))
@@ -2192,7 +2360,7 @@ def symbolic_pde_rollout_metrics(expression, dataset, split, metadata=None,
     """Validated shared method-of-lines equation rollout, or explicit abstention."""
     import numpy as np
 
-    from kd.evaluation.pde_rollout import validate_solver, rollout
+    from kd.evaluation.pde_rollout import rollout, validate_solver
 
     metadata = metadata or getattr(dataset, "rollout_metadata", None)
     if not metadata:
@@ -2314,7 +2482,7 @@ def run_pde(dataset, case):
     model = None
     if name == "weakform":
         model = _new_model(name, params)
-        model.fit(train_dataset.usol, train_dataset.x, train_dataset.t)
+        fit_call(model.fit, train_dataset.usol, train_dataset.x, train_dataset.t)
         result = {
             "expression": "u_t = " + model.best_expression_,
             "weak_expression": model.weak_expression_,
@@ -2372,7 +2540,7 @@ def run_pde(dataset, case):
                 }
             )
             model.import_dataset(train_dataset, **kwargs)
-            found = model.train(n_epochs=options["dscv_epochs"], verbose=False)
+            found = fit_call(model.train, n_epochs=options["dscv_epochs"], verbose=False)
             result = {"expression": str(found.get("expression", "")), "reward": found.get("r")}
         elif name in {"sindy", "pysindy"}:
             X, y, variable_names = pde_sindy_problem(train_dataset, **sindy_pde_options)
@@ -2386,7 +2554,7 @@ def run_pde(dataset, case):
             if len(X) > count:
                 indices = np.random.default_rng(case["seed"]).choice(len(X), count, replace=False)
                 X, y = X[indices], y[indices]
-            model.fit(X, y, variable_names=variable_names)
+            fit_call(model.fit, X, y, variable_names=variable_names)
             result = {
                 "expression": "u_t = " + str(model.best_expression_),
                 "n_train": len(X),
@@ -2397,7 +2565,7 @@ def run_pde(dataset, case):
                 ),
             }
         elif name == "sga":
-            model.fit_dataset(train_dataset, problem_name=case["dataset"])
+            fit_call(model.fit_dataset, train_dataset, problem_name=case["dataset"])
             result = {"expression": str(model.best_pde_), "aic": float(model.best_score_)}
         elif name in {"dlga", "deepmod"}:
             X, y = pde_coordinates(train_dataset)
@@ -2416,10 +2584,10 @@ def run_pde(dataset, case):
             else:
                 # Library1D differentiates time in column 0 and space in column 1.
                 X = X[:, [1, 0]]
-            model.fit(X, y)
+            fit_call(model.fit, X, y)
             result = {"expression": str(model.best_equation_), "n_train": len(X)}
         elif name == "eqgpt":
-            model.fit(train_dataset, equation_name=case["dataset"])
+            fit_call(model.fit, train_dataset, equation_name=case["dataset"])
             result = {
                 "expression": str(model.best_pde_),
                 "reward": float(model.best_award_),
@@ -2439,7 +2607,7 @@ def run_pde(dataset, case):
                 )
             else:
                 fit_data = train_dataset
-            model.fit(fit_data)
+            fit_call(model.fit, fit_data)
             if name == "pdefind":
                 expression = "u_t = " + _linear_expression(
                     model._feature_names, model.coefficients()
@@ -2461,6 +2629,7 @@ def run_pde(dataset, case):
                 result[
                     "notes"
                 ] += " PDE-Net follows the example wrapper: one x-derived dx for both axes and periodic padding, including rectangular grids."
+    result.update(_model_stop_reason(model))
     library_fields = {
         "dscv": ("binary_operators", "unary_operators"),
         "spr": ("binary_operators", "unary_operators"),
@@ -2515,6 +2684,7 @@ def run_pde(dataset, case):
     result.setdefault("n_train", int(np.prod(train_dataset.usol.shape)))
     result.update(
         split="temporal_block_holdout",
+        details=copy.deepcopy(getattr(dataset, "protocol_metadata", {})),
         target="PDE",
         n_test=int(np.prod(dataset.usol[..., split_index:].shape)),
         n_train_time=split_index,
@@ -2636,9 +2806,14 @@ def _base_row(case, instance=None, target=None):
         key: case[key] for key in ("name", "task", "model", "dataset", "seed", "profile", "device")
     }
     row.update(
-        metric_protocol_version=METRIC_PROTOCOL_VERSION,
+        metric_protocol_version=("2.2" if case["model"] in {"pdefind_nd", "implicit_pde"} else METRIC_PROTOCOL_VERSION),
+        dataset_protocol_version=case.get("dataset_protocol_version", "legacy/unknown"),
+        scientific_task=case.get("scientific_task", "legacy/unknown"),
+        physical_family=case.get("physical_family", case.get("family", case["task"])),
+        dataset_metadata=copy.deepcopy(case.get("dataset_metadata", {})),
+        execution_protocol_version=case.get("execution_protocol_version", "legacy/unknown"),
         instance=instance or case["dataset"],
-        family=case.get("family", case.get("task")),
+        family=case.get("physical_family", case.get("family", case.get("task"))),
         target=target,
         runtime=None,
         peak_memory_mb=None,
@@ -2650,10 +2825,10 @@ def _base_row(case, instance=None, target=None):
         structural_recovery=None,
         exact_recovery_semantics=(
             "additive_term_structure_ignoring_numeric_coefficients"
-            if case.get("task") != "pde" else None
+            if case.get("task") not in {"pde", "steady_pde"} else None
         ),
         structural_recovery_metric_version=(
-            SR_STRUCTURE_METRIC_VERSION if case.get("task") != "pde" else None
+            SR_STRUCTURE_METRIC_VERSION if case.get("task") not in {"pde", "steady_pde"} else None
         ),
         algebraic_exact_recovery=None,
         test_mse=None,
@@ -2670,21 +2845,22 @@ def _base_row(case, instance=None, target=None):
         equation_residual_finite_coverage=None,
         coefficient_error=None,
         coefficient_recovery=None,
-        recovery_eligible=bool(case.get("ground_truth")),
-        recovery_evaluator_status=("pending" if case.get("ground_truth") else "not_applicable"),
+        recovery_eligible=bool(case.get("ground_truth")) and case["model"] not in {"pdefind_nd", "implicit_pde"},
+        recovery_evaluator_status=("not_certified" if case["model"] in {"pdefind_nd", "implicit_pde"} else
+                                   "pending" if case.get("ground_truth") else "not_applicable"),
         pde_support_recovery=None,
         exact_symbolic_recovery=None,
         exact_symbolic_recovery_semantics=(
-            "legacy alias of pde_support_recovery" if case.get("task") == "pde" else None
+            "legacy alias of pde_support_recovery" if case.get("task") in {"pde", "steady_pde"} else None
         ),
-        pde_support_metric_version=(PDE_SUPPORT_METRIC_VERSION if case.get("task") == "pde" else None),
+        pde_support_metric_version=(PDE_SUPPORT_METRIC_VERSION if case.get("task") in {"pde", "steady_pde"} else None),
         term_support_accuracy=None,
         term_support_precision=None,
         term_support_recall=None,
         native_rollout_nrmse=None,
         equation_rollout_nrmse=None,
         equation_rollout_status=None,
-        pic_status=("not_requested" if case.get("task") == "pde" else None),
+        pic_status=("not_requested" if case.get("task") in {"pde", "steady_pde"} else None),
         pic=None,
         pic_r_loss=None,
         pic_p_loss=None,
@@ -2693,8 +2869,21 @@ def _base_row(case, instance=None, target=None):
         pic_cache_key=None,
         pic_reference_cache_hit=None,
         status="error",
+        stop_reason="error",
+        stop_reason_source="runner",
         error="",
     )
+    if case["model"] in {"eqgpt","e2e","symbolicgpt"}:
+        from kd.dataset._overlap import training_overlap
+        row["training_data_overlap"] = training_overlap(case["model"],case["dataset"])
+    if case["task"] == "green" or case["dataset"] == "pyqg_subgrid" or case["dataset"].startswith("dso_file_"):
+        row["metric_protocol_version"] = "2.3"
+        row["recovery_eligible"] = False
+        row["recovery_evaluator_status"] = "not_applicable"
+    if case["task"] == "green":
+        row["green_protocol_version"] = "green-v1"
+    if case["dataset"] == "pyqg_subgrid":
+        row["closure_protocol_version"] = "closure-v1"
     if case["model"] == "symbolicgpt":
         row["method_provenance"] = {
             "protocol": (
@@ -2717,22 +2906,59 @@ def _failure(case, exc, instance=None, target=None, ground_truth=None):
         )
     row.update(
         status=(
-            "skipped" if isinstance(exc, (SkipCase, ImportError, FileNotFoundError)) else "error"
+            ("error" if case["model"] in {"pdefind_nd", "implicit_pde"} and isinstance(exc, FileNotFoundError)
+             else "skipped" if isinstance(exc, (SkipCase, ImportError, FileNotFoundError)) else "error")
         ),
         error=f"{type(exc).__name__}: {exc}",
     )
+    if (case["task"] == "green" or case["dataset"] == "pyqg_subgrid" or case["dataset"].startswith("dso_file_")) and isinstance(exc,FileNotFoundError):
+        row.update(status="error",capability_status="missing_asset")
+    if case["model"] in {"pdefind_nd", "implicit_pde"}:
+        row["equation_protocol_version"] = "equation-v1"
+        message = str(exc)
+        if "source_blocked" in message:
+            row["status"] = "skipped"
+        row["capability_status"] = (
+            "source_blocked" if "source_blocked" in message else
+            "method_unsupported" if "method_unsupported" in message else
+            "insufficient_support" if "insufficient_support" in message else
+            "missing_asset" if isinstance(exc, FileNotFoundError) else "error")
     traceback.print_exc()
     return row
 
 
-def run_case(case, work_dir=None, checkpoint=None):
+def _case_problems(dataset, case):
+    if case["task"] == "green":
+        from kd.evaluation.green import problems
+        return problems(dataset,case)
+    if case["model"] in {"pdefind_nd", "implicit_pde"}:
+        from kd.evaluation.equation import problems
+        return problems(dataset, case)
+    return regression_problems(dataset, case) if case["task"] not in {"pde", "steady_pde"} else [None]
+
+
+def _run_problem(dataset, problem, case, pretrain_cache):
+    if case["task"] == "green":
+        from kd.evaluation.green import run
+        return run(dataset,problem,case)
+    if case["model"] in {"pdefind_nd", "implicit_pde"}:
+        from kd.evaluation.equation import run
+        return run(dataset, problem, case)
+    return run_pde(dataset, case) if problem is None else run_regression(
+        problem, case, pretrain_cache=pretrain_cache)
+
+
+def run_case(case, work_dir=None, checkpoint=None, *, selection=None, cache_root=None):
     """One matrix entry, with separate rows/errors per generated PDE/ODE target."""
     import numpy as np
 
+    random.seed(case["seed"])
+    np.random.seed(case["seed"])
     rows = []
     work_dir = Path(work_dir or RESULTS_DIR / "cases" / case["name"]).resolve()
 
     def append(row):
+        _finalize_stop_reason(row)
         rows.append(row)
         if checkpoint:
             write_json(checkpoint, rows)
@@ -2740,6 +2966,8 @@ def run_case(case, work_dir=None, checkpoint=None):
     try:
         check_device_available(case["device"])
         for instance_index, (instance, dataset) in enumerate(_load_instances(case)):
+            if selection and instance_index != selection["instance_index"]:
+                continue
             instance_row_start = len(rows)
             # Explicitly scoped to this instance; never shared between cases,
             # seeds or datasets. An empty cache still counts as enabled.
@@ -2748,10 +2976,18 @@ def run_case(case, work_dir=None, checkpoint=None):
                 and case["model_params"].get("reuse_pretraining_within_case")
                 else None
             )
+            cache_path = Path(cache_root or work_dir) / f"instance_{instance_index:04d}" / "pretraining.pkl"
+            if selection and pretrain_cache is not None and cache_path.exists():
+                with cache_path.open("rb") as stream:
+                    pretrain_cache = pickle.load(stream)
             try:
-                problems = regression_problems(dataset, case) if case["task"] != "pde" else [None]
+                problems = _case_problems(dataset, case)
                 for target_index, problem in enumerate(problems):
+                    if selection and target_index != selection["target_index"]:
+                        continue
                     target = problem["target"] if problem else "PDE"
+                    if selection and (target != selection["target"] or instance != selection["instance"]):
+                        raise ValueError("Prepared target identity changed during data reload")
                     start = time.perf_counter()
                     monitor = PeakMemoryMonitor(case["device"])
                     with monitor:
@@ -2764,6 +3000,7 @@ def run_case(case, work_dir=None, checkpoint=None):
                                 random.seed(case["seed"])
                                 np.random.seed(case["seed"])
                                 if case["model"] not in {
+                                    "pdefind_nd", "implicit_pde",
                                     "gplearn",
                                     "llmsr",
                                     "pdefind",
@@ -2775,17 +3012,13 @@ def run_case(case, work_dir=None, checkpoint=None):
                                     import torch
 
                                     torch.manual_seed(case["seed"])
-                                result = (
-                                    run_pde(dataset, case)
-                                    if problem is None
-                                    else run_regression(problem, case, pretrain_cache=pretrain_cache)
-                                )
+                                result = _run_problem(dataset, problem, case, pretrain_cache)
                             row = _base_row(case, instance, target)
                             row["status"] = "ok"
                             row.update(result)
-                            if row.get("ground_truth_expression"):
+                            if row.get("ground_truth_expression") and case["model"] not in {"pdefind_nd", "implicit_pde"}:
                                 row["recovery_eligible"] = True
-                                if case["task"] != "pde":
+                                if case["task"] not in {"pde", "steady_pde"}:
                                     row["recovery_evaluator_status"] = (
                                         "parsed" if row.get("exact_recovery") is not None else "unparsed"
                                     )
@@ -2793,6 +3026,12 @@ def run_case(case, work_dir=None, checkpoint=None):
                                 raise RuntimeError(
                                     "Training completed without a discovered expression"
                                 )
+                            if selection and pretrain_cache is not None:
+                                cache_path.parent.mkdir(parents=True, exist_ok=True)
+                                temporary = cache_path.with_suffix(".tmp")
+                                with temporary.open("wb") as stream:
+                                    pickle.dump(pretrain_cache, stream)
+                                temporary.replace(cache_path)
                         except Exception as exc:
                             row = _failure(
                                 case,
@@ -2805,7 +3044,12 @@ def run_case(case, work_dir=None, checkpoint=None):
                     row["peak_memory_mb"] = monitor.peak_memory_mb
                     row["peak_gpu_memory_mb"] = monitor.peak_gpu_memory_mb
                     append(row)
+                    if selection:
+                        return rows
             except Exception as exc:
+                if selection:
+                    return [_failure(case, exc, selection["instance"], selection["target"],
+                                     selection.get("ground_truth"))]
                 truths = case.get("ground_truth")
                 if len(rows) == instance_row_start and isinstance(truths, (list, tuple)):
                     for index, truth in enumerate(truths):
@@ -2813,12 +3057,19 @@ def run_case(case, work_dir=None, checkpoint=None):
                 else:
                     append(_failure(case, exc, instance))
     except Exception as exc:
+        if selection:
+            return [_failure(case, exc, selection["instance"], selection["target"],
+                             selection.get("ground_truth"))]
         targets = _declared_targets(case)
         if targets and not rows:
             for target, truth in targets:
                 append(_failure(case, exc, case["dataset"], target, truth))
         else:
             append(_failure(case, exc))
+    if selection and not rows:
+        rows.append(_failure(case, RuntimeError("Prepared target was not found"),
+                             selection["instance"], selection["target"],
+                             selection.get("ground_truth")))
     return rows
 
 
@@ -2835,17 +3086,33 @@ def _json_safe(value):
 
 
 def write_json(path, value):
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_suffix(path.suffix + ".tmp")
-    temporary.write_text(
-        json.dumps(_json_safe(value), indent=2, ensure_ascii=False, allow_nan=False),
-        encoding="utf-8",
-    )
-    temporary.replace(path)
+    atomic_json(path, _json_safe(value))
 
 
 CSV_FIELDS = [
+    "equation_protocol_version", "equation_expression", "capability_status",
+    "green_protocol_version", "forcing_metrics", "closure_protocol_version", "training_data_overlap",
+    "closure_frame_metrics", "closure_layer", "closure_online_status",
+    "equation_residual_normalization", "normalization_train_scale",
+    "prediction_status", "prediction_abstain_reason",
+    "dataset_protocol_version",
+    "scientific_task",
+    "physical_family",
+    "dataset_metadata",
+    "details",
+    "variable_names",
+    "execution_protocol_version",
+    "target_id",
+    "attempt",
+    "stop_reason",
+    "stop_reason_source",
+    "timeout_phase",
+    "fit_seconds",
+    "score_seconds",
+    "setup_seconds",
+    "worker_elapsed_seconds",
+    "execution_policy",
+    "target_manifest_complete",
     "name",
     "task",
     "model",
@@ -2961,6 +3228,13 @@ CSV_FIELDS = [
 
 
 AGGREGATE_FIELDS = [
+    "dataset_protocol_version",
+    "scientific_task",
+    "execution_protocol_version",
+    "stop_reason_counts",
+    "stop_reason_rates",
+    "stop_reason_source_counts",
+    "n_incomplete_target_manifests",
     "metric_protocol_version",
     "task",
     "model",
@@ -3019,10 +3293,14 @@ def aggregate_results(rows):
     groups = {}
     for row in rows:
         version = row.get("metric_protocol_version") or "legacy/unknown"
-        groups.setdefault((version, "all", "all"), []).append(row)
-        groups.setdefault((version, row["task"], row["model"]), []).append(row)
+        execution = row.get("execution_protocol_version") or "legacy/unknown"
+        data_version = row.get("dataset_protocol_version") or "legacy/unknown"
+        scientific_task = row.get("scientific_task") or "legacy/unknown"
+        groups.setdefault((version, execution, data_version, "all", "all", "all"), []).append(row)
+        groups.setdefault((version, execution, data_version, scientific_task,
+                           row["task"], row["model"]), []).append(row)
     aggregates = []
-    for (version, task, model), group in sorted(groups.items()):
+    for (version, execution, data_version, scientific_task, task, model), group in sorted(groups.items()):
         statuses = [row.get("status") for row in group]
         runtimes = _numeric_values(group, "runtime")
         memories = _numeric_values(group, "peak_memory_mb")
@@ -3034,14 +3312,14 @@ def aggregate_results(rows):
         exact_eligible = [
             row
             for row in group
-            if row.get("task") != "pde"
+            if row.get("task") not in {"pde", "steady_pde"}
             and row.get("status") != "skipped"
             and (row.get("recovery_eligible") is True or row.get("exact_recovery") is not None)
         ]
         support_eligible = [
             row
             for row in group
-            if row.get("task") == "pde"
+            if row.get("task") in {"pde", "steady_pde"}
             and row.get("status") != "skipped"
             and (
                 row.get("recovery_eligible") is True
@@ -3078,6 +3356,24 @@ def aggregate_results(rows):
         aggregates.append(
             {
                 "metric_protocol_version": version,
+                "execution_protocol_version": execution,
+                "dataset_protocol_version": data_version,
+                "scientific_task": scientific_task,
+                "stop_reason_counts": {
+                    reason: sum(row.get("stop_reason", "unknown") == reason for row in group)
+                    for reason in (*STOP_REASONS, "unknown")
+                },
+                "stop_reason_rates": {
+                    reason: sum(row.get("stop_reason", "unknown") == reason for row in group) / count
+                    for reason in (*STOP_REASONS, "unknown")
+                },
+                "stop_reason_source_counts": {
+                    source: sum(row.get("stop_reason_source", "unknown") == source for row in group)
+                    for source in sorted({row.get("stop_reason_source", "unknown") for row in group})
+                },
+                "n_incomplete_target_manifests": len({
+                    row.get("name") for row in group if row.get("target_manifest_complete") is False
+                }),
                 "task": task,
                 "model": model,
                 "denominator_unit": "target_row",
@@ -3204,6 +3500,13 @@ def save_summary(output_dir, rows):
 
 def _declared_targets(case):
     """Target-level failure accounting from predeclared truth, never fitted outputs."""
+    if case["model"] in {"pdefind_nd", "implicit_pde"}:
+        from kd.dataset._advanced import declared_targets
+        return [(target.key, None) for target in declared_targets(case["dataset"])]
+    if case["task"] == "green":
+        return [("kernel",None)]
+    if case["dataset"] == "pyqg_subgrid":
+        return [("q_subgrid_forcing_L1",None),("q_subgrid_forcing_L2",None)]
     truth = case.get("ground_truth")
     if isinstance(truth, dict):
         return list(truth.items())
@@ -3218,66 +3521,272 @@ def _declared_targets(case):
     return result
 
 
-def execute_case(case, output_dir, timeout=None, resume=False):
-    """Separate subprocesses prevent model globals and relative log paths colliding."""
-    directory = (output_dir / "cases" / case["name"]).resolve()
-    directory.mkdir(parents=True, exist_ok=True)
-    result_path, request_path = directory / "result.json", directory / "case.json"
-    if resume and result_path.exists():
-        previous = json.loads(result_path.read_text(encoding="utf-8"))
-        if previous and all(row["status"] == "ok" for row in previous):
-            return previous
-    result_path.unlink(missing_ok=True)
-    partial_path = directory / "partial.json"
-    partial_path.unlink(missing_ok=True)
-    write_json(request_path, case)
-    log_path = directory / "run.log"
-    start = time.perf_counter()
-    with log_path.open("w", encoding="utf-8") as log:
+def _target_spec(instance, instance_index, target, target_index, truth):
+    return dict(target_id=f"i{instance_index:04d}_t{target_index:04d}",
+                instance=instance, instance_index=instance_index,
+                target=target, target_index=target_index, ground_truth=truth)
+
+
+def _fallback_targets(case, exc, *, instance=None, instance_index=0, declared=None):
+    declared = _declared_targets(case) if declared is None else declared
+    if not declared:
+        target = "PDE" if case["task"] == "pde" else "y"
+        if case["dataset"].startswith("cyt_"):
+            target = case["dataset_params"].get("target", "Mut")
+        elif case["dataset"].startswith("solid_"):
+            target = "DIF" if case["dataset"] == "solid_dif" else "stress"
+        declared = [(target, case.get("ground_truth"))]
+    specs = []
+    for index, (target, truth) in enumerate(declared):
+        spec = _target_spec(instance or case["dataset"], instance_index, target, index, truth)
+        spec["preparation_row"] = _failure(case, exc, spec["instance"], target, truth)
+        specs.append(spec)
+    return specs
+
+
+def _case_failure_targets(case, exc):
+    """Retain counts known before loading, even if generation fails or times out."""
+    params = case["dataset_params"]
+    known_instances = True
+    if case["dataset"] in {"solid_dif", "solid_strain_stress", "solid_hardening"}:
+        from kd.dataset._domain import constitutive_instance_specs
+
         try:
-            env = dict(os.environ, PYTHONIOENCODING="utf-8", MPLBACKEND="Agg")
-            process = subprocess.run(
-                [sys.executable, str(Path(__file__).resolve()), "--_case-file", str(request_path)],
-                cwd=ROOT,
-                env=env,
-                stdout=log,
-                stderr=subprocess.STDOUT,
-                timeout=timeout,
-            )
-            if process.returncode != 0 or not result_path.exists():
-                raise RuntimeError(f"Worker exited with code {process.returncode}; see {log_path}")
-            rows = json.loads(result_path.read_text(encoding="utf-8"))
-        except (subprocess.TimeoutExpired, RuntimeError) as exc:
-            rows = (
-                json.loads(partial_path.read_text(encoding="utf-8"))
-                if partial_path.exists()
-                else []
-            )
-            targets = _declared_targets(case)
-            completed = {row.get("target") for row in rows}
-            completed_truth = {str(row.get("ground_truth_expression")) for row in rows}
-            pending = [(target, truth) for target, truth in targets
-                       if target not in completed and str(truth) not in completed_truth]
-            if not targets:
-                pending = [(None, case.get("ground_truth"))]
-            elapsed = time.perf_counter() - start
-            unaccounted = max(0.0, elapsed - sum(float(row.get("runtime") or 0) for row in rows))
-            for index, (target, truth) in enumerate(pending):
-                row = _base_row(case, case["dataset"], target)
-                row.update(
-                    status="timeout" if isinstance(exc, subprocess.TimeoutExpired) else "error",
-                    error=str(exc), runtime=unaccounted if index == 0 else 0.0,
-                    ground_truth_expression=truth, recovery_eligible=bool(truth),
-                    recovery_evaluator_status="not_run", worker_elapsed_seconds=elapsed,
-                )
-                rows.append(row)
-            if not pending:
-                for row in rows:
-                    row["worker_completion_error"] = str(exc)
-    for row in rows:
-        row["log_path"] = str(log_path)
-    write_json(result_path, rows)
-    return rows
+            declared = constitutive_instance_specs(case["dataset"])
+            instances = params.get("instances") or [s["instance"] for s in declared]
+        except OSError:
+            instances, known_instances = [case["dataset"]], False
+    elif case["dataset"] == "pdeformer_sinus":
+        import inspect
+
+        from kd.dataset._pdeformer_sinus import load_pdeformer_sinus_benchmark
+
+        default = inspect.signature(load_pdeformer_sinus_benchmark).parameters["n_pde"].default
+        instances = [f"pdeformer_sinus/{index:04d}" for index in range(params.get("n_pde", default))]
+    elif case["dataset"] == "wave_breaking" and params.get("keys"):
+        instances = params["keys"]
+    else:
+        instances = [case["dataset"]]
+    specs = []
+    complete = (known_instances and (case["task"] != "ode" or bool(_declared_targets(case)))
+                and (case["dataset"] != "wave_breaking" or bool(params.get("keys"))))
+    for index, instance in enumerate(instances):
+        entries = _fallback_targets(case, exc, instance=instance, instance_index=index)
+        for spec in entries:
+            spec["preparation_row"]["target_manifest_complete"] = complete
+        specs.extend(entries)
+    return specs
+
+
+def _prepare_targets(case):
+    """Enumerate instance/target identities before fitting, including setup failures."""
+    import numpy as np
+
+    random.seed(case["seed"])
+    np.random.seed(case["seed"])
+    specs = []
+    try:
+        for instance_index, (instance, dataset) in enumerate(_load_instances(case)):
+            try:
+                problems = list(_case_problems(dataset, case))
+                for index, problem in enumerate(problems):
+                    spec = _target_spec(
+                        instance, instance_index, problem["target"] if problem else "PDE", index,
+                        problem.get("ground_truth") if problem else case.get("ground_truth"),
+                    )
+                    if problem:
+                        spec.update(split=problem["split"], data_metadata=problem["metadata"],
+                                    n_train=len(problem["X_train"]), n_test=len(problem["X_test"]))
+                    specs.append(spec)
+            except Exception as exc:
+                declared = None
+                if case["model"] in {"pdefind_nd", "implicit_pde"}:
+                    declared = _declared_targets(case)
+                elif hasattr(dataset, "state_vars"):
+                    truths = dict(_declared_targets(case))
+                    declared = [(f"d({name})/dt", truths.get(f"d({name})/dt"))
+                                for name in dataset.state_vars]
+                elif hasattr(dataset, "target_name"):
+                    declared = [(dataset.target_name, None)]
+                failed = _fallback_targets(case, exc, instance=instance,
+                                           instance_index=instance_index, declared=declared)
+                for entry in failed:
+                    entry["preparation_row"]["target_manifest_complete"] = True
+                    entry["preparation_row"]["details"] = copy.deepcopy(
+                        getattr(dataset, "protocol_metadata", {}))
+                specs.extend(failed)
+    except Exception as exc:
+        if specs:
+            # The loader failed between instances. Keep its failure visible;
+            # the unknown remainder cannot be claimed to have a complete denominator.
+            remaining = _fallback_targets(case, exc, instance_index=len(specs))
+            for spec in remaining:
+                spec["preparation_row"]["target_manifest_complete"] = False
+            specs.extend(remaining)
+        else:
+            specs = _case_failure_targets(case, exc)
+    if not specs:
+        specs = _fallback_targets(case, ValueError("Dataset produced no targets"))
+    return specs
+
+
+def _new_attempt(directory):
+    directory.mkdir(parents=True, exist_ok=True)
+    index = max((int(path.name) for path in directory.iterdir()
+                 if path.is_dir() and path.name.isdigit()), default=0) + 1
+    attempt = directory / f"{index:04d}"
+    attempt.mkdir()
+    return attempt
+
+
+def _read_terminal(path, case, spec):
+    if not path.exists():
+        return None
+    row = json.loads(path.read_text(encoding="utf-8"))
+    if (not isinstance(row, dict) or row.get("status") not in TERMINAL_STATUSES
+            or row.get("stop_reason") not in STOP_REASONS
+            or row.get("name") != case["name"] or row.get("target_id") != spec["target_id"]
+            or row.get("instance") != spec["instance"] or row.get("target") != spec["target"]
+            or row.get("execution_protocol_version") != EXECUTION_PROTOCOL_VERSION):
+        raise ValueError(f"Invalid terminal target result; preserved for inspection: {path}")
+    return row
+
+
+def _target_result(directory, case, spec):
+    """Recover a worker commit even if its parent died before updating the case."""
+    target_dir = directory / "targets" / spec["target_id"]
+    for attempt in sorted((target_dir / "attempts").glob("[0-9]*")):
+        reap_orphan(attempt)
+    canonical = target_dir / "result.json"
+    row = _read_terminal(canonical, case, spec)
+    if row is not None:
+        return row
+    for attempt in sorted((target_dir / "attempts").glob("[0-9]*")):
+        row = _read_terminal(attempt / "result.json", case, spec)
+        if row is not None:
+            write_json(canonical, row)
+            return row
+    return None
+
+
+def _worker_failure(case, spec, outcome, log_path):
+    row = _base_row(case, spec["instance"], spec["target"])
+    timeout_phase = outcome.get("timeout_phase")
+    row.update(
+        status="timeout" if timeout_phase else "error",
+        error=(f"Hard timeout in {timeout_phase}" if timeout_phase else
+               f"Worker exited without a terminal result (code {outcome.get('returncode')})"),
+        ground_truth_expression=spec.get("ground_truth"),
+        recovery_eligible=bool(spec.get("ground_truth")), recovery_evaluator_status="not_run",
+        target_id=spec["target_id"], log_path=str(log_path),
+        runtime=outcome.get("worker_elapsed_seconds"), **outcome,
+    )
+    for key in ("split", "n_train", "n_test"):
+        if key in spec:
+            row[key] = spec[key]
+    if "data_metadata" in spec:
+        row["details"] = spec["data_metadata"]
+    return _finalize_stop_reason(row)
+
+
+def _launch_worker(case_path, attempt, policy, spec=None):
+    command = [sys.executable, str(Path(__file__).resolve()),
+               "--_case-file", str(case_path), "--_attempt-dir", str(attempt)]
+    if spec is None:
+        command.append("--_prepare-targets")
+    else:
+        write_json(attempt / "target.json", spec)
+        command.extend(["--_target-file", str(attempt / "target.json")])
+    return supervise(command, cwd=ROOT, log_path=attempt / "run.log",
+                     phase_path=attempt / "phase.json", policy=policy)
+
+
+def _ensure_target_plan(directory, case, policy):
+    for attempt in sorted((directory / "preparation").glob("[0-9]*")):
+        reap_orphan(attempt)
+    plan_path = directory / "targets.json"
+    if plan_path.exists():
+        return json.loads(plan_path.read_text(encoding="utf-8"))
+    # Preparation completion is also recoverable across a parent interruption.
+    for path in sorted((directory / "preparation").glob("*/targets.json")):
+        specs = json.loads(path.read_text(encoding="utf-8"))
+        write_json(plan_path, specs)
+        return specs
+    attempt = _new_attempt(directory / "preparation")
+    outcome = _launch_worker(directory / "case.json", attempt, policy)
+    if (attempt / "targets.json").exists():
+        specs = json.loads((attempt / "targets.json").read_text(encoding="utf-8"))
+    else:
+        specs = _case_failure_targets(case, RuntimeError("Target preparation did not complete"))
+        for spec in specs:
+            complete = spec["preparation_row"].get("target_manifest_complete", False)
+            spec["preparation_row"] = _worker_failure(case, spec, outcome, attempt / "run.log")
+            spec["preparation_row"]["target_manifest_complete"] = complete
+    write_json(plan_path, specs)
+    return specs
+
+
+def execute_case(case, output_dir, timeout=None, resume=False, *, timeout_grace=5.0,
+                 setup_timeout=300.0, score_timeout=300.0):
+    """Run isolated targets; terminal first results are immutable, including failures."""
+    policy = execution_policy(timeout, timeout_grace=timeout_grace,
+                              setup_timeout=setup_timeout, score_timeout=score_timeout)
+    if case.get("execution_protocol_version") != EXECUTION_PROTOCOL_VERSION:
+        raise ValueError("Legacy case execution protocol; generate a new manifest/output directory")
+    from kd.dataset._metadata import DATASET_PROTOCOL_VERSION
+
+    if case.get("dataset_protocol_version") != DATASET_PROTOCOL_VERSION:
+        raise ValueError("Legacy dataset protocol; generate a new manifest/output directory")
+    directory = (Path(output_dir) / "cases" / case["name"]).resolve()
+    with case_lock(directory):
+        request_path, policy_path = directory / "case.json", directory / "execution.json"
+        if policy_path.exists():
+            if (json.loads(policy_path.read_text(encoding="utf-8")) != policy
+                    or json.loads(request_path.read_text(encoding="utf-8")) != case):
+                raise ValueError("Case configuration or timing policy changed; use a new output directory")
+            if not resume:
+                raise FileExistsError("Case already attempted; use --resume or a new output directory")
+        else:
+            if (directory / "result.json").exists() or (directory / "partial.json").exists():
+                raise ValueError("Unversioned existing results; use a new output directory")
+            write_json(request_path, case)
+            write_json(policy_path, policy)
+        specs = _ensure_target_plan(directory, case, policy)
+        rows = []
+        for spec in specs:
+            row = _target_result(directory, case, spec)
+            if row is None:
+                target_dir = directory / "targets" / spec["target_id"]
+                attempt = _new_attempt(target_dir / "attempts")
+                if "preparation_row" in spec:
+                    row = _finalize_stop_reason(dict(spec["preparation_row"]))
+                else:
+                    outcome = _launch_worker(request_path, attempt, policy, spec)
+                    row = _read_terminal(attempt / "result.json", case, spec)
+                    if row is None:
+                        row = _worker_failure(case, spec, outcome, attempt / "run.log")
+                row.update(target_id=spec["target_id"], attempt=int(attempt.name),
+                           execution_policy=policy)
+                # Worker commits are already complete; do not rewrite their bytes.
+                if not (attempt / "result.json").exists():
+                    write_json(attempt / "result.json", row)
+                write_json(target_dir / "result.json", row)
+            rows.append(row)
+            write_json(directory / "partial.json", rows)
+        write_json(directory / "result.json", rows)
+        return rows
+
+
+def save_manifest(output, manifest):
+    """Never relabel an existing result directory with another matrix or budget."""
+    path = Path(output) / "benchmark_manifest.json"
+    if path.exists():
+        previous = json.loads(path.read_text(encoding="utf-8"))
+        for key in ("execution_protocol_version", "execution_policy", "cases"):
+            if previous.get(key) != manifest.get(key):
+                raise ValueError(f"Existing manifest differs at {key}; use a new output directory")
+        return
+    write_json(path, manifest)
 
 
 def main(argv=None):
@@ -3299,14 +3808,17 @@ def main(argv=None):
     )
     parser.add_argument("--output-dir", type=Path)
     parser.add_argument(
-        "--timeout", type=float, help="Seconds per model/dataset/seed worker (default: unlimited)"
+        "--timeout", type=float, help="Fit seconds per target, excluding setup/scoring (default: unlimited)"
     )
+    parser.add_argument("--timeout-grace", type=float, help="Grace before hard fit timeout (default: 5s)")
+    parser.add_argument("--setup-timeout", type=float, help="Preparation/startup limit (default: 300s)")
+    parser.add_argument("--score-timeout", type=float, help="Post-fit scoring limit (default: 300s)")
     resume = parser.add_mutually_exclusive_group()
     resume.add_argument(
         "--resume",
         dest="resume",
         action="store_true",
-        help="Reuse successful cases with identical resolved configuration",
+        help="Keep terminal targets (including errors/timeouts); resume missing targets only",
     )
     resume.add_argument(
         "--no-resume",
@@ -3340,12 +3852,45 @@ def main(argv=None):
         help="Load one minimal dataset instance per selected baseline/dataset pair and exit",
     )
     parser.add_argument("--_case-file", type=Path, help=argparse.SUPPRESS)
+    parser.add_argument("--_target-file", type=Path, help=argparse.SUPPRESS)
+    parser.add_argument("--_attempt-dir", type=Path, help=argparse.SUPPRESS)
+    parser.add_argument("--_prepare-targets", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
     if args._case_file:
         case = json.loads(args._case_file.read_text(encoding="utf-8"))
         directory = args._case_file.parent
-        rows = run_case(case, directory, checkpoint=directory / "partial.json")
-        write_json(directory / "result.json", rows)
+        attempt = args._attempt_dir
+        if attempt is None:
+            parser.error("Internal worker requires --_attempt-dir")
+        policy = json.loads((directory / "execution.json").read_text(encoding="utf-8"))
+        with PhaseClock(attempt / "phase.json",
+                        started=float(os.environ["KD_BENCHMARK_STARTED"])) as clock:
+            if args._prepare_targets:
+                specs = _prepare_targets(case)
+                if clock.times()["setup_seconds"] > policy["setup_timeout"]:
+                    raise TimeoutError("Target preparation exceeded setup_timeout")
+                write_json(attempt / "targets.json", specs)
+                return 0
+            if args._target_file is None:
+                parser.error("Internal worker requires --_target-file")
+            spec = json.loads(args._target_file.read_text(encoding="utf-8"))
+            row = run_case(case, attempt / "work", selection=spec,
+                           cache_root=directory / "cache")[0]
+            row.update(clock.times(), target_id=spec["target_id"], attempt=int(attempt.name),
+                       execution_policy=policy, log_path=str(attempt / "run.log"))
+            row["worker_elapsed_seconds"] = time.perf_counter() - clock.started
+            # A fast phase can end between supervisor polls. Enforce its limit
+            # before committing, so a late result is never accepted on resume.
+            for phase, limit in (("setup", policy["setup_timeout"]),
+                                 ("fit", None if policy["timeout"] is None else
+                                  policy["timeout"] + policy["timeout_grace"]),
+                                 ("score", policy["score_timeout"])):
+                if limit is not None and row[f"{phase}_seconds"] > limit:
+                    row.update(status="timeout", timeout_phase=phase,
+                               error=f"Hard timeout in {phase}")
+                    break
+            _finalize_stop_reason(row)
+            write_json(attempt / "result.json", row)
         return 0
     try:
         catalog, excluded = dataset_catalog()
@@ -3364,6 +3909,11 @@ def main(argv=None):
         datasets = args.datasets if args.datasets is not None else settings["datasets"]
         seeds = args.seeds if args.seeds is not None else settings["seeds"]
         timeout = args.timeout if args.timeout is not None else settings["timeout"]
+        timing = {key: getattr(args, key) if getattr(args, key) is not None else
+                  settings.get(key, default)
+                  for key, default in (("timeout_grace", 5.0), ("setup_timeout", 300.0),
+                                       ("score_timeout", 300.0))}
+        policy = execution_policy(timeout, **timing)
         resume_enabled = args.resume if args.resume is not None else settings["resume"]
         if timeout is not None and timeout <= 0:
             raise ValueError("--timeout must be positive")
@@ -3422,6 +3972,9 @@ def main(argv=None):
         else _project_path(settings["output_dir"]).resolve()
     )
     manifest = {
+        "execution_protocol_version": EXECUTION_PROTOCOL_VERSION,
+        "dataset_protocol_version": next(iter(catalog.values()))["dataset_protocol_version"],
+        "execution_policy": policy,
         "config": str(config_path),
         "profile": profile,
         "tasks": tasks,
@@ -3438,7 +3991,7 @@ def main(argv=None):
         "excluded": excluded,
         "cases": cases,
     }
-    write_json(output / "benchmark_manifest.json", manifest)
+    save_manifest(output, manifest)
     print(
         f"Selected {len(cases)} cases; profile={profile}; manifest={output / 'benchmark_manifest.json'}",
         flush=True,
@@ -3457,7 +4010,7 @@ def main(argv=None):
     rows = []
     for i, case in enumerate(cases, 1):
         print(f"[{i}/{len(cases)}] {case['name']} device={case['device']}", flush=True)
-        current = execute_case(case, output, timeout=timeout, resume=resume_enabled)
+        current = execute_case(case, output, timeout=timeout, resume=resume_enabled, **timing)
         rows.extend(current)
         save_summary(output, rows)
         print(

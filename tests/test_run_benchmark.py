@@ -18,15 +18,51 @@ def make_case(model="gplearn", dataset="Koza-2", **kwargs):
     return benchmark.build_experiments(catalog, models=[model], datasets=[dataset], **kwargs)[0]
 
 
+def mock_target_workers(monkeypatch, case, statuses, *, interrupt_at=None, commit_first=False,
+                        specs=None):
+    """A worker transport double; real process/time boundaries have separate tests."""
+    calls = []
+    if specs is None:
+        specs = [benchmark._target_spec(case["dataset"], 0, target, index, truth)
+                 for index, (target, truth) in enumerate(benchmark._declared_targets(case)
+                 or [("y", case.get("ground_truth"))])]
+
+    def launch(case_path, attempt, policy, spec=None):
+        if spec is None:
+            benchmark.write_json(attempt / "targets.json", specs)
+            return {"returncode": 0, "timeout_phase": None}
+        index = len(calls)
+        calls.append(spec["target_id"])
+        (attempt / "run.log").write_text(f"attempt {attempt.name}", encoding="utf-8")
+        if interrupt_at == index and not commit_first:
+            raise KeyboardInterrupt
+        status = statuses[index]
+        outcome = dict(returncode=1 if status == "error" else 0,
+                       timeout_phase="fit" if status == "timeout" else None,
+                       worker_elapsed_seconds=1.0, fit_seconds=0.8,
+                       setup_seconds=0.1, score_seconds=0.1)
+        if status != "timeout":
+            row = benchmark._base_row(case, spec["instance"], spec["target"])
+            row.update(status=status, expression="x1", ground_truth_expression=spec["ground_truth"],
+                       target_id=spec["target_id"], attempt=int(attempt.name), execution_policy=policy)
+            benchmark.write_json(attempt / "result.json", benchmark._finalize_stop_reason(row))
+        if interrupt_at == index:
+            raise KeyboardInterrupt
+        return outcome
+
+    monkeypatch.setattr(benchmark, "_launch_worker", launch)
+    return calls
+
+
 def test_full_matrix_covers_catalog_and_examples():
     from kd.dataset import DATASET_REGISTRY
 
     catalog, excluded = benchmark.dataset_catalog()
-    cases = benchmark.build_experiments(catalog)
+    cases = benchmark.build_experiments(catalog, datasets=list(catalog))
     assert set(DATASET_REGISTRY) <= set(catalog)
     assert set(benchmark.BASELINES) == {c["model"] for c in cases}
     assert set(catalog) - {"rubber_test"} == {c["dataset"] for c in cases}
-    assert {c["task"] for c in cases} == {"sr", "ode", "pde"}
+    assert {c["task"] for c in cases} == {"sr", "ode", "pde", "steady_pde", "green"}
     assert "wave_breaking" in catalog and "advection_diffusion" in excluded
     assert len({c["name"] for c in cases}) == len(cases)
     for spec in benchmark.BASELINES.values():
@@ -41,10 +77,10 @@ def test_domain_datasets_are_included_in_the_full_matrix():
         "solid_dif": ("sr", 9),
         "solid_strain_stress": ("sr", 9),
         "solid_hardening": ("sr", 9),
-        "vgs_I_0-100": ("pde", 11),
-        "vgs_I_100-200": ("pde", 11),
-        "vgs_II_0-1000": ("pde", 11),
-        "vgs_II_1000-2000": ("pde", 11),
+        "vgs_I_0-100": ("pde", 13),
+        "vgs_I_100-200": ("pde", 13),
+        "vgs_II_0-1000": ("pde", 13),
+        "vgs_II_1000-2000": ("pde", 13),
     }
 
     cases = benchmark.build_experiments(catalog, datasets=list(expected))
@@ -215,6 +251,7 @@ def test_physo_legacy_pretty_expression_parsing():
 
 def test_physo_legacy_log_recovery_requires_exact_display_match(tmp_path):
     import sympy as sp
+
     from scripts.recompute_recovery_metrics import matched_physo_log_expression, reevaluate
 
     program = "(x1+1)/x1"
@@ -556,7 +593,8 @@ def test_multidimensional_fields_are_not_flattened():
     data = GridPDEDataset("two_fields", None, None, 0, coords=coords, usol=np.zeros((2, 5, 6, 7)))
     with pytest.raises(benchmark.SkipCase, match="scalar field"):
         benchmark.prepare_pde(data, "pdefind")
-    assert benchmark.prepare_pde(data, "pdenet").usol.shape == (2, 5, 6, 7)
+    with pytest.raises(benchmark.SkipCase, match="anisotropic"):
+        benchmark.prepare_pde(data, "pdenet")
 
 
 def test_generated_pde_instances_are_preserved():
@@ -604,30 +642,175 @@ def test_missing_dependency_is_reported(monkeypatch, tmp_path):
 
 
 def test_timeout_preserves_completed_targets(monkeypatch, tmp_path):
-    case = make_case()
-    directory = tmp_path / "cases" / case["name"]
-
-    def timeout(*args, **kwargs):
-        benchmark.write_json(
-            directory / "partial.json", [{**benchmark._base_row(case), "status": "ok"}]
-        )
-        raise subprocess.TimeoutExpired("worker", 1)
-
-    monkeypatch.setattr(benchmark.subprocess, "run", timeout)
+    case = make_case(model="sindy", dataset="ode_core_oscillator")
+    calls = mock_target_workers(monkeypatch, case, ["timeout", "ok"])
     rows = benchmark.execute_case(case, tmp_path, timeout=1)
-    assert [r["status"] for r in rows] == ["ok", "timeout"]
+    assert [r["status"] for r in rows] == ["timeout", "ok"]
+    assert [r["stop_reason"] for r in rows] == ["hard_timeout", "budget_exhausted"]
+    assert calls == ["i0000_t0000", "i0000_t0001"]
 
 
 def test_resume_skips_successful_worker(monkeypatch, tmp_path):
     case = make_case()
-    row = {**benchmark._base_row(case), "status": "ok"}
-    benchmark.write_json(tmp_path / "cases" / case["name"] / "result.json", [row])
+    mock_target_workers(monkeypatch, case, ["ok"])
+    rows = benchmark.execute_case(case, tmp_path)
 
     def forbidden(*args, **kwargs):
         pytest.fail("A successful case should not launch another worker")
 
-    monkeypatch.setattr(benchmark.subprocess, "run", forbidden)
-    assert benchmark.execute_case(case, tmp_path, resume=True) == [row]
+    monkeypatch.setattr(benchmark, "_launch_worker", forbidden)
+    assert benchmark.execute_case(case, tmp_path, resume=True) == rows
+
+
+@pytest.mark.parametrize("status", ["ok", "error", "timeout", "skipped"])
+def test_resume_keeps_every_terminal_first_result(monkeypatch, tmp_path, status):
+    case = make_case()
+    mock_target_workers(monkeypatch, case, [status])
+    rows = benchmark.execute_case(case, tmp_path, timeout=2)
+    directory = tmp_path / "cases" / case["name"]
+    original = {path: path.read_bytes() for path in directory.glob("targets/**/*") if path.is_file()}
+    monkeypatch.setattr(benchmark, "_launch_worker", lambda *a, **k: pytest.fail("reran terminal target"))
+    assert benchmark.execute_case(case, tmp_path, timeout=2, resume=True) == rows
+    assert all(path.read_bytes() == value for path, value in original.items())
+    with pytest.raises(FileExistsError, match="already attempted"):
+        benchmark.execute_case(case, tmp_path, timeout=2)
+    with pytest.raises(ValueError, match="timing policy"):
+        benchmark.execute_case(case, tmp_path, timeout=3, resume=True)
+
+
+@pytest.mark.parametrize("commit_first", [False, True])
+def test_resume_after_parent_interruption_preserves_attempts(monkeypatch, tmp_path, commit_first):
+    case = make_case(model="sindy", dataset="ode_core_chaotic")
+    mock_target_workers(monkeypatch, case, ["timeout", "ok", "ok"],
+                        interrupt_at=1, commit_first=commit_first)
+    with pytest.raises(KeyboardInterrupt):
+        benchmark.execute_case(case, tmp_path, timeout=2)
+    directory = tmp_path / "cases" / case["name"]
+    original = {path: path.read_bytes() for path in directory.glob("targets/**/attempts/**/*")
+                if path.is_file()}
+    calls = mock_target_workers(monkeypatch, case, ["ok", "ok"])
+    rows = benchmark.execute_case(case, tmp_path, timeout=2, resume=True)
+    assert calls == (["i0000_t0002"] if commit_first else ["i0000_t0001", "i0000_t0002"])
+    assert [row["status"] for row in rows] == ["timeout", "ok", "ok"]
+    assert rows[1]["attempt"] == (1 if commit_first else 2)
+    assert all(path.read_bytes() == value for path, value in original.items())
+    assert json.loads((directory / "result.json").read_text(encoding="utf-8")) == rows
+
+
+def test_target_identity_includes_instance_and_not_truth(monkeypatch, tmp_path):
+    case = make_case(model="pdefind", dataset="pdeformer_sinus")
+    specs = [benchmark._target_spec(f"generated/{i}", i, "PDE", 0, "u_x") for i in range(3)]
+    calls = mock_target_workers(monkeypatch, case, ["ok", "timeout", "ok"], specs=specs)
+    rows = benchmark.execute_case(case, tmp_path, timeout=2)
+    assert len(set(calls)) == 3
+    assert [row["instance"] for row in rows] == ["generated/0", "generated/1", "generated/2"]
+
+
+def test_old_protocol_result_is_never_reused_or_overwritten(monkeypatch, tmp_path):
+    case = make_case()
+    path = tmp_path / "cases" / case["name"] / "result.json"
+    benchmark.write_json(path, [{"status": "ok"}])
+    original = path.read_bytes()
+    with pytest.raises(ValueError, match="Unversioned"):
+        benchmark.execute_case(case, tmp_path, resume=True)
+    assert path.read_bytes() == original
+    legacy = dict(case)
+    legacy.pop("execution_protocol_version")
+    with pytest.raises(ValueError, match="Legacy case"):
+        benchmark.execute_case(legacy, tmp_path, resume=True)
+
+
+def test_manifest_rejects_changed_budget_without_overwriting(tmp_path):
+    first = dict(execution_protocol_version=benchmark.EXECUTION_PROTOCOL_VERSION,
+                 execution_policy=benchmark.execution_policy(10), cases=[make_case()])
+    benchmark.save_manifest(tmp_path, first)
+    original = (tmp_path / "benchmark_manifest.json").read_bytes()
+    with pytest.raises(ValueError, match="execution_policy"):
+        benchmark.save_manifest(tmp_path, {**first, "execution_policy": benchmark.execution_policy(20)})
+    assert (tmp_path / "benchmark_manifest.json").read_bytes() == original
+
+
+def test_preparation_failure_keeps_declared_targets(monkeypatch, tmp_path):
+    case = make_case(model="sindy", dataset="ode_core_chaotic")
+    monkeypatch.setattr(benchmark, "_load_instances",
+                        lambda c: (_ for _ in ()).throw(ValueError("bad data")))
+    specs = benchmark._prepare_targets(case)
+    assert len(specs) == 3
+    assert all(spec["preparation_row"]["status"] == "error" for spec in specs)
+    calls = mock_target_workers(monkeypatch, case, [], specs=specs)
+    rows = benchmark.execute_case(case, tmp_path)
+    assert not calls
+    assert all(row["stop_reason"] == "error" and row["recovery_eligible"] for row in rows)
+
+
+def test_generated_instance_count_survives_preparation_failure(monkeypatch):
+    case = make_case(model="pdefind", dataset="pdeformer_sinus",
+                     config={"datasets": {"pdeformer_sinus": {"n_pde": 3}}})
+    monkeypatch.setattr(benchmark, "_load_instances",
+                        lambda c: (_ for _ in ()).throw(ValueError("generator failure")))
+    specs = benchmark._prepare_targets(case)
+    assert len(specs) == 3
+    assert len({spec["target_id"] for spec in specs}) == 3
+    assert all(spec["preparation_row"]["target_manifest_complete"] for spec in specs)
+
+
+def test_unlabelled_ode_setup_failure_keeps_state_count(monkeypatch):
+    from types import SimpleNamespace
+
+    case = make_case(model="sindy", dataset="ode_core_oscillator")
+    case["ground_truth"] = None
+    monkeypatch.setattr(benchmark, "_load_instances",
+                        lambda c: [("ode", SimpleNamespace(state_vars=["a", "b"]))])
+    monkeypatch.setattr(benchmark, "regression_problems",
+                        lambda *args: (_ for _ in ()).throw(ValueError("bad derivatives")))
+    specs = benchmark._prepare_targets(case)
+    assert [spec["target"] for spec in specs] == ["d(a)/dt", "d(b)/dt"]
+
+
+def test_stop_reason_adapter_and_aggregate_contract():
+    from types import SimpleNamespace
+
+    case = make_case()
+    rows = []
+    for reason in benchmark.STOP_REASONS:
+        assert benchmark._model_stop_reason(SimpleNamespace(stop_reason_=reason))["stop_reason"] == reason
+        status = "timeout" if reason == "hard_timeout" else "error" if reason == "error" else "ok"
+        row = {**benchmark._base_row(case), "status": status, "stop_reason": reason}
+        rows.append(benchmark._finalize_stop_reason(row))
+    aggregate = benchmark.aggregate_results(rows)[0]
+    assert all(aggregate["stop_reason_counts"][reason] == 1 for reason in benchmark.STOP_REASONS)
+    assert sum(aggregate["stop_reason_rates"].values()) == pytest.approx(1)
+
+
+def test_execution_protocol_versions_are_not_pooled():
+    row = {**benchmark._base_row(make_case()), "status": "ok"}
+    old = dict(row)
+    old.pop("execution_protocol_version")
+    groups = benchmark.aggregate_results([row, old])
+    assert {item["execution_protocol_version"] for item in groups} == {"target-v1", "legacy/unknown"}
+    assert all(item["n_rows"] == 1 for item in groups)
+
+
+def test_symbolicgpt_instance_cache_survives_isolated_target_calls(monkeypatch, tmp_path):
+    case = make_case(model="symbolicgpt", dataset="ode_core_oscillator")
+    case["model_params"]["reuse_pretraining_within_case"] = True
+    hits = []
+    monkeypatch.setattr(benchmark, "_load_instances", lambda c: [("instance", object())])
+    monkeypatch.setattr(benchmark, "regression_problems",
+                        lambda *args: [{"target": "a"}, {"target": "b"}])
+
+    def regress(problem, case, *, pretrain_cache=None):
+        hits.append(bool(pretrain_cache))
+        pretrain_cache["trained"] = True
+        return {"expression": "x1"}
+
+    monkeypatch.setattr(benchmark, "run_regression", regress)
+    for index, target in enumerate(["a", "b"]):
+        spec = benchmark._target_spec("instance", 0, target, index, None)
+        rows = benchmark.run_case(case, tmp_path / f"work_{index}", selection=spec,
+                                  cache_root=tmp_path / "cache")
+        assert rows[0]["status"] == "ok"
+    assert hits == [False, True]
 
 
 def test_strict_json_and_csv_keep_failed_rows(tmp_path):
@@ -750,6 +933,7 @@ def test_opt_in_pic_runner_records_components_without_changing_baseline_status(
     tmp_path, monkeypatch
 ):
     import types
+
     import kd.metrics as metrics
 
     dataset = GridPDEDataset(
@@ -879,7 +1063,8 @@ def test_shared_pde_rollout_requires_declared_boundary_conditions():
     from kd.evaluation.pde_rollout import rollout, validate_solver
     x, times = np.linspace(0, 1, 8), np.linspace(0, 0.2, 3)
     initial = np.ones_like(x)
-    rhs = lambda state, coordinates, bc: np.zeros_like(state)
+    def rhs(state, coordinates, bc):
+        return np.zeros_like(state)
     with pytest.raises(ValueError, match="boundary_conditions"):
         rollout(rhs, initial, x, times, boundary_conditions=None)
     result = validate_solver(rhs, initial, x, times,
@@ -934,13 +1119,12 @@ def test_multitarget_setup_failure_preserves_target_denominator(monkeypatch, tmp
 
 def test_worker_timeout_preserves_remaining_ode_target_denominator(monkeypatch, tmp_path):
     case = make_case(model="sindy", dataset="ode_core_chaotic")
-    def timeout(*args, **kwargs):
-        raise subprocess.TimeoutExpired("mock-worker", 10)
-    monkeypatch.setattr(benchmark.subprocess, "run", timeout)
+    calls = mock_target_workers(monkeypatch, case, ["timeout"] * 3)
     rows = benchmark.execute_case(case, tmp_path, timeout=10)
     assert len(rows) == 3
     assert {row["target"] for row in rows} == {"d(x)/dt", "d(y)/dt", "d(z)/dt"}
     assert all(row["status"] == "timeout" and row["recovery_eligible"] for row in rows)
+    assert len(calls) == 3
 
 
 @pytest.mark.parametrize("reuse,protocol", [
@@ -950,9 +1134,7 @@ def test_worker_timeout_preserves_remaining_ode_target_denominator(monkeypatch, 
 def test_symbolicgpt_timeout_preserves_configured_protocol(monkeypatch, tmp_path, reuse, protocol):
     case = make_case(model="symbolicgpt", dataset="ode_core_oscillator")
     case["model_params"]["reuse_pretraining_within_case"] = reuse
-    def timeout(*args, **kwargs):
-        raise subprocess.TimeoutExpired("mock-worker", 10)
-    monkeypatch.setattr(benchmark.subprocess, "run", timeout)
+    mock_target_workers(monkeypatch, case, ["timeout", "timeout"])
     rows = benchmark.execute_case(case, tmp_path, timeout=10)
     assert len(rows) == 2
     assert all(row["method_provenance"] == {
@@ -962,13 +1144,7 @@ def test_symbolicgpt_timeout_preserves_configured_protocol(monkeypatch, tmp_path
 
 def test_partial_worker_timeout_does_not_duplicate_completed_targets(monkeypatch, tmp_path):
     case = make_case(model="sindy", dataset="ode_core_oscillator")
-    directory = tmp_path / "cases" / case["name"]
-    def timeout(*args, **kwargs):
-        completed = benchmark._base_row(case, case["dataset"], "d(x)/dt")
-        completed.update(status="ok", ground_truth_expression=case["ground_truth"][0], runtime=0.1)
-        benchmark.write_json(directory / "partial.json", [completed])
-        raise subprocess.TimeoutExpired("mock-worker", 10)
-    monkeypatch.setattr(benchmark.subprocess, "run", timeout)
+    mock_target_workers(monkeypatch, case, ["ok", "timeout"])
     rows = benchmark.execute_case(case, tmp_path, timeout=10)
     assert [(row["target"], row["status"]) for row in rows] == [("d(x)/dt", "ok"), ("d(v)/dt", "timeout")]
 

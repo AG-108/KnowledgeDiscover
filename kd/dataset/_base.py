@@ -208,8 +208,9 @@ def load_csv_tlc(
     dataset_kwargs: Optional[Dict[str, Any]] = None,
     force_3d_usol: bool = True,
     encoding: Optional[str] = None,
-) -> Union[Dict[str, Any], "ScatterPDEDataset"]:
-    """Load time-stamped scattered PDE observations from a CSV file."""
+    grid_if_cartesian: bool = False,
+) -> Union[Dict[str, Any], "ScatterPDEDataset", "GridPDEDataset"]:
+    """Load time-stamped observations, optionally restoring exact Cartesian grids."""
     df = pd.read_csv(csv_path, encoding=encoding)
 
     if df.shape[1] < 2:
@@ -263,7 +264,7 @@ def load_csv_tlc(
             raise ValueError(f"spatial_vars 长度 {len(spatial_vars)} 必须等于坐标维度 d={d}")
 
     # Preserve state and time order from their first appearance.
-    var_names = sorted({v for _, v, _ in parsed})
+    var_names = list(dict.fromkeys(v for _, v, _ in parsed))
     t_values = sorted({t for _, _, t in parsed})
 
     n_state = len(var_names)
@@ -320,11 +321,20 @@ def load_csv_tlc(
     if not return_dataset:
         return payload
 
+    if grid_if_cartesian:
+        if dataset_kwargs:
+            raise ValueError("dataset_kwargs are scatter-specific; disable grid_if_cartesian")
+        from ._domain import cartesian_grid
+
+        grid = cartesian_grid(payload)
+        if grid is not None:
+            return grid
+
     # Resolve the dataset class at call time to avoid definition-order issues.
     if dataset_kwargs is None:
         dataset_kwargs = {}
 
-    return ScatterPDEDataset(
+    dataset = ScatterPDEDataset(
         equation_name=equation_name,
         points=points,
         t=t,
@@ -335,6 +345,8 @@ def load_csv_tlc(
         time_var=time_var,
         **dataset_kwargs,
     )
+    dataset.state_vars = var_names
+    return dataset
 
 
 def load_wake_equation(data_dir: str, file_names: List[str]):
@@ -2327,7 +2339,7 @@ def load_rubber_dataset(split: str = "train") -> "TabularRegressionDataset":
         description="""
         Filled-rubber constitutive-model regression dataset (nominal stress
         vs stretch ratio, parametric in compound and temperature).
-        X = [lambda=1+nominal strain, compound, temperature (K)], y = nominal
+        X = [lambda=1+nominal strain, compound, temperature (source units unverified)], y = nominal
         stress.
         Resource: Beyond empirical models: Discovering constitutive laws in
         solids with graph-based equation discovery.
@@ -2481,7 +2493,7 @@ def load_cyt_dataset(
     Per-cell flow features (velocity, pressure, their gradients, wall
     distance, Mach/AoA/Re) become X, and a turbulence-closure quantity
     (default eddy viscosity "Mut") becomes y -- a constitutive-law discovery
-    problem ("given local flow invariants, discover the closure relation"),
+    problem ("given local flow features, discover the closure relation"),
     analogous to `load_rubber_dataset`.
 
     Parameters
@@ -2508,6 +2520,14 @@ def load_cyt_dataset(
     for feat in feats:
         if feat not in _CYT_COLUMNS:
             raise ValueError(f"Unknown feature column {feat!r}. Available: {_CYT_COLUMNS}")
+    if target in feats:
+        raise ValueError("The closure target cannot also be an input feature")
+
+    unsupported = set(feats) - set(_CYT_DEFAULT_FEATURE_COLUMNS + ["X", "Y"])
+    if unsupported:
+        raise ValueError(f"Unverified closure-output input features: {sorted(unsupported)}")
+    if not feats or len(set(feats)) != len(feats):
+        raise ValueError("CYT input features must be nonempty and unique")
 
     columns = load_cyt_flowfeature_raw(case)
     X = np.column_stack([columns[feat] for feat in feats])
@@ -2524,13 +2544,30 @@ def load_cyt_dataset(
         """
     )
 
-    return TabularRegressionDataset(
+    from ._domain import spatial_blocks
+    from ._provenance import source_evidence
+
+    points = np.column_stack([columns["X"], columns["Y"]])
+    groups, regions = spatial_blocks(points)
+    dataset = TabularRegressionDataset(
         name=f"cyt_{case}",
         X=X,
         y=y,
         variable_names=feats,
+        groups=groups,
         descr=descr,
     )
+    dataset.target_name = target
+    dataset.split_protocol = "spatial_block_holdout"
+    dataset.protocol_metadata = {
+        "source_evidence": source_evidence(f"cyt_{case}"),
+        "source_case": case_dir_name, "spatial_partition": "recursive_median_depth4",
+        "regions": regions, "coordinate_names": ["X", "Y"],
+        "feature_scaling": "raw_source_units; no fitted normalization",
+        "unit_status": "source_units_not_yet_verified", "target_definition": target,
+        "generalization": "within_case_spatial_blocks; not cross_geometry_OOD",
+    }
+    return dataset
 
 
 # -------------------------
@@ -2586,7 +2623,8 @@ def load_solid_dif_dataset() -> "TabularRegressionDataset":
         strain_rate = df["strain rate"].to_numpy(dtype=float)
         dif = df["DIF"].to_numpy(dtype=float)
         valid = np.isfinite(strain_rate) & np.isfinite(dif)
-        strain_rate, dif = strain_rate[valid], dif[valid]
+        if not valid.all():
+            raise ValueError(f"Nonfinite source observations in {file_path.name}; no silent row filtering")
 
         X_rows.append(strain_rate.reshape(-1, 1))
         y_rows.append(dif)
@@ -2648,7 +2686,8 @@ def load_solid_strain_stress_dataset() -> "TabularRegressionDataset":
         strain = df["true plastic strain"].to_numpy(dtype=float)
         stress = df["true plastic stress"].to_numpy(dtype=float)
         valid = np.isfinite(strain) & np.isfinite(stress)
-        strain, stress = strain[valid], stress[valid]
+        if not valid.all():
+            raise ValueError(f"Nonfinite source observations in {file_path.name}; no silent row filtering")
 
         n = strain.shape[0]
         X_rows.append(np.column_stack([strain, np.full(n, strain_rate)]))
@@ -2710,11 +2749,20 @@ def load_solid_hardening_dataset() -> "TabularRegressionDataset":
         with file_path.open("rb") as f:
             data = pickle.load(f)
 
+        fields = ("strain", "stress", "strain_rate", "DIF")
+        if not isinstance(data, dict) or any(key not in data for key in fields):
+            raise ValueError(f"Missing hardening source fields in {file_path.name}")
+        if len({len(data[key]) for key in fields}) != 1:
+            raise ValueError(f"Inconsistent hardening curve lists in {file_path.name}")
         for i, (strain, stress, strain_rate, dif) in enumerate(
             zip(data["strain"], data["stress"], data["strain_rate"], data["DIF"])
         ):
             strain = np.asarray(strain, dtype=float)
             stress = np.asarray(stress, dtype=float)
+            if (strain.ndim != 1 or stress.shape != strain.shape or not len(strain)
+                    or not np.isfinite(strain).all() or not np.isfinite(stress).all()
+                    or not np.isfinite(float(strain_rate)) or not np.isfinite(float(dif))):
+                raise ValueError(f"Invalid hardening observations in {file_path.name} curve {i}")
             n = strain.shape[0]
 
             X_rows.append(

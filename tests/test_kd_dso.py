@@ -451,6 +451,7 @@ def test_kd_dso_fit_and_predict():
     assert isinstance(model.best_reward_, float)
     assert model.best_reward_ == pytest.approx(1.0, abs=1e-6)
     assert model.success_ is True
+    assert model.stop_reason_ == "early_stop"
 
     pred = model.predict(X)
     assert pred.shape == (40,)

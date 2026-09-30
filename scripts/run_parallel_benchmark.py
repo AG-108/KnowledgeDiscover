@@ -22,7 +22,16 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from run_benchmark import _base_row, execute_case, save_summary, write_json
+from kd.dataset._metadata import DATASET_PROTOCOL_VERSION  # noqa: E402
+from run_benchmark import (  # noqa: E402
+    EXECUTION_PROTOCOL_VERSION,
+    case_lock,
+    execute_case,
+    execution_policy,
+    save_manifest,
+    save_summary,
+    write_json,
+)
 
 
 def _load_json(path: Path):
@@ -47,27 +56,28 @@ def _round_robin(cases: list[dict]) -> list[dict]:
     return ordered
 
 
-def _successful_result(path: Path) -> bool:
-    try:
-        rows = _load_json(path)
-    except (OSError, ValueError, TypeError):
-        return False
-    return bool(rows) and all(row.get("status") == "ok" for row in rows)
-
-
-def _reuse_successes(cases: list[dict], output: Path, sources: list[Path]) -> int:
+def _reuse_results(cases: list[dict], output: Path, sources: list[Path], policy: dict) -> int:
+    """Copy a compatible first attempt, including terminal failures or interruptions."""
     reused = 0
     for case in cases:
         destination = output / "cases" / case["name"]
-        if _successful_result(destination / "result.json"):
+        if destination.exists():
             continue
         for source in sources:
             candidate = source / "cases" / case["name"]
-            if _successful_result(candidate / "result.json"):
-                destination.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copytree(candidate, destination, dirs_exist_ok=True)
-                reused += 1
-                break
+            if not (candidate / "execution.json").exists():
+                continue
+            with case_lock(candidate):
+                if (_load_json(candidate / "execution.json") != policy
+                        or _load_json(candidate / "case.json") != case):
+                    continue
+                with case_lock(destination):
+                    if any(path.name != ".lock" for path in destination.iterdir()):
+                        break
+                    shutil.copytree(candidate, destination, dirs_exist_ok=True,
+                                    ignore=shutil.ignore_patterns(".lock"))
+            reused += 1
+            break
     return reused
 
 
@@ -95,23 +105,14 @@ def _status_payload(
         "expected_by_model": dict(sorted(expected_by_model.items())),
         "finished_by_model": dict(sorted(finished_by_model.items())),
         "row_statuses": dict(Counter(row.get("status") for row in rows)),
+        "stop_reasons": dict(Counter(row.get("stop_reason") for row in rows)),
     }
 
 
-def _failed(case_rows: list[dict]) -> bool:
-    return any(row.get("status") in {"error", "timeout"} for row in case_rows)
-
-
-def _run_one(case: dict, output: Path, timeout: float | None) -> list[dict]:
-    try:
-        return execute_case(case, output, timeout=timeout, resume=True)
-    except Exception as exc:  # Preserve orchestration failures as ordinary rows.
-        row = _base_row(case)
-        row.update(status="error", error=f"orchestrator: {type(exc).__name__}: {exc}")
-        directory = output / "cases" / case["name"]
-        directory.mkdir(parents=True, exist_ok=True)
-        write_json(directory / "result.json", [row])
-        return [row]
+def _run_one(case: dict, output: Path, timeout: float | None, **timing) -> list[dict]:
+    # Configuration/I/O/locking errors belong to the orchestrator, not a fake
+    # case-level row that would overwrite completed targets or hide denominators.
+    return execute_case(case, output, timeout=timeout, resume=True, **timing)
 
 
 def _save_checkpoint(
@@ -187,8 +188,12 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--exclude-model", action="append", default=[])
     parser.add_argument("--cpu-workers", type=int, default=6)
     parser.add_argument("--gpu-workers", type=int, default=1)
-    parser.add_argument("--timeout", type=float, default=21600.0)
-    parser.add_argument("--retries", type=int, default=1)
+    parser.add_argument("--timeout", type=float, default=21600.0, help="Fit seconds per target")
+    parser.add_argument("--timeout-grace", type=float, default=5.0)
+    parser.add_argument("--setup-timeout", type=float, default=300.0)
+    parser.add_argument("--score-timeout", type=float, default=300.0)
+    parser.add_argument("--retries", type=int, choices=[0], default=0,
+                        help="Terminal failures are immutable; automatic retries are disabled")
     parser.add_argument("--checkpoint-every", type=int, default=10)
     return parser.parse_args()
 
@@ -210,10 +215,18 @@ def main() -> int:
     }
     excluded = set(args.exclude_model)
     unique = {}
+    timing = dict(timeout_grace=args.timeout_grace, setup_timeout=args.setup_timeout,
+                  score_timeout=args.score_timeout)
+    policy = execution_policy(args.timeout, **timing)
     source_manifests = []
     for manifest_path in args.manifest:
         resolved = manifest_path.resolve()
         manifest = _load_json(resolved)
+        if manifest.get("execution_protocol_version") != EXECUTION_PROTOCOL_VERSION:
+            raise SystemExit("Legacy manifest; generate a new target-v1 manifest")
+        if any(case.get("dataset_protocol_version") != DATASET_PROTOCOL_VERSION
+               for case in manifest["cases"]):
+            raise SystemExit(f"Legacy dataset protocol; generate a new {DATASET_PROTOCOL_VERSION} manifest")
         source_manifests.append(str(resolved))
         for case in manifest["cases"]:
             key = (case["task"], case["model"], case["dataset"])
@@ -223,9 +236,12 @@ def main() -> int:
     if not cases:
         raise SystemExit("no compatible cases selected")
 
-    write_json(
-        output / "benchmark_manifest.json",
+    save_manifest(
+        output,
         {
+            "execution_protocol_version": EXECUTION_PROTOCOL_VERSION,
+            "dataset_protocol_version": DATASET_PROTOCOL_VERSION,
+            "execution_policy": policy,
             "created_at": datetime.now(timezone.utc).isoformat(),
             "source_manifests": source_manifests,
             "compatibility_report": str(args.compatibility.resolve()),
@@ -238,9 +254,9 @@ def main() -> int:
         },
     )
     shutil.copy2(args.compatibility.resolve(), output / "compatibility_report.json")
-    reused = _reuse_successes(cases, output, [path.resolve() for path in args.reuse_dir])
+    reused = _reuse_results(cases, output, [path.resolve() for path in args.reuse_dir], policy)
     print(
-        f"Selected {len(cases)} compatible cases; reused {reused} successful cases; "
+        f"Selected {len(cases)} compatible cases; reused {reused} case histories; "
         f"CPU workers={args.cpu_workers}, GPU workers={args.gpu_workers}",
         flush=True,
     )
@@ -248,66 +264,67 @@ def main() -> int:
     started_at = datetime.now(timezone.utc).isoformat()
     results: dict[str, list[dict]] = {}
     pending = cases
-    case_by_name = {case["name"]: case for case in cases}
-    for attempt in range(1, args.retries + 2):
-        cpu_cases = _round_robin(
-            [case for case in pending if not str(case["device"]).startswith("cuda")]
-        )
-        gpu_cases = _round_robin(
-            [case for case in pending if str(case["device"]).startswith("cuda")]
-        )
-        print(
-            f"Attempt {attempt}/{args.retries + 1}: "
-            f"CPU cases={len(cpu_cases)}, GPU cases={len(gpu_cases)}",
-            flush=True,
-        )
-        future_cases: dict[Future, dict] = {}
-        with ThreadPoolExecutor(max_workers=args.cpu_workers) as cpu_pool, ThreadPoolExecutor(
-            max_workers=args.gpu_workers
-        ) as gpu_pool:
-            for case in cpu_cases:
-                future_cases[cpu_pool.submit(_run_one, case, output, args.timeout)] = case
-            for case in gpu_cases:
-                future_cases[gpu_pool.submit(_run_one, case, output, args.timeout)] = case
-            completed_this_attempt = 0
-            checkpoint_time = time.monotonic()
-            for future in as_completed(future_cases):
-                case = future_cases[future]
+    orchestration_errors = {}
+    attempt = 1
+    cpu_cases = _round_robin(
+        [case for case in pending if not str(case["device"]).startswith("cuda")]
+    )
+    gpu_cases = _round_robin(
+        [case for case in pending if str(case["device"]).startswith("cuda")]
+    )
+    print(
+        f"Attempt {attempt}/{args.retries + 1}: "
+        f"CPU cases={len(cpu_cases)}, GPU cases={len(gpu_cases)}",
+        flush=True,
+    )
+    future_cases: dict[Future, dict] = {}
+    with ThreadPoolExecutor(max_workers=args.cpu_workers) as cpu_pool, ThreadPoolExecutor(
+        max_workers=args.gpu_workers
+    ) as gpu_pool:
+        for case in cpu_cases:
+            future_cases[cpu_pool.submit(_run_one, case, output, args.timeout, **timing)] = case
+        for case in gpu_cases:
+            future_cases[gpu_pool.submit(_run_one, case, output, args.timeout, **timing)] = case
+        completed_this_attempt = 0
+        checkpoint_time = time.monotonic()
+        for future in as_completed(future_cases):
+            case = future_cases[future]
+            try:
                 case_rows = future.result()
-                results[case["name"]] = case_rows
-                completed_this_attempt += 1
-                statuses = ",".join(row.get("status", "unknown") for row in case_rows)
-                print(
-                    f"[{len(results)}/{len(cases)}] {case['name']} -> {statuses}",
-                    flush=True,
+            except Exception as exc:
+                orchestration_errors[case["name"]] = f"{type(exc).__name__}: {exc}"
+                write_json(output / "orchestration_errors.json", orchestration_errors)
+                print(f"Orchestration error: {case['name']}: {exc}", flush=True)
+                continue
+            results[case["name"]] = case_rows
+            completed_this_attempt += 1
+            statuses = ",".join(row.get("status", "unknown") for row in case_rows)
+            print(
+                f"[{len(results)}/{len(cases)}] {case['name']} -> {statuses}",
+                flush=True,
+            )
+            if (
+                completed_this_attempt % args.checkpoint_every == 0
+                or time.monotonic() - checkpoint_time >= 60
+            ):
+                _save_checkpoint(
+                    output,
+                    cases,
+                    results,
+                    started_at=started_at,
+                    attempt=attempt,
+                    retries=args.retries,
                 )
-                if (
-                    completed_this_attempt % args.checkpoint_every == 0
-                    or time.monotonic() - checkpoint_time >= 60
-                ):
-                    _save_checkpoint(
-                        output,
-                        cases,
-                        results,
-                        started_at=started_at,
-                        attempt=attempt,
-                        retries=args.retries,
-                    )
-                    checkpoint_time = time.monotonic()
+                checkpoint_time = time.monotonic()
 
-        _save_checkpoint(
-            output,
-            cases,
-            results,
-            started_at=started_at,
-            attempt=attempt,
-            retries=args.retries,
-        )
-        failed_names = [name for name, rows in results.items() if _failed(rows)]
-        if not failed_names:
-            break
-        pending = [case_by_name[name] for name in failed_names]
-        print(f"Retrying {len(pending)} failed/timeout cases", flush=True)
+    _save_checkpoint(
+        output,
+        cases,
+        results,
+        started_at=started_at,
+        attempt=attempt,
+        retries=args.retries,
+    )
 
     rows = [row for case_rows in results.values() for row in case_rows]
     rows.sort(
@@ -328,7 +345,7 @@ def main() -> int:
         f"results={output}",
         flush=True,
     )
-    return 1 if failures else 0
+    return 1 if failures or orchestration_errors else 0
 
 
 if __name__ == "__main__":

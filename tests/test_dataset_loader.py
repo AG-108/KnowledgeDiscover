@@ -242,8 +242,10 @@ def test_list_datasets_covers_all_categories():
     pde_names = list_datasets("pde")
     ode_names = list_datasets("ode")
     regression_names = list_datasets("regression")
+    steady_names = list_datasets("steady_pde")
+    green_names = list_datasets("green")
 
-    assert set(pde_names) | set(ode_names) | set(regression_names) == set(all_names)
+    assert set(pde_names) | set(ode_names) | set(regression_names) | set(steady_names) | set(green_names) == set(all_names)
     assert set(pde_names) & set(ode_names) == set()
     assert set(pde_names) & set(regression_names) == set()
 

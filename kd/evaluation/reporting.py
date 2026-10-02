@@ -21,7 +21,7 @@ def seed_family_summary(rows, metric, *, family_key="family"):
                      row.get("execution_protocol_version", "legacy/unknown"),
                      row.get("dataset_protocol_version", "legacy/unknown"),
                      row.get("scientific_task", "legacy/unknown"), row.get("profile"),
-                     row.get("regime"), row["seed"])].append(
+                     row.get("regime"), row.get("resource_policy_hash", "unconstrained"), row["seed"])].append(
                 float(row[metric])
             )
     by_family = defaultdict(list)
@@ -32,12 +32,13 @@ def seed_family_summary(rows, metric, *, family_key="family"):
         case_counts[group] += len(values)
     result = []
     for group, seed_values in sorted(by_family.items(), key=repr):
-        model, family, protocol, execution, data_protocol, scientific_task, profile, regime = group
+        model, family, protocol, execution, data_protocol, scientific_task, profile, regime, resources = group
         mean = sum(seed_values) / len(seed_values)
         variance = sum((value - mean) ** 2 for value in seed_values) / (len(seed_values) - 1) if len(seed_values) > 1 else None
         result.append({"model": model, "family": family, "metric_protocol_version": protocol,
                        "execution_protocol_version": execution,
                        "dataset_protocol_version": data_protocol, "scientific_task": scientific_task,
+                       "resource_policy_hash": resources,
                        "profile": profile, "regime": regime, "metric": metric, "mean": mean,
                        "seed_std": math.sqrt(variance) if variance is not None else None,
                        "n_seeds": len(seed_values), "n_target_rows": case_counts[group],
@@ -45,7 +46,7 @@ def seed_family_summary(rows, metric, *, family_key="family"):
     return result
 
 
-def paired_comparison(rows, metric, model_a, model_b, *, pair_keys=("dataset", "instance", "target", "seed", "metric_protocol_version", "execution_protocol_version", "dataset_protocol_version", "scientific_task", "profile", "regime")):
+def paired_comparison(rows, metric, model_a, model_b, *, pair_keys=("dataset", "instance", "target", "seed", "metric_protocol_version", "execution_protocol_version", "dataset_protocol_version", "scientific_task", "profile", "regime", "resource_policy_hash")):
     """Compare only exact shared target/seed pairs and expose dropped denominators."""
     selected = {model_a: {}, model_b: {}}
     candidate = {model_a: 0, model_b: 0}

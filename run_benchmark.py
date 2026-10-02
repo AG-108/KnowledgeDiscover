@@ -47,8 +47,10 @@ from kd.benchmark_execution import (
     execution_policy,
     fit_call,
     reap_orphan,
+    score_call,
     supervise,
 )
+from kd.benchmark_resources import policy_hash
 
 ROOT = Path(__file__).resolve().parent
 RESULTS_DIR = ROOT / "results" / "benchmark"
@@ -253,6 +255,7 @@ def load_benchmark_config(path=None):
         "output_dir",
         "timeout",
         "timeout_grace",
+        "soft_deadline",
         "setup_timeout",
         "score_timeout",
         "resume",
@@ -322,7 +325,8 @@ def parse_device_overrides(values):
 def validate_benchmark_config(value, catalog):
     execution_policy(value.get("timeout"), timeout_grace=value.get("timeout_grace", 5.0),
                      setup_timeout=value.get("setup_timeout", 300.0),
-                     score_timeout=value.get("score_timeout", 300.0))
+                     score_timeout=value.get("score_timeout", 300.0),
+                     soft_deadline=value.get("soft_deadline", True))
     if not isinstance(value.get("baseline_config_dir"), str) or not value["baseline_config_dir"]:
         raise ValueError("baseline_config_dir must be a non-empty path string")
     for key in ("tasks", "models", "datasets"):
@@ -545,6 +549,7 @@ def build_experiments(
                             pass
                 case = {
                     "execution_protocol_version": EXECUTION_PROTOCOL_VERSION,
+                    "metric_protocol_version": METRIC_PROTOCOL_VERSION,
                     "task": task,
                     "model": model,
                     "dataset": name,
@@ -587,6 +592,10 @@ def build_experiments(
                     case["dataset_metadata"]["fit_unit"] = "one joint system fit with one target budget"
                     case["dataset_metadata"]["declared_equation_count"] = len(declared_targets(name))
                     case["dataset_metadata"]["comparison_role"] = "diagnostic; excluded from independent equation fairness"
+                if task == "ode":
+                    from kd.evaluation.ode_rollout import DEFAULTS
+                    case["evaluation"]["ode_rollout"] = _deep_update(
+                        copy.deepcopy(DEFAULTS), case["evaluation"].get("ode_rollout", {}))
                 if name.startswith("cyt_"):
                     target_name = data_params.get("target", "Mut")
                     features = data_params.get("feature_columns", "default_local_flow_features")
@@ -1631,7 +1640,8 @@ def _model_stop_reason(model):
     """Prefer explicit adapter evidence; label uninstrumented native returns."""
     reason = getattr(model, "stop_reason_", None)
     if reason in STOP_REASONS:
-        return {"stop_reason": reason, "stop_reason_source": "adapter"}
+        return {"stop_reason": reason,
+                "stop_reason_source": getattr(model, "stop_reason_source_", "adapter")}
     details = getattr(model, "run_details_", None)
     if isinstance(details, dict) and details.get("generation"):
         if len(details["generation"]) < getattr(model, "generations", 0):
@@ -1640,7 +1650,9 @@ def _model_stop_reason(model):
 
 
 def _finalize_stop_reason(row):
-    if row["status"] != "ok":
+    if row.get("resource_limit") or row.get("stop_reason") == "resource_limit":
+        row.update(status="error", stop_reason="resource_limit", stop_reason_source="runner")
+    elif row["status"] != "ok":
         row["stop_reason"] = "hard_timeout" if row["status"] == "timeout" else "error"
         row["stop_reason_source"] = "runner"
     elif row.get("stop_reason") not in STOP_REASONS or row.get("stop_reason") == "error":
@@ -1721,13 +1733,14 @@ def run_regression(problem, case, *, pretrain_cache=None):
                 epoch_refresh_rate=1, do_show=False, do_prints=False, do_save=False
             ),
         )
-        expr, _ = fit_call(physo.SR, problem["X_train"].T, problem["y_train"], **options)
+        expr, logger = fit_call(physo.SR, problem["X_train"].T, problem["y_train"], **options)
         if expr is None:
             raise RuntimeError("PhySO did not return an expression")
         result = _score_regression(
             {
                 "expression": _physo_expression_text(expr),
                 "notes": "Dimensionless PhySO configuration; physical units require explicit configuration.",
+                **_model_stop_reason(logger),
             },
             problem["y_test"],
             lambda: expr(
@@ -2480,7 +2493,14 @@ def run_pde(dataset, case):
         dataset, options["test_size"]
     )
     model = None
-    if name == "weakform":
+    if name == "reference":
+        from kd.evaluation.reference import abstain
+        truth = PDE_REFERENCE_RHS.get(case["dataset"], getattr(dataset, "sym_true", None))
+        if not truth:
+            return abstain("abstained_missing_reference")
+        # The same derivative/residual and rollout code below scores discovered RHS.
+        result = {"expression": str(truth), "reference_status": "ok"}
+    elif name == "weakform":
         model = _new_model(name, params)
         fit_call(model.fit, train_dataset.usol, train_dataset.x, train_dataset.t)
         result = {
@@ -2818,6 +2838,11 @@ def _base_row(case, instance=None, target=None):
         runtime=None,
         peak_memory_mb=None,
         peak_gpu_memory_mb=None,
+        cpu_seconds=None,
+        gpu_occupied_seconds=None,
+        resource_slot=case.get("resource_policy", {}).get("slot", "unconstrained"),
+        resource_policy=case.get("resource_policy"),
+        resource_policy_hash=policy_hash(case.get("resource_policy")),
         expression="",
         ground_truth_expression=case.get("ground_truth"),
         expression_complexity=None,
@@ -2893,6 +2918,11 @@ def _base_row(case, instance=None, target=None):
             ),
             "cache_hit": None,
         }
+    if case["model"] == "reference":
+        from kd.evaluation.reference import metadata
+        row.update(metadata(case))
+        row["metric_protocol_version"] = case.get("metric_protocol_version", METRIC_PROTOCOL_VERSION)
+    row["evaluation_protocol"] = copy.deepcopy(case.get("evaluation", {}))
     return row
 
 
@@ -2924,6 +2954,9 @@ def _failure(case, exc, instance=None, target=None, ground_truth=None):
             "insufficient_support" if "insufficient_support" in message else
             "missing_asset" if isinstance(exc, FileNotFoundError) else "error")
     traceback.print_exc()
+    if case["model"] == "reference":
+        row.update(recovery_eligible=False, recovery_evaluator_status="not_applicable",
+                   reference_floor_eligible=False, reference_status="unavailable_or_evaluator_error")
     return row
 
 
@@ -2931,13 +2964,16 @@ def _case_problems(dataset, case):
     if case["task"] == "green":
         from kd.evaluation.green import problems
         return problems(dataset,case)
-    if case["model"] in {"pdefind_nd", "implicit_pde"}:
+    if case["model"] in {"pdefind_nd", "implicit_pde"} or case.get("reference_adapter") in {"pdefind_nd", "implicit_pde"}:
         from kd.evaluation.equation import problems
         return problems(dataset, case)
     return regression_problems(dataset, case) if case["task"] not in {"pde", "steady_pde"} else [None]
 
 
 def _run_problem(dataset, problem, case, pretrain_cache):
+    if case["model"] == "reference":
+        from kd.evaluation.reference import run
+        return score_call(run, dataset, problem, case)
     if case["task"] == "green":
         from kd.evaluation.green import run
         return run(dataset,problem,case)
@@ -3000,6 +3036,7 @@ def run_case(case, work_dir=None, checkpoint=None, *, selection=None, cache_root
                                 random.seed(case["seed"])
                                 np.random.seed(case["seed"])
                                 if case["model"] not in {
+                                    "reference",
                                     "pdefind_nd", "implicit_pde",
                                     "gplearn",
                                     "llmsr",
@@ -3011,18 +3048,20 @@ def run_case(case, work_dir=None, checkpoint=None, *, selection=None, cache_root
                                 }:
                                     import torch
 
+                                    if os.environ.get("KD_SLOT_THREADS"):
+                                        torch.set_num_threads(int(os.environ["KD_SLOT_THREADS"]))
                                     torch.manual_seed(case["seed"])
                                 result = _run_problem(dataset, problem, case, pretrain_cache)
                             row = _base_row(case, instance, target)
                             row["status"] = "ok"
                             row.update(result)
-                            if row.get("ground_truth_expression") and case["model"] not in {"pdefind_nd", "implicit_pde"}:
+                            if row.get("ground_truth_expression") and case["model"] not in {"reference", "pdefind_nd", "implicit_pde"}:
                                 row["recovery_eligible"] = True
                                 if case["task"] not in {"pde", "steady_pde"}:
                                     row["recovery_evaluator_status"] = (
                                         "parsed" if row.get("exact_recovery") is not None else "unparsed"
                                     )
-                            if not row["expression"] or row["expression"] == "None":
+                            if row["status"] == "ok" and (not row["expression"] or row["expression"] == "None"):
                                 raise RuntimeError(
                                     "Training completed without a discovered expression"
                                 )
@@ -3090,6 +3129,12 @@ def write_json(path, value):
 
 
 CSV_FIELDS = [
+    "benchmark_role", "ranking_eligible", "reference_protocol_version", "reference_status",
+    "reference_floor_eligible", "reference_source_status", "reference_error", "evaluation_protocol",
+    "ode_rollout_protocol_version", "system_score_seconds",
+    "equation_rollout_test_trajectories", "equation_rollout_train_trajectories",
+    "equation_rollout_initial_condition", "equation_rollout_normalization",
+    "equation_rollout_trajectory_coverage", "equation_rollout_trajectories",
     "equation_protocol_version", "equation_expression", "capability_status",
     "green_protocol_version", "forcing_metrics", "closure_protocol_version", "training_data_overlap",
     "closure_frame_metrics", "closure_layer", "closure_online_status",
@@ -3111,6 +3156,12 @@ CSV_FIELDS = [
     "score_seconds",
     "setup_seconds",
     "worker_elapsed_seconds",
+    "cpu_seconds", "gpu_occupied_seconds", "gpu_occupied_source",
+    "resource_slot", "resource_policy", "resource_policy_hash", "resource_limit",
+    "resource_monitor_source", "resource_monitor_error",
+    "thread_environment",
+    "preparation_cpu_seconds", "preparation_gpu_occupied_seconds",
+    "system_score_cpu_seconds", "system_score_gpu_occupied_seconds",
     "execution_policy",
     "target_manifest_complete",
     "name",
@@ -3228,6 +3279,12 @@ CSV_FIELDS = [
 
 
 AGGREGATE_FIELDS = [
+    "resource_policy_hash", "resource_slot", "n_resource_limit",
+    "cpu_seconds_total", "cpu_seconds_mean", "cpu_seconds_measured_rows",
+    "gpu_occupied_seconds_total", "gpu_occupied_seconds_mean", "gpu_occupied_seconds_measured_rows",
+    "worker_elapsed_seconds_total", "preparation_cpu_seconds_total",
+    "preparation_gpu_occupied_seconds_total", "system_score_cpu_seconds_total",
+    "system_score_gpu_occupied_seconds_total",
     "dataset_protocol_version",
     "scientific_task",
     "execution_protocol_version",
@@ -3292,19 +3349,29 @@ def aggregate_results(rows):
     """Produce method/task rates and metric means from result rows."""
     groups = {}
     for row in rows:
+        if row.get("model") == "reference":
+            continue
         version = row.get("metric_protocol_version") or "legacy/unknown"
         execution = row.get("execution_protocol_version") or "legacy/unknown"
         data_version = row.get("dataset_protocol_version") or "legacy/unknown"
         scientific_task = row.get("scientific_task") or "legacy/unknown"
-        groups.setdefault((version, execution, data_version, "all", "all", "all"), []).append(row)
-        groups.setdefault((version, execution, data_version, scientific_task,
-                           row["task"], row["model"]), []).append(row)
+        resource_hash = row.get("resource_policy_hash", "unconstrained")
+        groups.setdefault((version, execution, data_version, resource_hash, "all", "all", "all"), []).append(row)
+        groups.setdefault((version, execution, data_version, resource_hash,
+                           scientific_task, row["task"], row["model"]), []).append(row)
     aggregates = []
-    for (version, execution, data_version, scientific_task, task, model), group in sorted(groups.items()):
+    for (version, execution, data_version, resource_hash, scientific_task, task, model), group in sorted(groups.items()):
         statuses = [row.get("status") for row in group]
         runtimes = _numeric_values(group, "runtime")
         memories = _numeric_values(group, "peak_memory_mb")
         gpu_memories = _numeric_values(group, "peak_gpu_memory_mb")
+        cpu_seconds = _numeric_values(group, "cpu_seconds")
+        gpu_seconds = _numeric_values(group, "gpu_occupied_seconds")
+
+        def case_cost(key):
+            unique = {row.get("name"): row for row in group if row.get(key) is not None}
+            values = _numeric_values(unique.values(), key)
+            return sum(values) if values else None
         # New rows explicitly declare the denominator before execution.  For
         # old result files, a present metric is the only safe evidence that the
         # row was eligible; this preserves readability without silently
@@ -3359,6 +3426,19 @@ def aggregate_results(rows):
                 "execution_protocol_version": execution,
                 "dataset_protocol_version": data_version,
                 "scientific_task": scientific_task,
+                "resource_policy_hash": resource_hash,
+                "resource_slot": group[0].get("resource_slot", "unconstrained"),
+                "n_resource_limit": sum(row.get("stop_reason") == "resource_limit" for row in group),
+                "cpu_seconds_total": sum(cpu_seconds) if cpu_seconds else None,
+                "cpu_seconds_mean": sum(cpu_seconds) / len(cpu_seconds) if cpu_seconds else None,
+                "cpu_seconds_measured_rows": len(cpu_seconds),
+                "gpu_occupied_seconds_total": sum(gpu_seconds) if gpu_seconds else None,
+                "gpu_occupied_seconds_mean": sum(gpu_seconds) / len(gpu_seconds) if gpu_seconds else None,
+                "gpu_occupied_seconds_measured_rows": len(gpu_seconds),
+                "worker_elapsed_seconds_total": sum(_numeric_values(group, "worker_elapsed_seconds")),
+                **{key + "_total": case_cost(key) for key in (
+                    "preparation_cpu_seconds", "preparation_gpu_occupied_seconds",
+                    "system_score_cpu_seconds", "system_score_gpu_occupied_seconds")},
                 "stop_reason_counts": {
                     reason: sum(row.get("stop_reason", "unknown") == reason for row in group)
                     for reason in (*STOP_REASONS, "unknown")
@@ -3466,10 +3546,12 @@ def save_summary(output_dir, rows):
 
     report_metrics = ("exact_recovery", "test_nrmse", "pde_support_recovery",
                       "equation_rollout_nrmse", "native_rollout_nrmse")
+    method_rows = [r for r in rows if r.get("model") != "reference"]
+    write_json(output_dir / "benchmark_reference.json", [r for r in rows if r.get("model") == "reference"])
     family_rows = [entry for metric in report_metrics
-                   for entry in seed_family_summary(rows, metric)]
+                   for entry in seed_family_summary(method_rows, metric)]
     paired_rows = []
-    models = sorted({row.get("model") for row in rows if row.get("model")})
+    models = sorted({row.get("model") for row in rows if row.get("model") and row.get("model") != "reference"})
     for metric in report_metrics:
         for model_a, model_b in combinations(models, 2):
             try:
@@ -3500,7 +3582,7 @@ def save_summary(output_dir, rows):
 
 def _declared_targets(case):
     """Target-level failure accounting from predeclared truth, never fitted outputs."""
-    if case["model"] in {"pdefind_nd", "implicit_pde"}:
+    if case["model"] in {"pdefind_nd", "implicit_pde"} or case.get("reference_adapter") in {"pdefind_nd", "implicit_pde"}:
         from kd.dataset._advanced import declared_targets
         return [(target.key, None) for target in declared_targets(case["dataset"])]
     if case["task"] == "green":
@@ -3662,11 +3744,38 @@ def _target_result(directory, case, spec):
     if row is not None:
         return row
     for attempt in sorted((target_dir / "attempts").glob("[0-9]*")):
+        if not (attempt / "result.json").exists() and (attempt / "supervision.json").exists():
+            outcome = json.loads((attempt / "supervision.json").read_text(encoding="utf-8"))
+            policy = json.loads((directory / "execution.json").read_text(encoding="utf-8"))
+            _commit_target_attempt(case, spec, attempt, policy, outcome)
         row = _read_terminal(attempt / "result.json", case, spec)
         if row is not None:
             write_json(canonical, row)
             return row
     return None
+
+
+def _commit_target_attempt(case, spec, attempt, policy, outcome):
+    """Promote a worker candidate once, after parent resource supervision finishes."""
+    existing = _read_terminal(attempt / "result.json", case, spec)
+    if existing is not None:
+        return existing
+    row = _read_terminal(attempt / "candidate.json", case, spec)
+    if row is None or outcome.get("timeout_phase") or outcome.get("resource_limit"):
+        row = _worker_failure(case, spec, outcome, attempt / "run.log")
+    else:
+        # The root's final self measurement covers the last fraction of a poll;
+        # descendants still come from the parent process-tree sampler.
+        sampled_root = outcome.get("worker_cpu_seconds", 0.0)
+        own_cpu = row.pop("_self_cpu_seconds", None)
+        cpu = outcome.get("cpu_seconds")
+        row.update(outcome)
+        if own_cpu is not None and cpu is not None:
+            row["cpu_seconds"] = cpu + max(0.0, own_cpu - sampled_root)
+    row.update(target_id=spec["target_id"], attempt=int(attempt.name), execution_policy=policy)
+    _finalize_stop_reason(row)
+    write_json(attempt / "result.json", row)
+    return row
 
 
 def _worker_failure(case, spec, outcome, log_path):
@@ -3675,6 +3784,7 @@ def _worker_failure(case, spec, outcome, log_path):
     row.update(
         status="timeout" if timeout_phase else "error",
         error=(f"Hard timeout in {timeout_phase}" if timeout_phase else
+               "Process-tree RSS exceeded slot memory limit" if outcome.get("resource_limit") else
                f"Worker exited without a terminal result (code {outcome.get('returncode')})"),
         ground_truth_expression=spec.get("ground_truth"),
         recovery_eligible=bool(spec.get("ground_truth")), recovery_evaluator_status="not_run",
@@ -3686,6 +3796,9 @@ def _worker_failure(case, spec, outcome, log_path):
             row[key] = spec[key]
     if "data_metadata" in spec:
         row["details"] = spec["data_metadata"]
+    if case["model"] == "reference":
+        row.update(recovery_eligible=False, recovery_evaluator_status="not_applicable",
+                   reference_floor_eligible=False, reference_status="unavailable_or_evaluator_error")
     return _finalize_stop_reason(row)
 
 
@@ -3697,8 +3810,9 @@ def _launch_worker(case_path, attempt, policy, spec=None):
     else:
         write_json(attempt / "target.json", spec)
         command.extend(["--_target-file", str(attempt / "target.json")])
+    case = json.loads(Path(case_path).read_text(encoding="utf-8"))
     return supervise(command, cwd=ROOT, log_path=attempt / "run.log",
-                     phase_path=attempt / "phase.json", policy=policy)
+                     phase_path=attempt / "phase.json", policy=policy, device=case["device"], model=case["model"])
 
 
 def _ensure_target_plan(directory, case, policy):
@@ -3712,9 +3826,20 @@ def _ensure_target_plan(directory, case, policy):
         specs = json.loads(path.read_text(encoding="utf-8"))
         write_json(plan_path, specs)
         return specs
+    for path in sorted((directory / "preparation").glob("*/supervision.json")):
+        outcome = json.loads(path.read_text(encoding="utf-8"))
+        candidate = path.parent / "target_candidate.json"
+        if candidate.exists() and not outcome.get("timeout_phase") and not outcome.get("resource_limit"):
+            specs = json.loads(candidate.read_text(encoding="utf-8"))
+            write_json(path.parent / "targets.json", specs)
+            write_json(plan_path, specs)
+            return specs
     attempt = _new_attempt(directory / "preparation")
     outcome = _launch_worker(directory / "case.json", attempt, policy)
-    if (attempt / "targets.json").exists():
+    candidate = attempt / "target_candidate.json"
+    if candidate.exists() and not outcome.get("timeout_phase") and not outcome.get("resource_limit"):
+        write_json(attempt / "targets.json", json.loads(candidate.read_text(encoding="utf-8")))
+    if (attempt / "targets.json").exists() and not outcome.get("timeout_phase") and not outcome.get("resource_limit"):
         specs = json.loads((attempt / "targets.json").read_text(encoding="utf-8"))
     else:
         specs = _case_failure_targets(case, RuntimeError("Target preparation did not complete"))
@@ -3722,15 +3847,21 @@ def _ensure_target_plan(directory, case, policy):
             complete = spec["preparation_row"].get("target_manifest_complete", False)
             spec["preparation_row"] = _worker_failure(case, spec, outcome, attempt / "run.log")
             spec["preparation_row"]["target_manifest_complete"] = complete
+            # Preparation is shared by the case, not one training worker per
+            # declared target. Its cost is attached once via preparation_*.
+            spec["preparation_row"].update(cpu_seconds=None, gpu_occupied_seconds=None,
+                                           worker_elapsed_seconds=None)
     write_json(plan_path, specs)
     return specs
 
 
 def execute_case(case, output_dir, timeout=None, resume=False, *, timeout_grace=5.0,
-                 setup_timeout=300.0, score_timeout=300.0):
+                 setup_timeout=300.0, score_timeout=300.0, resource_policy=None, soft_deadline=True):
     """Run isolated targets; terminal first results are immutable, including failures."""
     policy = execution_policy(timeout, timeout_grace=timeout_grace,
-                              setup_timeout=setup_timeout, score_timeout=score_timeout)
+                              setup_timeout=setup_timeout, score_timeout=score_timeout,
+                              resource_policy=resource_policy or case.get("resource_policy"),
+                              soft_deadline=soft_deadline)
     if case.get("execution_protocol_version") != EXECUTION_PROTOCOL_VERSION:
         raise ValueError("Legacy case execution protocol; generate a new manifest/output directory")
     from kd.dataset._metadata import DATASET_PROTOCOL_VERSION
@@ -3762,19 +3893,81 @@ def execute_case(case, output_dir, timeout=None, resume=False, *, timeout_grace=
                     row = _finalize_stop_reason(dict(spec["preparation_row"]))
                 else:
                     outcome = _launch_worker(request_path, attempt, policy, spec)
-                    row = _read_terminal(attempt / "result.json", case, spec)
-                    if row is None:
-                        row = _worker_failure(case, spec, outcome, attempt / "run.log")
+                    row = _commit_target_attempt(case, spec, attempt, policy, outcome)
                 row.update(target_id=spec["target_id"], attempt=int(attempt.name),
                            execution_policy=policy)
+                if "preparation_row" in spec:
+                    resources = policy.get("resource_policy")
+                    row.update(resource_policy=resources, resource_policy_hash=policy_hash(resources),
+                               resource_slot=resources["slot"] if resources else "unconstrained")
                 # Worker commits are already complete; do not rewrite their bytes.
                 if not (attempt / "result.json").exists():
                     write_json(attempt / "result.json", row)
                 write_json(target_dir / "result.json", row)
             rows.append(row)
             write_json(directory / "partial.json", rows)
+        preparations = sorted((directory / "preparation").glob("*/supervision.json"))
+        if preparations:
+            preparation = json.loads(preparations[-1].read_text(encoding="utf-8"))
+            rows = [{**r, "preparation_cpu_seconds": preparation.get("cpu_seconds"),
+                     "preparation_gpu_occupied_seconds": preparation.get("gpu_occupied_seconds")} for r in rows]
+        if case["task"] == "ode":
+            rows = _score_ode_outputs(directory, case, rows, policy)
         write_json(directory / "result.json", rows)
         return rows
+
+
+def _score_ode_outputs(directory, case, rows, policy):
+    """Cache scoring separately; never rewrite a target's first terminal result."""
+    cache = directory / "scoring" / "ode_rollout"
+    cache.mkdir(parents=True, exist_ok=True)
+    result_path = cache / "result.json"
+    attempts = cache / "attempts"
+    for attempt in sorted(attempts.glob("[0-9]*")):
+        reap_orphan(attempt)
+        if not (attempt / "result.json").exists() and (attempt / "supervision.json").exists():
+            outcome = json.loads((attempt / "supervision.json").read_text(encoding="utf8"))
+            _commit_system_score(attempt, outcome)
+        if not result_path.exists() and (attempt / "result.json").exists():
+            write_json(result_path, json.loads((attempt / "result.json").read_text(encoding="utf8")))
+    if not result_path.exists():
+        attempt = _new_attempt(attempts)
+        outcome = supervise([sys.executable, "-m", "kd.evaluation.ode_worker", str(directory), str(attempt)],
+                            cwd=ROOT, log_path=attempt / "run.log", phase_path=attempt / "phase.json", policy=policy,
+                            device=case["device"])
+        data = _commit_system_score(attempt, outcome)
+        write_json(result_path, data)
+    data = json.loads(result_path.read_text(encoding="utf8"))
+    result = []
+    for row in rows:
+        metric = data["metrics"].get(row["instance"], {}).get(row["target"])
+        if metric is None:
+            metric = {"ode_rollout_protocol_version": "ode-rollout-v1",
+                      "equation_rollout_status": data.get("failure_status", "abstained_incomplete_system"),
+                      "equation_rollout_nrmse": None}
+        result.append({**row, **metric, "system_score_seconds": data["times"].get("score_seconds"),
+                       "system_score_cpu_seconds": data["times"].get("cpu_seconds"),
+                       "system_score_gpu_occupied_seconds": data["times"].get("gpu_occupied_seconds")})
+    return result
+
+
+def _commit_system_score(attempt, outcome):
+    path = attempt / "result.json"
+    if path.exists():
+        return json.loads(path.read_text(encoding="utf8"))
+    candidate = attempt / "candidate.json"
+    if candidate.exists() and not outcome.get("timeout_phase") and not outcome.get("resource_limit"):
+        data = json.loads(candidate.read_text(encoding="utf8"))
+        own_cpu = data["times"].pop("_self_cpu_seconds", None)
+        data["times"].update(outcome)
+        if own_cpu is not None and outcome.get("cpu_seconds") is not None:
+            data["times"]["cpu_seconds"] += max(0.0, own_cpu - outcome.get("worker_cpu_seconds", 0))
+    else:
+        data = {"metrics": {}, "times": outcome, "failure_status":
+                "resource_limit" if outcome.get("resource_limit") else
+                "score_timeout" if outcome.get("timeout_phase") else "evaluator_error"}
+    write_json(path, data)
+    return data
 
 
 def save_manifest(output, manifest):
@@ -3782,7 +3975,7 @@ def save_manifest(output, manifest):
     path = Path(output) / "benchmark_manifest.json"
     if path.exists():
         previous = json.loads(path.read_text(encoding="utf-8"))
-        for key in ("execution_protocol_version", "execution_policy", "cases"):
+        for key in ("execution_protocol_version", "execution_policy", "resource_slots", "cases"):
             if previous.get(key) != manifest.get(key):
                 raise ValueError(f"Existing manifest differs at {key}; use a new output directory")
         return
@@ -3807,9 +4000,13 @@ def main(argv=None):
         "--config", type=Path, help=f"Total JSON config (default: {DEFAULT_CONFIG_FILE})"
     )
     parser.add_argument("--output-dir", type=Path)
+    parser.add_argument("--include-reference", action="store_true",
+                        help="Append scoring-only reference controls; excluded from discovery rankings")
     parser.add_argument(
         "--timeout", type=float, help="Fit seconds per target, excluding setup/scoring (default: unlimited)"
     )
+    parser.add_argument("--soft-deadline", action=argparse.BooleanOptionalAction, default=None,
+                        help="Return the best completed candidate at T (default enabled)")
     parser.add_argument("--timeout-grace", type=float, help="Grace before hard fit timeout (default: 5s)")
     parser.add_argument("--setup-timeout", type=float, help="Preparation/startup limit (default: 300s)")
     parser.add_argument("--score-timeout", type=float, help="Post-fit scoring limit (default: 300s)")
@@ -3864,12 +4061,12 @@ def main(argv=None):
             parser.error("Internal worker requires --_attempt-dir")
         policy = json.loads((directory / "execution.json").read_text(encoding="utf-8"))
         with PhaseClock(attempt / "phase.json",
-                        started=float(os.environ["KD_BENCHMARK_STARTED"])) as clock:
+                        started=float(os.environ["KD_BENCHMARK_STARTED"]), policy=policy) as clock:
             if args._prepare_targets:
                 specs = _prepare_targets(case)
                 if clock.times()["setup_seconds"] > policy["setup_timeout"]:
                     raise TimeoutError("Target preparation exceeded setup_timeout")
-                write_json(attempt / "targets.json", specs)
+                write_json(attempt / "target_candidate.json", specs)
                 return 0
             if args._target_file is None:
                 parser.error("Internal worker requires --_target-file")
@@ -3890,7 +4087,13 @@ def main(argv=None):
                                error=f"Hard timeout in {phase}")
                     break
             _finalize_stop_reason(row)
-            write_json(attempt / "result.json", row)
+            try:
+                import psutil
+                cpu = psutil.Process().cpu_times()
+                row["_self_cpu_seconds"] = cpu.user + cpu.system
+            except ImportError:
+                pass
+            write_json(attempt / "candidate.json", row)
         return 0
     try:
         catalog, excluded = dataset_catalog()
@@ -3912,7 +4115,7 @@ def main(argv=None):
         timing = {key: getattr(args, key) if getattr(args, key) is not None else
                   settings.get(key, default)
                   for key, default in (("timeout_grace", 5.0), ("setup_timeout", 300.0),
-                                       ("score_timeout", 300.0))}
+                                       ("score_timeout", 300.0), ("soft_deadline", True))}
         policy = execution_policy(timeout, **timing)
         resume_enabled = args.resume if args.resume is not None else settings["resume"]
         if timeout is not None and timeout <= 0:
@@ -3949,6 +4152,11 @@ def main(argv=None):
         )
         if not cases:
             raise ValueError("Selection contains no compatible task/model/dataset combinations")
+        if args.include_reference:
+            if args.check_compatibility or args.check_devices:
+                parser.error("--include-reference is for evaluation runs or dry-run manifests")
+            from kd.evaluation.reference import reference_cases
+            cases.extend(reference_cases(cases))
         assigned = {case["model"]: case["device"] for case in cases}
         if args.check_devices:
             report = {
@@ -3984,6 +4192,7 @@ def main(argv=None):
         "timeout": timeout,
         "resume": resume_enabled,
         "search_space_policy_override": args.search_space_policy,
+        "include_reference": args.include_reference,
         "python": sys.executable,
         "devices": assigned,
         "datasets": catalog,

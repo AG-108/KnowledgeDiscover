@@ -28,7 +28,7 @@ import signal
 import time
 import warnings
 from collections import Counter
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from functools import partial
 from multiprocessing.connection import wait
@@ -37,6 +37,62 @@ import numpy as np
 import requests
 from scipy.optimize import minimize
 from scipy.special import softmax
+
+from kd.benchmark_deadline import FitDeadline, SoftDeadline, current_deadline
+
+
+def _post_request(endpoint, payload, headers, request_timeout, retries, deadline=None):
+    for attempt in range(retries + 1):
+        if deadline is not None:
+            deadline.check()
+        timeout = min(request_timeout, deadline.remaining()) if deadline else request_timeout
+        try:
+            response = requests.post(endpoint, json=payload, headers=headers, timeout=max(0.001, timeout))
+            response.raise_for_status()
+            return response.json(), attempt
+        except (requests.RequestException, ValueError) as exc:
+            if deadline is not None:
+                deadline.check()
+            status = getattr(getattr(exc, "response", None), "status_code", None)
+            permanent = status is not None and 400 <= status < 500 and status != 429
+            if permanent or attempt == retries:
+                raise RuntimeError(
+                    f"LLM-SR request to {endpoint!r} failed after {attempt + 1} attempt(s): {exc}"
+                ) from exc
+            pause = min(2.0**attempt, 30.0)
+            time.sleep(min(pause, deadline.remaining()) if deadline else pause)
+
+
+def _request_worker(sender, endpoint, payloads, headers, timeout, retries, expires):
+    """Confine blocking HTTP threads to one disposable process."""
+    deadline = FitDeadline(0)
+    deadline.expires = expires
+    try:
+        with ThreadPoolExecutor(max_workers=len(payloads)) as executor:
+            futures = {executor.submit(_post_request, endpoint, payload, headers,
+                                       timeout, retries, deadline): index
+                       for index, payload in payloads}
+            for future in as_completed(futures):
+                index = futures[future]
+                try:
+                    data, attempts = future.result()
+                    sender.send((index, data, attempts, None))
+                except SoftDeadline:
+                    sender.send((index, None, 0, "time_limit"))
+                except Exception as exc:
+                    sender.send((index, None, 0, str(exc)))
+    finally:
+        sender.close()
+
+
+def _stop_process(process):
+    if process.is_alive():
+        process.terminate()
+    process.join(0.5)
+    if process.is_alive():
+        process.kill()
+        process.join(0.5)
+
 
 DEFAULT_BACKBONE = "meta-llama/Llama-3.1-8B-Instruct"
 
@@ -666,58 +722,108 @@ class KD_LLMSR:
         return expression, compile(tree, "<llmsr-expression>", "eval"), parameter_count
 
     def _evaluate_parallel(self, jobs, X, y):
-        """Fit programs in worker processes, ``num_evaluators`` at a time.
-
-        Each job is ``(expression, parameter_count)``.  Returns one
-        ``(status, parameters, mse_or_message)`` tuple per job, where status is
-        ``ok``, ``error`` or ``timeout``.
-        """
+        """Keep each evaluator's timeout within the shared fit deadline."""
         context = multiprocessing.get_context()
         results = [None] * len(jobs)
         pending = list(enumerate(jobs))
         running = {}
-        while pending or running:
-            while pending and len(running) < self.num_evaluators:
-                index, (expression, count) = pending.pop(0)
-                receiver, sender = context.Pipe(duplex=False)
-                process = context.Process(
-                    target=_evaluation_worker,
-                    args=(
-                        sender,
-                        expression,
-                        count,
-                        X,
-                        y,
-                        self.variable_names_,
-                        self.evaluation_timeout,
-                    ),
-                    daemon=True,
-                )
-                process.start()
-                sender.close()
-                running[receiver] = (index, process, time.monotonic() + self.evaluation_timeout)
-            next_deadline = min(deadline for _, _, deadline in running.values())
-            for receiver in wait(list(running), timeout=max(0.0, next_deadline - time.monotonic())):
-                index, process, _ = running.pop(receiver)
-                try:
-                    status, parameters, value = receiver.recv()
-                    results[index] = (status, parameters, value)
-                except EOFError:
-                    results[index] = ("error", None, "Evaluator exited without a result")
+        deadline = getattr(self, "_fit_deadline", None)
+        try:
+            while pending or running:
+                if deadline is not None and deadline.expired():
+                    deadline.stopped = True
+                    break
+                while pending and len(running) < self.num_evaluators:
+                    if deadline is not None and deadline.expired():
+                        break
+                    index, (expression, count) = pending.pop(0)
+                    receiver, sender = context.Pipe(duplex=False)
+                    process = context.Process(
+                        target=_evaluation_worker,
+                        args=(sender, expression, count, X, y, self.variable_names_,
+                              self.evaluation_timeout),
+                        daemon=True,
+                    )
+                    process.start()
+                    sender.close()
+                    running[receiver] = (index, process, time.monotonic() + self.evaluation_timeout)
+                if not running:
+                    continue
+                delay = max(0.0, min(end for _, _, end in running.values()) - time.monotonic())
+                if deadline is not None:
+                    delay = min(delay, deadline.remaining())
+                for receiver in wait(list(running), timeout=delay):
+                    index, process, _ = running.pop(receiver)
+                    try:
+                        results[index] = receiver.recv()
+                    except EOFError:
+                        results[index] = ("error", None, "Evaluator exited without a result")
+                    finally:
+                        receiver.close()
+                        _stop_process(process)
+                now = time.monotonic()
+                for receiver, (index, process, end) in list(running.items()):
+                    if now >= end:
+                        running.pop(receiver)
+                        _stop_process(process)
+                        receiver.close()
+                        results[index] = ("timeout", None, "Evaluation timed out")
+        finally:
+            for receiver, (_, process, _) in running.items():
+                _stop_process(process)
                 receiver.close()
-                process.join(5)
-                if process.is_alive():
-                    process.terminate()
-                    process.join()
-            now = time.monotonic()
-            for receiver, (index, process, deadline) in list(running.items()):
-                if now >= deadline:
-                    running.pop(receiver)
-                    process.terminate()
-                    process.join()
-                    receiver.close()
-                    results[index] = ("timeout", None, "Evaluation timed out")
-        return results
+        return [result if result is not None else ("timeout", None, "Fit time limit reached")
+                for result in results]
+
+    def _request_batch(self, prompt, indices):
+        indices = list(indices)
+        deadline = self._fit_deadline
+        if deadline is None:
+            with ThreadPoolExecutor(max_workers=len(indices)) as executor:
+                return list(zip(indices, executor.map(partial(self._request_completion, prompt), indices)))
+        deadline.check()
+        headers = {"Content-Type": "application/json"}
+        if self.api_key_env:
+            key = os.environ.get(self.api_key_env)
+            if key:
+                headers["Authorization"] = f"Bearer {key}"
+        context = multiprocessing.get_context()
+        receiver, sender = context.Pipe(duplex=False)
+        process = context.Process(
+            target=_request_worker,
+            args=(sender, self._endpoint_,
+                  [(index, self._request_payload(prompt, index)) for index in indices],
+                  headers, self.request_timeout, self.max_request_retries, deadline.expires),
+            daemon=True,
+        )
+        responses = {}
+        process.start()
+        sender.close()
+        try:
+            while len(responses) < len(indices):
+                if deadline.expired():
+                    deadline.stopped = True
+                    break
+                if not receiver.poll(deadline.remaining()):
+                    deadline.stopped = True
+                    break
+                try:
+                    index, data, retries, error = receiver.recv()
+                except EOFError:
+                    if deadline.expired():
+                        deadline.stopped = True
+                        break
+                    raise RuntimeError("LLM-SR request worker exited without a result") from None
+                if error == "time_limit":
+                    deadline.stopped = True
+                    break
+                if error:
+                    raise RuntimeError(error)
+                responses[index] = (self._completion_text(data), data, retries)
+        finally:
+            _stop_process(process)
+            receiver.close()
+        return [(index, responses[index]) for index in indices if index in responses]
 
     def _evaluate_samples(self, samples, X, y, stats):
         """Parse and fit ``(body, call_index)`` samples; return accepted programs."""
@@ -779,6 +885,7 @@ class KD_LLMSR:
 
     def fit(self, X, y, variable_names=None, target_name=None):
         """Run LLM-guided structure search and fit free constants on ``X, y``."""
+        self._fit_deadline = current_deadline()
         self._validate_options()
         # Fail before numerical work if the service is unconfigured.
         self._endpoint_, self._model_ = self._connection()
@@ -817,36 +924,42 @@ class KD_LLMSR:
         calls = 0
         served_models = set()
         stopped_on_zero_loss = False
-        with ThreadPoolExecutor(max_workers=self.samples_per_prompt) as executor:
-            while calls < self.max_llm_calls:
-                if self._best.mse == 0:
-                    stopped_on_zero_loss = True  # Upstream stops on a perfect score.
-                    break
-                island_id = int(self._rng.integers(self.num_islands))
-                examples = self._islands[island_id].examples(
-                    self._rng,
-                    self.functions_per_prompt,
-                    self.cluster_sampling_temperature_init,
-                    self.cluster_sampling_temperature_period,
-                )
-                prompt = self._build_prompt(examples)
-                count = min(self.samples_per_prompt, self.max_llm_calls - calls)
-                indices = range(calls, calls + count)
-                responses = list(executor.map(partial(self._request_completion, prompt), indices))
-                calls += count
-                stats["prompts"] += 1
-                samples = []
-                for call_index, (text, data, retries) in zip(indices, responses):
-                    stats["request_retries"] += retries
-                    usage = data.get("usage") or {}
-                    stats["prompt_tokens"] += int(usage.get("prompt_tokens") or 0)
-                    stats["completion_tokens"] += int(usage.get("completion_tokens") or 0)
-                    if data.get("model"):
-                        served_models.add(str(data["model"]))
-                    samples.append((_trim_function_body(_extract_body(text)), call_index))
-                for program in self._evaluate_samples(samples, X, y, stats):
-                    self._register(program, island_id, stats)
+        while calls < self.max_llm_calls:
+            if self._fit_deadline is not None and self._fit_deadline.expired():
+                self._fit_deadline.stopped = True
+                break
+            if self._best.mse == 0:
+                stopped_on_zero_loss = True
+                break
+            island_id = int(self._rng.integers(self.num_islands))
+            examples = self._islands[island_id].examples(
+                self._rng, self.functions_per_prompt,
+                self.cluster_sampling_temperature_init, self.cluster_sampling_temperature_period,
+            )
+            prompt = self._build_prompt(examples)
+            count = min(self.samples_per_prompt, self.max_llm_calls - calls)
+            indices = range(calls, calls + count)
+            calls += count
+            stats["prompts"] += 1
+            try:
+                responses = self._request_batch(prompt, indices)
+            except SoftDeadline:
+                break
+            samples = []
+            stats["llm_calls_completed"] += len(responses)
+            for call_index, (text, data, retries) in responses:
+                stats["request_retries"] += retries
+                usage = data.get("usage") or {}
+                stats["prompt_tokens"] += int(usage.get("prompt_tokens") or 0)
+                stats["completion_tokens"] += int(usage.get("completion_tokens") or 0)
+                if data.get("model"):
+                    served_models.add(str(data["model"]))
+                samples.append((_trim_function_body(_extract_body(text)), call_index))
+            for program in self._evaluate_samples(samples, X, y, stats):
+                self._register(program, island_id, stats)
 
+        if self._fit_deadline is not None and self._fit_deadline.expired():
+            self._fit_deadline.stopped = True
         best = self._best
         self._expression_code_ = self._compile_expression(best.expression, self.variable_names_)[1]
         self.parameters_ = best.parameters.copy()
@@ -855,12 +968,16 @@ class KD_LLMSR:
             f"def equation({self._signature_}) -> np.ndarray:\n{best.body}\n"
         )
         self.training_mse_ = best.mse
-        self.stop_reason_ = "early_stop" if stopped_on_zero_loss else "budget_exhausted"
+        self.stop_reason_ = ("time_limit" if self._fit_deadline is not None and
+                             self._fit_deadline.stopped else
+                             "early_stop" if stopped_on_zero_loss else "budget_exhausted")
+        self.stop_reason_source_ = "fit_deadline" if self.stop_reason_ == "time_limit" else "adapter"
         self.search_stats_ = {
             "method": "LLM-SR (LLM-SRBench searcher protocol)",
             "backbone": self._model_,
             "served_models": sorted(served_models),
             "llm_calls": calls,
+            "llm_calls_completed": stats["llm_calls_completed"],
             "llm_call_budget": self.max_llm_calls,
             "prompts": stats["prompts"],
             "request_retries": stats["request_retries"],

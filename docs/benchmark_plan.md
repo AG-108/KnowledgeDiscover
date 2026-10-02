@@ -1,6 +1,6 @@
 # Benchmark 当前计划
 
-更新：2026-09-30。代码与结果文件优先；本地运行交接见根目录 `STATUS.md`。
+更新：2026-10-02。代码与结果文件优先；本地运行交接见根目录 `STATUS.md`。
 规范：[运行](benchmark.md) · [指标](benchmark_metrics.md) · [方法](methods.md) ·
 [数据](data.md) · [验收](validation.md) · [来源问题](deferred_source_issues.md) · [服务器](server_setup.md)。
 
@@ -9,16 +9,24 @@
 A1–A6 可验证工程交付与验收完成，完整回归 496 passed，0 failed，0 skipped。
 C1/C2/C4 已完成：每 instance/target 独立 worker、fit/setup/score 分阶段限时、
 首次终态与中断恢复、失败/超时不自动重跑、停止原因及来源记录。
-软截止与资源槽尚待 C3/C5–C7；不能把当前实现称为已满足完整公平资源协议。
+E1–E3 已实现并通过针对性验收：ODE 系统轨迹评分、独立参考行、冻结结果统计与作图。
+C5/C6 已实现并通过本地进程回归：两槽绑核、CUDA/线程隔离、RSS 超限终止、
+CPU/GPU 成本记录与汇总；完整代码回归 531 passed、0 failed、0 skipped。
+C7 full 方法并行参数已与 D2 一致，17 项专项与 548 项完整代码回归通过，0 failed、0 skipped；
+证据 `results/validation/c7_targeted.xml` 与 `results/validation/c7.xml`。配置与槽绑定均记录有效并行数，
+并限制并行任务内部的数值线程。C3 七类方法软截止已实现，22 项专项与
+570 项最终完整代码回归通过（0 failed、0 skipped），证据 `results/validation/c3.xml`。
+Linux/真实 CUDA/vLLM 部署 smoke 待验收，
+不能把当前实现称为已满足完整公平资源协议。本轮未运行全量实验。
 
-数据 domain-v4、执行 target-v1；指标 2.1/2.2/2.3 分区聚合。
+数据 domain-v4、执行 target-v2；指标 2.1/2.2/2.3 分区聚合。
 23 方法键、111 注册名、380 runner 名（rubber_test 为配对集，独立名称 379）。
 默认单 seed full 为 3024 cases / 4470 fits；49 新名称显式 opt-in 增加
 280 cases / 289 fits，全能力容量 3304 cases / 4759 fits。均包含不适用组合。
 注册、加载、短训练通过不等于来源或方程恢复已认证。
 
 历史全量、服务器补跑、tuning 与 smoke 来自不同代码、预算和协议，只作诊断与测速，不能拼成主表。
-正式主实验尚未启动。ODE 目前主要评估导数；PDE rollout 仅已验证的一维均匀周期标量场。
+正式主实验尚未启动。ODE 同时报告导数和通过参考校验的系统轨迹评分；PDE rollout 仅已验证的一维均匀周期标量场。
 PIC 排序校准未通过，物理可信度缺专家验证，保留为辅助原型。
 LLM-SR 客户端已实现，但 backbone 未下载、真实生成未验证；vLLM 环境独立建立。
 
@@ -80,20 +88,20 @@ LLM-SR 客户端已实现，但 backbone 未下载、真实生成未验证；vLL
 | --- | --- | --- | --- |
 | C1（完成） | 每个 instance/target 独立子进程 + 按 target 的 fit 硬超时；setup/score 单独限时；case 结果合并 | `run_benchmark.py`、`kd/benchmark_execution.py` | 真实双 RHS 检查：首个超时，第二个仍成功；终止进程树；保留全部行 |
 | C2（完成） | 已落盘终态（ok / error / timeout / skipped）视为完成，只补无结果中断项；保留首次结果及全部尝试 | runner、并行脚本 | 中断前后/父进程漏合并恢复通过；失败和超时不自动重试；配置/预算不符拒绝复用 |
-| C3 | 软截止时间 `time_limit` 传入可随时返回的方法 | LLM-SR（本仓库代码，最简单）、PySR `timeout_in_seconds`、Operon `max_time`、gplearn 逐代 `warm_start`、DSO/DSCV/PhySO 训练循环钩子 | 到时返回当前最优并记 `stop_reason=time_limit` |
-| C4（完成） | 六类 `stop_reason`、来源字段、适配器信号传递、失败/超时归类 | adapter + 结果行 + 聚合 | 每行有值；聚合数量/比例/来源；无信号的原生返回标为 native_return |
-| C5 | 资源槽执行器：`taskset` 绑核、`CUDA_VISIBLE_DEVICES`、线程环境变量按槽设置；内存超限按 RSS 采样终止，记 `resource_limit` | 新 `scripts/run_slots.py`（或扩展 `run_parallel_benchmark.py`；其默认 6 个 CPU worker 与 D2 冲突）、`hpc/activate_kd_server.sh`（当前 `OMP_NUM_THREADS=1`） | 两槽并发，资源记录在 manifest 与结果行 |
-| C6 | CPU 秒、GPU 占用秒记录 | `run_benchmark.py` 资源监视器 | 字段进入 summary 与 aggregate |
-| C7 | 方法并行度参数按槽设置（PySR、Operon、gplearn、torch、LLM-SR evaluators） | `configs/benchmark/baselines/*.json` | full profile 与 D2 一致 |
+| C3（完成） | 统一累计 fit 软截止；可取消 LLM 请求与评估、原生时间参数、代际/训练/批次钩子；最后步骤观察截止 | `kd/benchmark_deadline.py`、runner、LLM-SR、DSO/DSCV；PhySO 公开 logger | 当前最优与 time_limit、无候选失败、进程清理、随机演化一致性、原生有界检查及终态续跑通过；target-v2 隔离旧协议 |
+| C4（完成） | 停止原因、来源字段、适配器信号传递、失败/超时归类（C5 增加第七类 resource_limit） | adapter + 结果行 + 聚合 | 每行有值；聚合数量/比例/来源；无信号的原生返回标为 native_return |
+| C5（完成） | 两槽绑核、CUDA/线程隔离；28 GB RSS 采样超限终止进程树，记 resource_limit；本机 vLLM 服务树纳入槽；资源策略与首次结果冻结 | `scripts/run_slots.py`、`kd/benchmark_resources.py`、`kd/benchmark_execution.py`、`hpc/activate_kd_server.sh`；旧并行入口 CPU worker 默认改为 1 | 本地两槽并发/不重叠核、环境、RSS 子进程树终止、服务计费与续跑通过；Linux/CUDA/vLLM 部署 smoke 待验证 |
+| C6（完成） | 采样进程树 CPU 秒、独占 GPU 槽 wall 秒；准备/耦合评分共享成本单列并按 case 去重 | 父进程资源监视器、`run_benchmark.py` 汇总、冻结与配对报告 | summary/aggregate JSON/CSV 有字段与测量覆盖；失败和超限保留成本，不混资源配置 |
+| C7（完成） | full PySR multiprocessing/procs=4、Operon n_threads=4、gplearn n_jobs=4、LLM-SR num_evaluators=4；torch 4 线程；并行任务数值线程为 1；绑定后参数/设备写入新身份 | `configs/benchmark/baselines/*.json`、`kd/benchmark_resources.py`、`scripts/run_slots.py` | SR/ODE full 配置与 D2 一致；真实 gplearn/PySR 四 worker 绑核、Operon 四线程与 torch 线程检查通过；预算和原 manifest 保留 |
 | C8（可选） | anytime 轨迹：记录（时间、训练误差、表达式），在 60 s / 300 s / T 处回放测试指标 | 支持 C3 的 adapter | 一次运行得到预算敏感性曲线 |
 
 评估补充：
 
 | # | 改动 | 验收 |
 | --- | --- | --- |
-| E1 | ODE 轨迹 rollout：发现的 RHS 组成系统后用 `solve_ivp` 在测试轨迹初值上积分，报告 NRMSE、发散/失败状态 | 真值 RHS 通过参考检查；失败明确记状态 |
-| E2 | 真值方程对照行：真实方程走同一评估流水线，作为每个数据集的误差下限 | 单独的 `model=reference` 行，不进方法排名 |
-| E3 | 统计与作图脚本：从冻结结果目录生成主表、Pareto 图、status 堆叠图、bootstrap CI | 输入只有结果目录 + manifest 哈希 |
+| E1（完成） | `ode_rollout.py`：完整 RHS 系统在整条留出轨迹初值上积分；独立评分进程与缓存，不覆盖 target 首次终态 | 解析解及 Robertson/Radau 参考校验；缺 RHS、发散、无效 RHS、评分超时明确记状态 |
+| E2（完成） | `--include-reference`：真实方程走同一评分流水线；缺真值显式 abstain，未认证来源仅作诊断 | 单独的 `model=reference` 行；聚合、配对和主表排除参考行；不拟合模型 |
+| E3（完成） | `scripts/report_frozen_benchmark.py`：冻结目录生成主表、Pareto、status 图及 bootstrap CI | 仅目录与 manifest SHA256；校验目标计划和预算；缺失保留分母；整 seed bootstrap，单 seed 不给 CI |
 
 原生返回无停止信号时暂记 `budget_exhausted`，来源为 `native_return`；不证明耗尽内部预算。
 Windows 原子替换竞争有回归保护；服务器/Linux 进程组仍需部署后 smoke。
@@ -124,13 +132,17 @@ Windows 原子替换竞争有回归保护；服务器/Linux 进程组仍需部�
 ## 5. 协议冻结清单（主实验前必须完成）
 
 - [x] C1、C2、C4 实现并通过针对性测试。
+- [x] E1–E3 实现、针对性回归、4-case CLI 与续跑不变性验收；详见 validation.md。
 - [x] 本地数据目录、注册表、目标类型、代表实例加载和 PDE 形状预检查审计（见 validation.md；不代表所有数据已科学认证）。
 - [x] A0 台账与数据协议实现；A1 的空间/材料划分、A2 可验证的一维接入和规则网格恢复通过测试。
 - [ ] 冻结全家族覆盖台账、来源哈希、方法适用性、实例/变体/副本与 target 分母。
 - [x] A1–A6 可验证工程实现与回归验收。
 - [ ] 拟纳入正式运行子轨的剩余来源与参考条件；阻塞见 deferred_source_issues.md。
 - [ ] 从修正后的领域矩阵重新估算容量；TLC、Green、WDwake、CYT、本构均有明确子轨与接入状态。
-- [ ] C3、C5–C7 实现并通过测试。
+- [x] C5/C6 实现与本地进程回归；证据见 validation.md（未运行全量实验）。
+- [ ] C5/C6 Linux 绑核、真实 CUDA 与 vLLM 服务部署 smoke。
+- [x] C7 实现与专项回归；旧 C5 策略与新 d2-parallel-v1 分区，详见 validation.md。
+- [x] C3 实现并通过测试；22 项专项与 570 项完整回归，未运行全量实验。
 - [ ] 移除主轨配置中的 per-dataset override：`core_ode_track.json`、`core_v2*.json` 的
       SINDy/PySINDy `model_datasets` 多项式阶数（按真值选择阶数，违反 D3），改为一套共用阶数；
       `configs/benchmark/tuning/` 全部为探索性配置，不进主表。
@@ -144,7 +156,7 @@ Windows 原子替换竞争有回归保护；服务器/Linux 进程组仍需部�
 
 ## 6. 执行顺序
 
-1. 完成 C3/C5–C7 与 E1–E3；来源问题按记录后续核验。
+1. 完成资源槽/方法并行度及软截止的部署 smoke；E1–E3 已验收，来源问题按记录后续核验。
 2. 完成冻结清单，按实际独立实例和目标重新估算容量。
 3. 按已就绪的 ODE、PDE、SR、闭合/本构、多维/稳态与 Green 子轨运行，未就绪项显式阻塞。
 4. LLM-SR 主协议和严格 1k 调用对照分开；预算敏感性、污染变体与鲁棒性按预声明范围开展。

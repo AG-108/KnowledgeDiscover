@@ -27,7 +27,8 @@
   "profiles": {
     "full": {
       "model": {
-        "max_llm_calls": 1000
+        "max_llm_calls": 1000,
+        "num_evaluators": 4
       }
     }
   }

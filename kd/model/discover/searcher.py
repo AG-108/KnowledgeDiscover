@@ -10,6 +10,8 @@ import logging
 from tqdm import tqdm
 import torch
 
+from kd.benchmark_deadline import SoftDeadline, check_deadline, current_deadline
+
 from .program import Program, from_tokens,from_str_tokens
 from .dso.memory import Batch, make_queue
 from .plotter import Plotter
@@ -149,7 +151,19 @@ class Searcher:
         self.nevals += self.batch_size
       
         # Compute rewards (or retrieve cached rewards)
-        r = np.array([p.r_ridge for p in programs])
+        if current_deadline() is None:
+            r = np.array([p.r_ridge for p in programs])
+        else:
+            rewards = []
+            for program in programs:
+                check_deadline()
+                reward = program.r_ridge
+                rewards.append(reward)
+                if np.isfinite(reward) and not getattr(program, "invalid", False) and (self.best_p is None or reward > self.r_best):
+                    self.r_best = self.prev_r_best = reward
+                    self.best_p = program
+                check_deadline()
+            r = np.array(rewards)
         reserved = quantile_select(actions, obs, priors, programs, r, self.args['epsilon'])
         if reserved is None:
             return 
@@ -202,6 +216,10 @@ class Searcher:
         self.pq.push_batch(sampled_batch, programs)
         pqt_batch = self.pq.sample_batch(self.controller.pqt_batch_size,make_tensor=True)
 
+        if current_deadline() is not None and np.isfinite(r[sorted_idx[0]]):
+            if self.best_p is None or r[sorted_idx[0]] > self.best_p.r_ridge:
+                self.best_p = cur_best_program
+        check_deadline()
         # Train the controller
         self.controller.train_step(baseline_r, sampled_batch, pqt_batch)
 
@@ -251,9 +269,17 @@ class Searcher:
         if not keep_history and len(self.pq)>0:
             self.set_up()
             
+        self.stop_reason_ = "budget_exhausted"
         pbar = tqdm(range(n_epochs), desc='Progress', ncols=100)
-        for i in pbar:
-            cur_info = self.search_one_step(epoch=i+1, verbose = verbose)
+        try:
+            for i in pbar:
+                check_deadline()
+                cur_info = self.search_one_step(epoch=i+1, verbose = verbose)
+                check_deadline()
+        except SoftDeadline:
+            self.stop_reason_ = "time_limit"
+        finally:
+            pbar.close()
         
         # Print the priority queue at the end of training
         final_p_list = []
@@ -264,31 +290,36 @@ class Searcher:
             p = Program.cache[item[0]]
             final_p_list.append(p)
 
-        if self.stability_selection > 0:
-            print("stability testing begins")
-            mse_cv = []# after weighted sum of 100 samples
-            mse_list = []
-            cv_list = []
-            final_mse=  [fp.evaluate['nmse_test'] for fp in final_p_list]
-            p_candidate, _ = drop_duplicates(final_p_list, final_mse)
+        try:
+            if self.stability_selection > 0 and self.stop_reason_ != "time_limit":
+                print("stability testing begins")
+                mse_cv = []# after weighted sum of 100 samples
+                mse_list = []
+                cv_list = []
+                final_mse=  [fp.evaluate['nmse_test'] for fp in final_p_list]
+                p_candidate, _ = drop_duplicates(final_p_list, final_mse)
             
-            for i, p_sel in enumerate(p_candidate[:self.stability_selection]):
-                print(f"The {i+0} candidate is: ", p_sel.str_expression)
-                mse, cv= p_sel.execute_stability_test()
-                mse_list.append(mse)
-                cv_list.append(cv)
+                for i, p_sel in enumerate(p_candidate[:self.stability_selection]):
+                    print(f"The {i+0} candidate is: ", p_sel.str_expression)
+                    check_deadline()
+                    mse, cv= p_sel.execute_stability_test()
+                    check_deadline()
+                    mse_list.append(mse)
+                    cv_list.append(cv)
                 
-            mse_cv = criterion(mse_list, cv_list, type = 'multiply')
-            try:
-                ranking = np.argsort(mse_cv, axis = 0)[0]
-            except:
-                import pdb;pdb.set_trace()
-            best_count = np.bincount(ranking)
-            best_ind = np.argmax(best_count)
-            print(f"Overall voting reusult is {best_count}; with No.{best_ind+1} candidate ranks first")
-            p_r_best = p_candidate[best_ind]
-            self.best_p = p_r_best
-            # Return statistics of best Program
+                mse_cv = criterion(mse_list, cv_list, type = 'multiply')
+                try:
+                    ranking = np.argsort(mse_cv, axis = 0)[0]
+                except:
+                    import pdb;pdb.set_trace()
+                best_count = np.bincount(ranking)
+                best_ind = np.argmax(best_count)
+                print(f"Overall voting reusult is {best_count}; with No.{best_ind+1} candidate ranks first")
+                p_r_best = p_candidate[best_ind]
+                self.best_p = p_r_best
+                # Return statistics of best Program
+        except SoftDeadline:
+            self.stop_reason_ = "time_limit"
         if self.best_p is None:
             print("[WARN] No valid program found during search.")
 
@@ -302,6 +333,7 @@ class Searcher:
 
         result = {
             "r": self.best_p.r_ridge,
+            "stop_reason": self.stop_reason_,
             "program": self.best_p,
         }
 

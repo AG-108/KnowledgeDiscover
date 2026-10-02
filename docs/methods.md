@@ -35,6 +35,40 @@ reductions (for example PhySO and DeepMoD 20 epochs, DSCV 10 iterations). Under
 decision D3 of the plan they must be replaced by upstream defaults or justified here
 before the main run.
 
+## D2 method parallelism (C7)
+
+The `full` profile allocates the four cores of each D2 slot as follows. These are
+hardware-protocol choices, shared across datasets and SR/ODE tasks, rather than
+dataset-specific tuning. Search/evaluation budgets retain their existing values.
+
+| Method | Full setting | Numerical threads per search task |
+| --- | --- | --- |
+| gplearn | `n_jobs=4` | 1 BLAS/OpenMP thread per joblib worker |
+| PySR | `parallelism=multiprocessing`, `procs=4`, `deterministic=false` | 1 Julia/JuliaCall and BLAS thread per process |
+| Operon | `n_threads=4` | 1 BLAS/OpenMP thread per native search task |
+| LLM-SR | `num_evaluators=4` | 1 numerical thread per evaluator; local vLLM shares the GPU slot |
+| torch methods | `torch.set_num_threads(4)` in each target worker | 4 threads inside the allocated slot |
+
+PySR's `procs` is ignored in multithreading mode in the installed API; multiprocessing
+makes the process count explicit. JuliaCall also defaults to `auto` independently of
+`JULIA_NUM_THREADS`, so slot workers set both `JULIA_NUM_THREADS` and
+`PYTHON_JULIACALL_THREADS`. Parallel PySR searches are not deterministic; smoke keeps
+serial/deterministic mode. gplearn and Operon smoke profiles retain one search worker.
+LLM-SR already defaulted to four evaluators; the full profile now records that choice
+explicitly.
+
+`run_slots.py` resolves method parallelism from the actual slot before hashing the new
+case and writing its manifest. Full settings use four cores, including for source
+manifests with stale or excessive worker settings; smoke settings are capped at the
+allocated cores. Source manifests are preserved. GPU model constructor devices follow
+the slot's exposed `cuda:0` device. Results record the applied `thread_environment`.
+The resource policy additionally identifies `parallelism_protocol=d2-parallel-v1`, so
+old C5 resource histories remain readable and cannot be pooled with the new policy.
+
+Direct diagnostic runners do not enforce D2 affinity or these per-task thread limits.
+Native Linux/CUDA/vLLM deployment verification and the remaining budget/grammar audits
+are still required before the main experiment.
+
 ## Search spaces
 
 SR datasets publish a `function_set`. The main track uses
@@ -89,7 +123,7 @@ The opt-in `reuse_pretraining_within_case=true` (`synthetic_case_instance_reuse`
 trains once per dataset instance in a case, then copies the model and restores its
 random state per RHS; sampling and constant fitting stay per RHS. Results record
 `method_provenance.protocol` and `cache_hit` (`null` when a fit was interrupted).
-Under `target-v1`, successful target calls persist that instance cache atomically so the
+Under `target-v2`, successful target calls persist that instance cache atomically so the
 next isolated target worker can restore it; each attempt has its own working directory.
 A matched historical seed-0 damped-oscillator diagnostic (300 s per case) completed 2/2 targets
 with reuse and 1/2 per fit; neither recovered the structure.
@@ -228,3 +262,31 @@ A1/A2 来源、资格、同源观测与协议迁移见 [验收记录](validation
 ## A6 prior exposure
 
 Records label [training overlap](../kd/dataset/_overlap.py). EqGPT handbook structure exposure is confirmed for listed families; field/coefficients remain unaudited. E2E corpus is unknown; SymbolicGPT configuration-only synthetic corpus has possible structure overlap. These labels do not establish clean checkpoint lineage.
+
+## C3 fit deadlines (target-v2)
+
+The runner enables a shared cooperative deadline at fit entry. LLM-SR confines blocking HTTP
+threads to a disposable request process, caps retries and evaluators by the remaining fit
+time, and retains previously evaluated programs. Submitted calls and completed responses
+are reported separately as `llm_calls` and `llm_calls_completed`.
+
+gplearn advances one generation per warm-start call, replaying the original RNG state.
+Without a time stop its populations and final selection match a normal fit; on a time stop
+it returns the best completed generation by the configured training fitness.
+PySR receives `timeout_in_seconds` plus an absolute Julia `time_ns()` stop predicate,
+anchored before native search initialization and combined with its existing early stop.
+Operon receives integer `max_time` rounded up from
+remaining seconds. Existing shorter native limits are retained and constructor parameters
+are restored after fitting. Their APIs lack reliable termination codes, so `fit_deadline`
+identifies an observed deadline rather than claiming an unexposed native stop signal.
+
+DSO and DSCV retain completed candidate rewards before checking the deadline, then stop
+before another training step. PhySO uses its public logger hook after a completed batch
+has entered its Pareto archive. Atomic native calls, batch operations and initialization
+can still exceed the soft budget; the independent T + grace watchdog remains authoritative.
+A deadline without a valid candidate is an error, and a forced termination is a hard timeout.
+
+The strict 1000-call LLM-SR control disables soft deadlines, retaining its existing 43200 s
+hard safety limit. Real Linux/CUDA/vLLM deployment, including server-side cancellation after
+HTTP disconnect, still needs smoke validation. These engineering checks do not freeze
+scientific budgets or run the full benchmark.

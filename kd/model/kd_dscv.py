@@ -226,7 +226,11 @@ class KD_DSCV(BaseRL):
         Returns:
             dict: Training results.
         """
-        return self.searcher.search(n_epochs=n_epochs, verbose=verbose)
+        result = self.searcher.search(n_epochs=n_epochs, verbose=verbose)
+        self.stop_reason_ = result.get("stop_reason", getattr(self.searcher, "stop_reason_", "budget_exhausted"))
+        if result.get("expression") in (None, ""):
+            raise RuntimeError("DISCOVER did not return a valid candidate")
+        return result
 
     def set_config(self, config):
         """Set model configuration.

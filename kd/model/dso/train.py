@@ -26,6 +26,8 @@ from itertools import compress
 
 import numpy as np
 
+from kd.benchmark_deadline import check_deadline, current_deadline
+
 from .program import Program, from_tokens
 from .memory import Batch, make_queue
 from .utils import weighted_quantile
@@ -205,7 +207,18 @@ class Trainer:
             Program.cache.update(pool_p_dict)
 
         # Compute rewards (or retrieve cached rewards)
-        r = np.array([p.r for p in programs])
+        if current_deadline() is None:
+            r = np.array([p.r for p in programs])
+        else:
+            rewards = []
+            for program in programs:
+                check_deadline()
+                reward = program.r
+                rewards.append(reward)
+                if np.isfinite(reward) and not program.invalid and reward > self.r_best:
+                    self.r_best, self.p_r_best = reward, program
+                check_deadline()
+            r = np.array(rewards)
         r_full = r.copy()
 
         l = np.array([len(p.traversal) for p in programs])
@@ -283,6 +296,7 @@ class Trainer:
         sampled_batch = Batch(actions=actions, obs=obs, priors=priors,
                               lengths=lengths, rewards=r, on_policy=on_policy)
 
+        check_deadline()
         # ---- Gradient step ----
         if self.priority_queue is not None:
             self.priority_queue.push_best(sampled_batch, programs)

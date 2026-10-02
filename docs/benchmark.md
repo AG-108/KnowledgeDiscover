@@ -57,10 +57,22 @@ configs/benchmark/
 
 命令行选择和 `--device` 高于总配置；总配置的 `overrides` 高于 baseline profile。
 解析后的 `device` 和参数写入 manifest、`case.json`；计时策略另存 `execution.json` 及结果行。
-执行协议为 `target-v1`，进入 case 身份哈希。新增计时选项也接受同名连字符 CLI 参数。
+执行协议为 `target-v2`，进入 case 身份哈希。新增计时选项也接受同名连字符 CLI 参数。
 T 计入适配器的 `fit` / `train` / 搜索调用；启动、数据准备与模型构造记为 setup，
 调用返回后的预测、表达式提取、指标及辅助评估记为 score。各阶段单独限时，超时终止进程树。
-当前只有硬上限；到 T 返回当前最优的软截止钩子仍是计划 C3。
+默认启用软截止（`soft_deadline=true`）：LLM-SR、gplearn、PySR、Operon、DSO、DSCV、PhySO
+在训练预算 T 到达后返回已评估的最优候选，记录 `stop_reason=time_limit`。
+累计 fit 时间共用一份 T，setup/score 不消耗它；`T + grace` 的硬上限继续生效。
+没有有效候选则为 `error`，无法及时退出则为 `timeout/hard_timeout`。
+
+可用配置 `soft_deadline=false` 或 `--no-soft-deadline` 保留仅硬上限；严格 1000 调用对照
+`llmsr_llama31_8b_1k.json` 已关闭软截止，保留 43200 秒安全上限。修改此开关也必须新建
+输出目录。槽/并行脚本的对照运行也须显式传 `--timeout 43200 --no-soft-deadline`。
+PySR 使用剩余秒数，并用绝对单调时钟截止条件覆盖原生初始化，保留原有早停；Operon 原生参数为整数秒，向上取整；原生内部已有更短
+上限时保留更短值。gplearn 在代际边界退出，DSO/DSCV 在候选/训练边界退出，PhySO
+使用公开 logger 钩子，在完整批次已写入 Pareto 后退出。长原生调用或初始化仍可能触发
+硬超时。PySR/Operon 无可靠原生停止码，到达 T 后返回时标明来源 `fit_deadline`。
+LLM-SR 会终止请求进程及未完成的 evaluator；真实 vLLM 断连后取消生成的行为仍需部署验证。
 
 `--resume` 保留所有已落盘终态（`ok` / `error` / `timeout` / `skipped`），只补没有终态的 target。
 中断尝试的日志和工作目录保留，新尝试写入递增的 `attempts/0002` 等目录。
@@ -70,6 +82,49 @@ manifest 不可用于新 runner 的续跑，历史批次须继续使用原工作
 
 并行脚本 `--reuse-dir` 可复制相同配置及计时策略的完整/中断历史，包含失败和超时；
 已有目标目录不会被覆盖。`--retries` 只接受 `0`，默认也是 `0`。
+
+## D2 资源槽执行（C5/C6）
+
+`scripts/run_slots.py` 消费已有 `target-v2` / `domain-v4` manifest，按计划 D2 的
+方法表分配两个槽：CPU 核 0–3、GPU 核 4–7，每槽 4 核、28 GB 进程树 RSS 上限。
+GB 按十进制字节计；`peak_memory_mb` 等历史字段继续按 MiB 记录。
+同一槽逐 case、逐 target 执行，CPU/GPU 两槽并发；准备和评分也占用本槽。
+Linux 用 `taskset`，Windows 用进程 affinity；子进程继承绑核。
+CPU 槽隐藏 CUDA，GPU 槽只暴露指定设备（worker 内为 `cuda:0`），torch 使用 4 线程。
+gplearn/PySR/Operon/LLM-SR 的 OpenMP、BLAS、NumExpr、Julia/JuliaCall 数值线程设为 1，
+并行搜索/evaluator 使用本槽 4 核；其余方法数值线程设为 4。
+主机可用 affinity 不含所需核时拒绝启动；容器核号不同可显式改为两个不重叠的四核集合。
+C7 full 配置分别为 `n_jobs=4`、PySR `parallelism=multiprocessing, procs=4`、
+`n_threads=4`、`num_evaluators=4`。绑定槽时校正有效参数并写入新 case 身份；
+smoke 保留 gplearn/Operon 单 worker、PySR 串行，显式并行数不超过槽核数。
+模型构造设备同步到槽的 `cuda:0`。配置理由和预算边界见 [方法卡片](methods.md#d2-method-parallelism-c7)。
+
+仅检查资源 manifest，不加载数据或拟合：
+
+```bash
+python scripts/run_slots.py --manifest results/<selection>/benchmark_manifest.json \
+  --output-dir results/<new_slot_run> --timeout 300 --dry-run
+```
+
+经用户明确授权后运行同一命令并去掉 `--dry-run`。`--manifest` 可重复；默认保留所有
+选中 case，包括不适用组合，`--exclude-model` 才显式排除方法。资源、设备变化生成新的
+case 身份；已有目标首次终态保留，不自动重试，换预算或资源必须用新目录。
+manifest 保存 `resource_slots`、各 case 的 `resource_policy` 和源 manifest SHA256；
+结果行保存相同策略及哈希，聚合与冻结报告隔离资源配置。
+新资源策略包含 `parallelism_protocol=d2-parallel-v1`，结果行另存 `thread_environment`；
+原 C5 策略可读且保留原环境语义，其首次终态不被迁移或覆盖。
+槽锁与主机临时目录中的 CPU/GPU 文件锁阻止使用相同资源标识的执行器重叠运行。
+原 `run_parallel_benchmark.py` 默认 CPU worker 改为 1；该诊断入口不执行 D2 资源约束。
+
+LLM-SR 必须使用单独的 GPU 队列，并用重复的 `--gpu-service-pid PID` 指定本机 vLLM
+服务进程树；服务须预先绑定 GPU 槽的四核。执行器拒绝未登记服务的 LLM-SR 实际运行，
+以及登记服务后混跑其他 GPU 方法。服务既有 CPU 累计值不计入当前 target；其后增量
+CPU 与 RSS 纳入本槽。普通完成保留服务，RSS 超限终止服务和 worker，记
+`status=error`、`stop_reason=resource_limit`、`resource_limit=rss`。
+这一路径不支持将未监视的远程 LLM 服务称为满足 D2。
+
+资源字段、计费边界与采样误差见 [指标](benchmark_metrics.md)。服务器 Linux 绑核、
+真实 CUDA 与 vLLM 仍需部署后的小规模 smoke；本地进程回归不替代该验收。
 
 ## 领域数据集
 
@@ -189,6 +244,48 @@ results/<output_dir>/
 聚合输出停止原因数量及比例，语义见[指标协议](benchmark_metrics.md#resource-and-status-fields)。
 
 验证：`python -m pytest tests/test_run_benchmark.py -q`。
+
+### ODE 系统轨迹与参考行
+
+ODE 每个 RHS 的首次终态落盘后，runner 将同一实例的全部 RHS 组装为系统，
+在整条测试轨迹的首个观测状态上用 `solve_ivp` 积分。初值不参与误差评分。
+系统评分另用一个受 `score_timeout` 限制的进程，结果保存在
+`cases/<case>/scoring/ode_rollout/`，合并到 case/summary，不改写 target 终态。
+评分超时与其他评分终态均可续跑复用，不自动重试；缺 RHS 时保留所有目标并 abstain。
+`overrides.evaluation.<dataset>.ode_rollout` 可显式声明固定积分器、容差和数值边界；
+设置参与 case 身份。默认 DOP853，Robertson 使用 Radau；来源真值须先通过轨迹校验。
+
+加 `--include-reference` 为选中的数据/seed/划分/评分适配器生成独立的 `model=reference`
+对照 case。参考不训练，也不计入方法 aggregate、seed-family 或 paired 结果；
+另存 `benchmark_reference.json`。参考使用同一导数、残差或 forcing-response 评分，
+缺真值时显式 abstain。未认证来源的参考只作诊断，不被称为已认证误差下限。
+参考 case 与方法 case 各自保存终态；该开关不扩展默认方法或数据矩阵。
+
+仅验证上述功能的小规模配置为：
+
+```bash
+python run_benchmark.py --config configs/benchmark/e1_e3_smoke.json --include-reference
+```
+
+该配置是 2 个 seed、1 个 ODE 系统、1 个方法加参考，共 4 cases / 8 targets。
+
+### 冻结结果统计与作图
+
+先计算 `benchmark_manifest.json` 的文件 SHA256，再将目录和哈希交给报告脚本：
+
+```bash
+python scripts/report_frozen_benchmark.py results/<frozen_run> <manifest_sha256>
+```
+
+输出位于该目录的 `analysis/<hash前12位>/`：主表 CSV/JSON、bootstrap CI、独立参考行，
+以及各协议/任务/profile/设备组的 Pareto 和状态堆叠图（PNG/PDF）。脚本不加载数据集或方法、
+不训练；读取 manifest、summary 和逐 case 的 target 计划，校验矩阵身份、预算和重复目标。
+缺结果的已声明 target 计为 missing；没有完整 target 计划时拒绝认证分母。
+首次生成记录输入哈希，输入变化后拒绝覆盖同一报告。
+
+置信区间以整个 seed 重采样，单个 seed 明确标记 CI 不可估计。误差均值是可评估成功项的
+macro mean，附可评估/声明分母；状态与成功率保留失败、超时、跳过和缺失项。Pareto 图标注
+误差覆盖分母并隔离 CPU/GPU，不把条件误差均值当作完整成功率。参考行不进入主表或图。
 
 A1/A2 来源、资格、同源观测与协议迁移见 [验收记录](validation.md)；
 旧 domain-v1/v2/v3 与新 domain-v4 结果不混用，来源不足尚未正式就绪。

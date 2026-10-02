@@ -23,6 +23,8 @@ import commentjson as json
 import numpy as np
 import torch
 
+from kd.benchmark_deadline import SoftDeadline, check_deadline
+
 from .program import Program
 from .prior import make_prior
 from .state_manager import make_state_manager
@@ -193,8 +195,21 @@ class DeepSymbolicOptimizer:
         """Train until the sample budget is exhausted or early stopping fires."""
         if self.trainer is None:
             self.setup()
-        while not self.trainer.done:
-            self.trainer.run_one_step()
+        self.trainer.stop_reason = None
+        try:
+            while not self.trainer.done:
+                check_deadline()
+                self.trainer.run_one_step()
+                check_deadline()
+        except SoftDeadline:
+            self.trainer.stop_reason = "time_limit"
+            self.trainer.done = True
+        finally:
+            if self.pool is not None:
+                self.pool.terminate()
+                self.pool.join()
+                self.pool = None
+                self.trainer.pool = None
         return self._result()
 
     def _result(self):
@@ -202,6 +217,7 @@ class DeepSymbolicOptimizer:
         p = t.p_r_best
         return {
             "program": p,
+            "stop_reason": getattr(t, "stop_reason", None),
             "expression": repr(p.sympy_expr) if p is not None else "",
             "r": float(t.r_best),
             "iterations": t.iteration,

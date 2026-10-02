@@ -33,8 +33,11 @@ fi
 export PYTHONPATH="$KD_PROJECT${PYTHONPATH:+:$PYTHONPATH}"
 export PYTHONNOUSERSITE=1
 export MPLBACKEND="${MPLBACKEND:-Agg}"
-export OMP_NUM_THREADS="${OMP_NUM_THREADS:-1}"
-export MKL_NUM_THREADS="${MKL_NUM_THREADS:-1}"
-export OPENBLAS_NUM_THREADS="${OPENBLAS_NUM_THREADS:-1}"
-export NUMEXPR_NUM_THREADS="${NUMEXPR_NUM_THREADS:-1}"
+# Slot workers overwrite inherited thread variables before importing libraries.
+# Keep direct diagnostic runs configurable; D2 allocates four cores per slot.
+export KD_SLOT_THREADS="${KD_SLOT_THREADS:-4}"
+export OMP_NUM_THREADS="${OMP_NUM_THREADS:-$KD_SLOT_THREADS}"
+export MKL_NUM_THREADS="${MKL_NUM_THREADS:-$KD_SLOT_THREADS}"
+export OPENBLAS_NUM_THREADS="${OPENBLAS_NUM_THREADS:-$KD_SLOT_THREADS}"
+export NUMEXPR_NUM_THREADS="${NUMEXPR_NUM_THREADS:-$KD_SLOT_THREADS}"
 cd "$KD_PROJECT" || return

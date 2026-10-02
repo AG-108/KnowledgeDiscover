@@ -186,9 +186,12 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--reuse-dir", action="append", type=Path, default=[])
     parser.add_argument("--exclude-model", action="append", default=[])
-    parser.add_argument("--cpu-workers", type=int, default=6)
+    parser.add_argument("--cpu-workers", type=int, default=1,
+                        help="Diagnostic pool only; use scripts/run_slots.py for the D2 resource protocol")
     parser.add_argument("--gpu-workers", type=int, default=1)
     parser.add_argument("--timeout", type=float, default=21600.0, help="Fit seconds per target")
+    parser.add_argument("--soft-deadline", action=argparse.BooleanOptionalAction, default=None,
+                        help="Return the best completed candidate at T (default enabled)")
     parser.add_argument("--timeout-grace", type=float, default=5.0)
     parser.add_argument("--setup-timeout", type=float, default=300.0)
     parser.add_argument("--score-timeout", type=float, default=300.0)
@@ -215,7 +218,8 @@ def main() -> int:
     }
     excluded = set(args.exclude_model)
     unique = {}
-    timing = dict(timeout_grace=args.timeout_grace, setup_timeout=args.setup_timeout,
+    timing = dict(soft_deadline=True if args.soft_deadline is None else args.soft_deadline,
+                  timeout_grace=args.timeout_grace, setup_timeout=args.setup_timeout,
                   score_timeout=args.score_timeout)
     policy = execution_policy(args.timeout, **timing)
     source_manifests = []

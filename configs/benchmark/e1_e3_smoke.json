@@ -1,0 +1,16 @@
+{
+  "profile": "smoke",
+  "tasks": ["ode"],
+  "models": ["sindy"],
+  "datasets": ["ode_core_oscillator"],
+  "seeds": [0, 1],
+  "output_dir": "results/e1_e3_smoke",
+  "timeout": 10,
+  "setup_timeout": 60,
+  "score_timeout": 60,
+  "overrides": {
+    "datasets": {
+      "ode_core_oscillator": {"n_trajectories": 3, "n_points": 61}
+    }
+  }
+}

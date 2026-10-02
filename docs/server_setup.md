@@ -82,6 +82,38 @@ explicit source/checkpoint paths, trust and verified hash in the benchmark's
 local override config. See [E2E card](methods.md#e2e-official-pretrained-adapter). Keep LLM-SR endpoint
 credentials local and validate real generation before a full batch.
 
+## D2 slot execution
+
+`hpc/activate_kd_server.sh` defaults `KD_SLOT_THREADS` to 4 and uses it for unset
+OpenMP/BLAS/NumExpr thread variables. The slot executor overrides inherited thread
+variables per worker. Prepare a selected manifest, then validate resources without
+fitting:
+
+~~~bash
+python scripts/run_slots.py --manifest results/<selection>/benchmark_manifest.json \
+  --output-dir results/<new_slot_run> --timeout 300 --dry-run
+~~~
+
+After explicit authorization to run experiments, remove `--dry-run`. Defaults allocate
+CPU cores 0–3 and GPU cores 4–7, four cores and 28 decimal GB RSS each, with one worker per slot.
+Use `--cpu-cpus` / `--gpu-cpus` for container CPU numbering and `--gpu-device` for the
+physical CUDA index or UUID. Linux requires `taskset` and `psutil`; unavailable affinity
+or monitoring fails before launching. Validate binding, CUDA visibility and sampled
+resource-limit behavior with a small deployment smoke before a formal batch.
+LLM-SR's already bound local vLLM service requires `--gpu-service-pid` and a separate
+LLM-SR GPU queue; its CPU/RSS belongs to that slot. Real vLLM/CUDA validation is still
+pending. See [execution](benchmark.md#d2-资源槽执行c5c6) and
+[resource metrics](benchmark_metrics.md#c5c6-resource-protocol-slots-v1).
+
+C7 full settings use four gplearn workers, four native Operon threads, four PySR
+processes in multiprocessing mode, and four LLM-SR evaluators. Slot binding records
+these effective parameters before case hashing. Their numerical-library thread count
+is one per task; other torch workers use four threads. Both `JULIA_NUM_THREADS` and
+`PYTHON_JULIACALL_THREADS` are set before Julia initializes. New resource policies
+identify `parallelism_protocol=d2-parallel-v1`; older C5 policies and first terminal
+rows are preserved. Local native-worker checks do not replace Linux/CUDA/vLLM deployment
+verification. See the [method card](methods.md#d2-method-parallelism-c7).
+
 ## Historical launch recipes
 
 The dated `hpc/run_*_20260925.sh` recipes retain their original selections and

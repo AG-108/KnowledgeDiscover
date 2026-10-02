@@ -18,7 +18,8 @@
         "generations": 100,
         "max_evaluations": 1000000,
         "max_length": 50,
-        "optimizer_iterations": 100
+        "optimizer_iterations": 100,
+        "n_threads": 4
       }
     }
   }

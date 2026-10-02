@@ -21,7 +21,8 @@
         "niterations": 100,
         "populations": 8,
         "population_size": 50,
-        "parallelism": "multithreading",
+        "parallelism": "multiprocessing",
+        "procs": 4,
         "deterministic": false
       }
     }

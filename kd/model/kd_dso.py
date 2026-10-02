@@ -225,7 +225,7 @@ class KD_DSO(BaseEstimator):
         else:
             self.success_ = False
 
-        self.stop_reason_ = (
+        self.stop_reason_ = result.get("stop_reason") or (
             "early_stop" if self.early_stopping and self.success_ else "budget_exhausted"
         )
 

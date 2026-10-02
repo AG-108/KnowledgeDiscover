@@ -148,7 +148,7 @@ def _temporal_views(dataset, case):
 def run(dataset, problem, case):
     from run_benchmark import fit_call
 
-    validate(dataset, case["model"])
+    validate(dataset, case.get("reference_adapter", case["model"]))
     model = SparseEquationModel(**case["model_params"])
     steady = isinstance(dataset, SteadyPDEDataset)
     target = next(t for t in targets(dataset) if t.key == problem["target"])
@@ -191,7 +191,45 @@ def run(dataset, problem, case):
     constraints = []
     for declaration in getattr(dataset, "protocol_metadata", {}).get("known_constraints", []):
         constraints.append(declaration.split("=", 1)[0])
-    fit_call(model.fit, X, terms, y, excluded_relations=constraints)
+    if case["model"] == "reference":
+        from kd.evaluation.ode_rollout import numeric_expression
+        from kd.evaluation.reference import abstain
+        from run_benchmark import expression_sympy
+
+        reference = getattr(dataset, "protocol_metadata", {}).get("source_reference")
+        if isinstance(reference, dict):
+            reference = reference.get(target.key)
+        if not reference:
+            return abstain("abstained_missing_reference")
+        names = list(train_ns)
+        try:
+            numeric_expression(reference, names)
+            import sympy as sp
+            declared = sp.expand(expression_sympy(reference, names))
+            expanded = [sp.expand(expression_sympy(term, names)) for term in terms]
+            coefficients = np.zeros(len(terms))
+            for component in sp.Add.make_args(declared):
+                coefficient, monomial = component.as_coeff_Mul()
+                matches = [i for i, basis in enumerate(expanded) if basis == monomial]
+                if len(matches) != 1 or not coefficient.is_number:
+                    raise ValueError("Reference term is outside the declared scoring library")
+                coefficients[matches[0]] += float(coefficient)
+        except (ValueError, TypeError, SyntaxError) as exc:
+            return {**abstain("abstained_unsupported_reference"), "reference_error": str(exc)}
+        if implicit:
+            norm = np.linalg.norm(coefficients)
+            if norm == 0:
+                return abstain("abstained_trivial_reference")
+            coefficients /= norm
+            good = np.isfinite(X).all(axis=1)
+            scales = np.sqrt(np.mean(X[good] ** 2, axis=0))
+            model.train_scale_ = float(np.linalg.norm(coefficients * scales))
+        model.coefficients_ = coefficients
+        model.expression_ = str(reference)
+        model.diagnostics_ = {"train_rows": int(np.isfinite(X).all(axis=1).sum()),
+                              "ambiguous": False, "role": "source_reference; no fitting"}
+    else:
+        fit_call(model.fit, X, terms, y, excluded_relations=constraints)
     coef = model.coefficients_
     if y is not None:
         full_terms = terms + [target.known_source or target.key]
@@ -207,6 +245,8 @@ def run(dataset, problem, case):
         scale = model.train_scale_
     metric = relative_residual(testing, full_coef, scale)
     reference = getattr(dataset, "protocol_metadata", {}).get("source_reference")
+    if isinstance(reference, dict):
+        reference = reference.get(target.key)
     reference_metrics = None
     if reference:
         import sympy as sp

@@ -774,7 +774,7 @@ def test_stop_reason_adapter_and_aggregate_contract():
     rows = []
     for reason in benchmark.STOP_REASONS:
         assert benchmark._model_stop_reason(SimpleNamespace(stop_reason_=reason))["stop_reason"] == reason
-        status = "timeout" if reason == "hard_timeout" else "error" if reason == "error" else "ok"
+        status = "timeout" if reason == "hard_timeout" else "error" if reason in {"error", "resource_limit"} else "ok"
         row = {**benchmark._base_row(case), "status": status, "stop_reason": reason}
         rows.append(benchmark._finalize_stop_reason(row))
     aggregate = benchmark.aggregate_results(rows)[0]
@@ -787,7 +787,7 @@ def test_execution_protocol_versions_are_not_pooled():
     old = dict(row)
     old.pop("execution_protocol_version")
     groups = benchmark.aggregate_results([row, old])
-    assert {item["execution_protocol_version"] for item in groups} == {"target-v1", "legacy/unknown"}
+    assert {item["execution_protocol_version"] for item in groups} == {"target-v2", "legacy/unknown"}
     assert all(item["n_rows"] == 1 for item in groups)
 
 
@@ -1125,6 +1125,58 @@ def test_worker_timeout_preserves_remaining_ode_target_denominator(monkeypatch, 
     assert {row["target"] for row in rows} == {"d(x)/dt", "d(y)/dt", "d(z)/dt"}
     assert all(row["status"] == "timeout" and row["recovery_eligible"] for row in rows)
     assert len(calls) == 3
+
+
+@pytest.mark.parametrize("dataset", ["Koza-2", "ode_core_oscillator"])
+def test_full_parallelism_reaches_cases_and_slot_manifest(dataset):
+    from kd.benchmark_resources import PARALLELISM_PROTOCOL, slot_policy
+    from scripts.run_slots import bind_case
+
+    slots = {slot: slot_policy(slot) for slot in ("cpu", "gpu")}
+    expected = {"gplearn": {"n_jobs": 4}, "pyoperon": {"n_threads": 4},
+                "pysr": {"parallelism": "multiprocessing", "procs": 4, "deterministic": False},
+                "llmsr": {"num_evaluators": 4}}
+    for model, controls in expected.items():
+        case = make_case(model=model, dataset=dataset, profile="full")
+        assert all(case["model_params"][key] == value for key, value in controls.items())
+        bound = bind_case(case, slots)
+        assert all(bound["model_params"][key] == value for key, value in controls.items())
+        assert bound["resource_policy"]["parallelism_protocol"] == PARALLELISM_PROTOCOL
+        if model == "llmsr":
+            assert bound["device"] == "cuda:0"
+        assert bound["model_params"] == case["model_params"]
+
+
+@pytest.mark.parametrize("model,key", [("gplearn", "n_jobs"), ("pyoperon", "n_threads"),
+                                      ("pysr", "procs"), ("llmsr", "num_evaluators")])
+def test_slot_binding_replaces_excess_parallelism_and_freezes_new_identity(model, key):
+    import copy
+
+    from kd.benchmark_resources import slot_policy
+    from scripts.run_slots import bind_case
+
+    slots = {slot: slot_policy(slot) for slot in ("cpu", "gpu")}
+    case = make_case(model=model, profile="full", config={"models": {model: {key: 32}}})
+    before = copy.deepcopy(case)
+    bound = bind_case(case, slots)
+    assert case == before and bound["model_params"][key] == 4
+    assert bound["name"] != case["name"]
+    changed = {k for k, value in before["model_params"].items() if bound["model_params"].get(k) != value}
+    assert changed <= {key, "device"}
+
+
+def test_smoke_search_budgets_remain_small_after_c7():
+    from kd.benchmark_resources import slot_policy
+    from scripts.run_slots import bind_case
+
+    slots = {slot: slot_policy(slot) for slot in ("cpu", "gpu")}
+    gp = bind_case(make_case(), slots)["model_params"]
+    operon = bind_case(make_case(model="pyoperon"), slots)["model_params"]
+    pysr = bind_case(make_case(model="pysr"), slots)["model_params"]
+    assert (gp["population_size"], gp["generations"], gp["n_jobs"]) == (100, 2, 1)
+    assert (operon["population_size"], operon["generations"], operon["n_threads"]) == (100, 2, 1)
+    assert pysr["parallelism"] == "serial" and pysr["deterministic"] is True
+    assert pysr["niterations"] == 2 and "procs" not in pysr
 
 
 @pytest.mark.parametrize("reuse,protocol", [

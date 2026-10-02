@@ -127,19 +127,71 @@ The legacy `runtime` measures the target adapter including scoring; killed worke
 elapsed worker time. Use `fit_seconds` when comparing the fit budget. Preparation is
 separately supervised, and fit is hard-limited to T + grace. Scoring has its own cap.
 `timeout_phase` distinguishes setup, fit and score failures; a score timeout is never a
-successful recovery. Resource-slot enforcement and CPU/GPU cost accounting remain pending.
+successful recovery. C5/C6 resource accounting is described below; C7 method parallelism
+is implemented, while C3 soft stopping remains pending.
 
-Every new row has one of six `stop_reason` values: `budget_exhausted`, `time_limit`,
-`converged`, `early_stop`, `hard_timeout`, `error`. Explicit adapter `stop_reason_`
+Every new row has one of seven `stop_reason` values: `budget_exhausted`, `time_limit`,
+`converged`, `early_stop`, `hard_timeout`, `error`, `resource_limit`. Explicit adapter `stop_reason_`
 signals take priority: SINDy records support convergence, DSO and LLM-SR record their
 early-stopping conditions, and gplearn's shortened generation history records early stop.
 Where the backend exposes no reason, a normal return uses `budget_exhausted` with
 `stop_reason_source=native_return`; this is a fallback classification, not evidence that
 every native budget unit was consumed. Other sources are `adapter`, `generation_count`
-and `runner`. Failed/skipped rows use `error`, and hard timeouts use `hard_timeout`;
+and `runner`. Failed/skipped rows use `error`, RSS-limit failures use `resource_limit`,
+and hard timeouts use `hard_timeout`;
 the separate status retains the failure/skip distinction. Soft `time_limit` signals will
 be wired in C3. Aggregates include reason counts/rates and source counts. Legacy rows
 without a reason remain `unknown` in these distributions; their files are not rewritten.
+
+## C5/C6 resource protocol slots-v1
+
+The parent supervisor samples each worker process tree, including interpreter startup,
+setup, fit and target scoring, and retains costs when a worker errors or is killed.
+`cpu_seconds` sums user + system CPU seconds per observed PID/create-time; it is a
+sampled estimate, not wall time. CPU totals retain exited children's last measurement
+and exclude parent-reported children CPU to avoid double counting. Short-lived children
+and RSS spikes entirely between polls can be missed (slot default: 50 ms). A final
+worker self CPU measurement supplements the sampler on normal completion. Missing
+CPU measurements remain null; `resource_monitor_source` and measurement coverage are
+reported rather than replacing missing values with zero.
+
+`gpu_occupied_seconds` measures exclusive GPU-slot wall time through worker cleanup,
+including setup and scoring. It measures reserved GPU capacity, not kernel execution
+time or GPU utilization. CPU slots record zero. Unconstrained diagnostic CUDA runs use
+device-assignment wall time and label `gpu_occupied_source=device_assignment_wall`;
+exclusive slots label `exclusive_slot_wall`. These measurements are kept in distinct
+resource cohorts. `peak_memory_mb` is sampled process-tree RSS (shared pages can be
+counted per process); `peak_gpu_memory_mb` remains the optional worker CUDA allocator
+peak, not whole-device VRAM or external vLLM allocator memory.
+
+`resource_policy`, `resource_policy_hash`, `resource_slot` and the execution policy
+record affinity, visible CUDA device, thread count, RSS ceiling, sampling interval and
+declared service PIDs. `resource_limit=rss` maps to `status=error`,
+`stop_reason=resource_limit`; it remains in the denominator and `n_resource_limit`.
+Preparation failures that prevent enumerating actual targets keep the existing
+incomplete-manifest marker; they cannot certify a frozen denominator.
+
+C7 adds `parallelism_protocol=d2-parallel-v1` to new resource policies and records
+the applied `thread_environment` in summary JSON/CSV. This changes the resource hash
+and isolates the new per-task numerical thread limits from older C5 histories, whose
+original policy and terminal rows remain readable. Slot manifests record the effective
+method worker counts before execution and case hashing; search budgets are not changed
+by this binding. See the [method card](methods.md#d2-method-parallelism-c7).
+
+Summary JSON/CSV retain these fields. Aggregate JSON/CSV partition by resource policy
+hash and contain `cpu_seconds_total/mean/measured_rows`,
+`gpu_occupied_seconds_total/mean/measured_rows`, and `worker_elapsed_seconds_total`.
+Shared case preparation and coupled ODE scoring are separate row fields
+`preparation_cpu_seconds`, `preparation_gpu_occupied_seconds`,
+`system_score_cpu_seconds`, `system_score_gpu_occupied_seconds`; their aggregate
+`*_total` counts each case once, rather than once per RHS. Complete case cost is target
+worker totals plus these shared totals. Repeated interrupted attempts remain in their
+attempt histories and are not silently added to first-terminal-row costs.
+
+Declared vLLM service trees contribute incremental CPU and simultaneous RSS alongside
+the worker. GPU slot wall time already covers both, so it is not doubled for the
+service. Frozen reports validate case resource policies and isolate resource cohorts;
+seed-family and paired reports also isolate resource policy hashes.
 
 ## LLM evaluation scope
 
@@ -165,3 +217,41 @@ A1/A2 来源、资格、同源观测与协议迁移见 [验收记录](validation
 Green primary score: held-out whole-forcing response MSE and RMSE divided by training (U-U_hom) RMS. Per-forcing error, inverse rank/conditioning and coverage are recorded. Reference AST is scoring-only; reference-forward floor uses all-response RMS as a separate diagnostic. Fixed offdiagonal mask abs(x-xi)>1e-12 includes exclusion fraction; forward integration retains the diagonal. No certified kernel recovery.
 
 pyqg scores physical s^-2 MSE/RMSE, held-out-run layer/frame NRMSE and finite coverage of declared sampled points. Training-only normalization, indices/weights are recorded; expressions use standardized inputs/output. Offline closure does not establish online stability. File SR keeps official pairs or fixed input-range interpolation holdout, with unknown truth. New tracks are recovery-ineligible until source certification.
+
+## E1–E3 evaluation extensions
+
+Derivative metric protocol 2.1 is retained. ODE trajectory fields additionally identify
+`ode-rollout-v1`; reference controls identify `reference-v1`. The scoring configuration
+is part of case identity and the frozen report's protocol grouping.
+
+ODE RHS are assembled in state-variable order only after all component fits finish.
+The scoring view uses the same whole-trajectory split as derivative regression and
+supplied static covariates. An initial observation starts each integration and is
+excluded from error. NRMSE uses each held-out trajectory/state's standard deviation,
+then averages trajectories equally. Constant-state normalization is an explicit
+abstention. Candidate expression evaluation uses strict symbolic arithmetic, rather
+than a baseline's protected numerical operators. Unknown symbols and unsupported
+syntax are reported, without inventing parameters or substituting another RHS.
+
+The declared reference must reproduce the observed trajectories within the frozen
+tolerance before a candidate rollout is scored. Reference disagreement, incomplete
+systems, unparsed/nonfinite RHS, divergence, solver failure and scoring limits retain
+their statuses and target denominators. A failed trajectory gives no finite overall
+trajectory score. This validation does not certify noisy Robertson derivatives or
+online stability. Reference/test observations are never used for model fitting or
+candidate selection. System scoring time is recorded separately from target fit time.
+
+Reference rows use the shared observation scoring code without fitting coefficients.
+Declared formula/generator/coefficient references can provide a numerical error floor;
+unverified source references remain diagnostics. Missing or unsupported truth is an
+explicit abstention. Reference recovery and ranking are ineligible.
+
+`frozen-report-v1` validates manifest SHA256, row identity/timing and declared targets.
+It isolates metric/data/execution protocols, task, profile, scoring settings and CPU/GPU.
+Error means average targets within instance, instances within dataset, datasets within
+family, families within seed, then seeds equally. Available-success means expose
+evaluable target coverage. Recovery lower bounds retain eligible failed/unparsed rows
+as zero. Bootstrap resamples whole seeds (2000 samples, 95% percentile interval,
+deterministic manifest-derived RNG); fewer than two evaluable seeds have no CI.
+Status counts and success denominators include missing terminal outputs. All source
+metadata remain unchanged; input hashes accompany standalone PNG/PDF figures.

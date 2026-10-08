@@ -173,6 +173,11 @@ def dataset_metadata(name, task, *, family=None):
     from ._provenance import source_evidence
 
     card["source_evidence"] = source_evidence(name)
+    from ._core_sources import ASSETS, evidence
+
+    if card["source_paths"] and all(path in ASSETS for path in card["source_paths"]):
+        card["source_status"] = "packaged_definition_verified" if task == "sr" else "upstream_byte_verified"
+        card["source_evidence"] = evidence(card["source_paths"])
     return deepcopy(card)
 
 

@@ -9,6 +9,7 @@ import heapq
 import os
 import pickle
 import random
+import time
 from abc import ABCMeta, abstractmethod
 
 import numpy as np
@@ -67,7 +68,12 @@ class DLGA(BaseGa):
 
     _parameter: dict = {}
 
-    def __init__(self, epi, input_dim, max_iter=50000, device=None):
+    def __init__(self, epi, input_dim, max_iter=50000, device=None,
+                 precision="float32", learning_rate=0.001, lbfgs_max_iter=0,
+                 hidden_layers=5, hidden_width=50, target_derivative="auto",
+                 learning_rate_decay=1.0, bias_init_scale=0.0,
+                 least_squares_nfev=0, surrogate_time_fraction=0.7,
+                 least_squares_tolerance=1e-12):
         """Initialize DLGA model.
 
         Args:
@@ -76,6 +82,26 @@ class DLGA(BaseGa):
             device: PyTorch device string. If omitted, use CUDA when available.
         """
         super().__init__()
+        if precision not in {"float32", "float64"}:
+            raise ValueError("precision must be float32 or float64")
+        if target_derivative not in {"auto", "u_t", "u_tt"}:
+            raise ValueError("target_derivative must be auto, u_t, or u_tt")
+        if not isinstance(least_squares_nfev, int) or least_squares_nfev < 0:
+            raise ValueError("least_squares_nfev must be a nonnegative integer")
+        if not 0 < surrogate_time_fraction < 1:
+            raise ValueError("surrogate_time_fraction must lie between 0 and 1")
+        if not np.isfinite(least_squares_tolerance) or least_squares_tolerance <= np.finfo(float).eps:
+            raise ValueError("least_squares_tolerance must exceed machine epsilon")
+        self.dtype = getattr(torch, precision)
+        self.numpy_dtype = getattr(np, precision)
+        self.learning_rate = learning_rate
+        self.learning_rate_decay = learning_rate_decay
+        self.lbfgs_max_iter = lbfgs_max_iter
+        self.target_derivative = target_derivative
+        self.bias_init_scale = bias_init_scale
+        self.least_squares_nfev = least_squares_nfev
+        self.surrogate_time_fraction = surrogate_time_fraction
+        self.least_squares_tolerance = least_squares_tolerance
         self.max_length = 5
         self.partial_prob = 0.6
         self.genes_prob = 0.6
@@ -90,15 +116,18 @@ class DLGA(BaseGa):
             device if device is not None else ("cuda" if torch.cuda.is_available() else "cpu")
         )
         self.Net = NN(
-            Num_Hidden_Layers=5,
-            Neurons_Per_Layer=50,
+            Num_Hidden_Layers=hidden_layers,
+            Neurons_Per_Layer=hidden_width,
             Input_Dim=input_dim,
             Output_Dim=1,
-            Data_Type=torch.float32,
+            Data_Type=self.dtype,
             Device=self.device,
             Activation_Function="Sin",
             Batch_Norm=False,
         )
+        if bias_init_scale:
+            for layer in self.Net.Layers[:-1]:
+                torch.nn.init.uniform_(layer.bias, -bias_init_scale, bias_init_scale)
 
         self.max_iter = max_iter
         self.eq_latex = ""
@@ -144,13 +173,18 @@ class DLGA(BaseGa):
             X_valid = X_train
             y_valid = y_train
 
-        # Convert to tensors
-        X_train = torch.from_numpy(X_train.astype(np.float32)).to(self.device)
-        y_train = torch.from_numpy(y_train.astype(np.float32)).to(self.device)
-        X_valid = torch.from_numpy(X_valid.astype(np.float32)).to(self.device)
+        # Keep validation and training responses as columns to avoid an
+        # accidental N-by-N broadcast when callers provide one-dimensional y.
+        y_valid = np.asarray(y_valid, dtype=self.numpy_dtype).reshape(-1, 1)
+        X_train = torch.from_numpy(X_train.astype(self.numpy_dtype)).to(self.device)
+        y_train = torch.from_numpy(y_train.astype(self.numpy_dtype)).to(self.device)
+        X_valid = torch.from_numpy(X_valid.astype(self.numpy_dtype)).to(self.device)
 
         # Setup optimizer
-        NN_optimizer = torch.optim.Adam([{"params": self.Net.parameters()}])
+        NN_optimizer = torch.optim.Adam(self.Net.parameters(), lr=self.learning_rate)
+        scheduler = torch.optim.lr_scheduler.StepLR(
+            NN_optimizer, step_size=max(1, self.max_iter // 3), gamma=self.learning_rate_decay
+        )
         MSELoss = torch.nn.MSELoss()
         validate_error = []
 
@@ -171,6 +205,7 @@ class DLGA(BaseGa):
             loss_validate = np.mean((prediction_validate.detach().cpu().numpy() - y_valid) ** 2)
             loss.backward()
             NN_optimizer.step()
+            scheduler.step()
 
             if (iter + 1) % 500 == 0:
                 validate_error.append(loss_validate)
@@ -183,6 +218,47 @@ class DLGA(BaseGa):
             self.train_loss_history.append(float(loss))
             self.val_loss_history.append(float(loss_validate))
 
+        if self.lbfgs_max_iter or self.least_squares_nfev:
+            # Refine the observational surrogate using the same training
+            # points. No PDE residual, derivatives, or reference coefficients
+            # enter this optimizer.
+            from kd.benchmark_deadline import check_deadline
+
+            if validate_error:
+                best_adam_epoch = (validate_error.index(min(validate_error)) + 1) * 500
+                self.Net.load_state_dict(torch.load(
+                    f"model_save/Net_{best_adam_epoch}.pkl", map_location=self.device,
+                    weights_only=True,
+                ))
+
+            if self.least_squares_nfev:
+                self._refine_observations(X_train, y_train.reshape(-1, 1))
+            else:
+                optimizer = torch.optim.LBFGS(
+                    self.Net.parameters(), max_iter=self.lbfgs_max_iter,
+                    tolerance_grad=1e-12, tolerance_change=1e-15,
+                    line_search_fn="strong_wolfe",
+                )
+
+                def closure():
+                    check_deadline()
+                    optimizer.zero_grad()
+                    loss = MSELoss(self.Net(X_train), y_train.reshape(-1, 1))
+                    loss.backward()
+                    return loss
+
+                optimizer.step(closure)
+            with torch.no_grad():
+                refined_validation = float(np.mean(
+                    (self.Net(X_valid).cpu().numpy() - y_valid) ** 2
+                ))
+            # Use the internal validation split to compare checkpoints.
+            if not validate_error or refined_validation < min(validate_error):
+                self.best_epoch = "refined"
+                torch.save(self.Net.state_dict(), "model_save/Net_refined.pkl")
+                self.val_loss_history.append(refined_validation)
+                return self.Net, self.best_epoch
+
         if not validate_error:
             self.best_epoch = self.max_iter
             torch.save(self.Net.state_dict(), f"model_save/Net_{self.best_epoch}.pkl")
@@ -190,6 +266,75 @@ class DLGA(BaseGa):
 
         self.best_epoch = (validate_error.index(min(validate_error)) + 1) * 500
         return self.Net, self.best_epoch
+
+    def _refine_observations(self, X, y):
+        """Optional neural least-squares refinement using observations only.
+
+        Exact parameter Jacobians improve conditioning near the numerical
+        floor; neither PDE derivatives nor a reference expression are inputs.
+        """
+        from scipy.optimize import least_squares
+
+        from kd.benchmark_deadline import current_deadline
+
+        entries = [(name, parameter.shape, parameter.numel())
+                   for name, parameter in self.Net.named_parameters()]
+        initial = torch.cat([parameter.detach().reshape(-1)
+                             for parameter in self.Net.parameters()]).cpu().numpy()
+        deadline = current_deadline()
+        stop_at = (time.perf_counter() + deadline.remaining() * self.surrogate_time_fraction
+                   if deadline else None)
+        best = [float("inf"), initial.copy()]
+
+        class SurrogateDeadline(Exception):
+            pass
+
+        def check():
+            if stop_at is not None and time.perf_counter() >= stop_at:
+                raise SurrogateDeadline()
+
+        def predictions(vector):
+            parameters, start = {}, 0
+            for name, shape, size in entries:
+                parameters[name] = vector[start:start+size].reshape(shape)
+                start += size
+            return torch.func.functional_call(self.Net, parameters, (X,)).reshape(-1)
+
+        jacobian = torch.func.jacfwd(predictions)
+
+        def residual(values):
+            check()
+            vector = torch.as_tensor(values, dtype=self.dtype, device=self.device)
+            with torch.no_grad():
+                error = (predictions(vector) - y.reshape(-1)).cpu().numpy()
+            mse = float(np.mean(error**2))
+            if mse < best[0]:
+                best[:] = [mse, values.copy()]
+            return error
+
+        def jac(values):
+            check()
+            vector = torch.as_tensor(values, dtype=self.dtype, device=self.device)
+            return jacobian(vector).detach().cpu().numpy()
+
+        try:
+            fit = least_squares(
+                residual, initial, jac=jac, method="lm" if len(X) >= len(initial) else "trf",
+                x_scale="jac", ftol=self.least_squares_tolerance,
+                xtol=self.least_squares_tolerance, gtol=self.least_squares_tolerance,
+                max_nfev=self.least_squares_nfev,
+            )
+            self.surrogate_optimization_ = dict(nfev=fit.nfev, status=fit.status,
+                                                training_mse=best[0], stop="native_return")
+        except SurrogateDeadline:
+            self.surrogate_optimization_ = dict(training_mse=best[0], stop="time_reserve")
+        vector = torch.as_tensor(best[1], dtype=self.dtype, device=self.device)
+        start = 0
+        with torch.no_grad():
+            for parameter in self.Net.parameters():
+                size = parameter.numel()
+                parameter.copy_(vector[start:start+size].reshape(parameter.shape))
+                start += size
 
     def generate_meta_data(self, X):
         """Generate meta-data for PDE discovery.
@@ -202,7 +347,7 @@ class DLGA(BaseGa):
         Returns:
             tuple: (Theta matrix, cache)
         """
-        X = torch.from_numpy(X.astype(np.float32)).to(self.device)
+        X = torch.from_numpy(X.astype(self.numpy_dtype)).to(self.device)
         X.requires_grad_(True)
 
         self.Net.load_state_dict(
@@ -319,7 +464,8 @@ class DLGA(BaseGa):
         MSE_true_tt = np.sum(np.array(res_tt) ** 2) / total
 
         # Choose better fit between first and second order
-        if MSE_true < MSE_true_tt:
+        if self.target_derivative == "u_t" or (
+                self.target_derivative == "auto" and MSE_true < MSE_true_tt):
             name = "u_t"
             MSE = MSE_true + self.epi * length_penalty_coef
             return coef, MSE, MSE_true, name
@@ -474,7 +620,7 @@ class DLGA(BaseGa):
                     break
 
                 item = chrom[i]
-                coef_str = str(np.round(coef[i, 0], 4))
+                coef_str = str(float(coef[i, 0]))
                 string.append(coef_str)
                 string.append("*")
 

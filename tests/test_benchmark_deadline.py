@@ -188,8 +188,14 @@ def test_llmsr_cancels_slow_http_and_keeps_best_without_live_children(monkeypatc
         server.server_close()
 
 
-def test_llmsr_evaluator_deadline_cleans_up_and_no_candidate_fails():
+def _slow_evaluation_worker(*args):
+    """Force an unfinished evaluator independently of process startup speed."""
+    time.sleep(60)
+
+
+def test_llmsr_evaluator_deadline_cleans_up_and_no_candidate_fails(monkeypatch):
     from kd.model.kd_llmsr import KD_LLMSR
+    monkeypatch.setattr("kd.model.kd_llmsr._evaluation_worker", _slow_evaluation_worker)
     model = KD_LLMSR(endpoint="http://127.0.0.1:1", num_evaluators=2)
     model.variable_names_ = ["x1"]
     model._fit_deadline = FitDeadline(0.1)

@@ -16,7 +16,9 @@ conda install pytorch=1.0 cudatoolkit=9.0 -c pytorch
 - aTEAM.nn.modules.MK: [Moment matrix](https://arxiv.org/abs/1710.09668) & convolution kernel convertor
 - ...
 
-For more usages pls refer to aTEAM/test/*.py
+The standalone upstream tests have been removed from this vendored runtime.
+Project adapter checks live in the repository's `tests/` directory; see
+[`../README.md`](../README.md) for usage and upstream sources.
 
 # PDE-Net
 

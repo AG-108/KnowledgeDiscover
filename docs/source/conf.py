@@ -33,6 +33,10 @@ extensions = [
     "sphinx.ext.intersphinx",  # Enable cross-document references.
 ]
 
+# Core-only documentation builds do not install native baseline runtimes.
+autodoc_mock_imports = ["torch", "tensorboard", "sklearn", "gplearn", "pysindy", "pysr",
+                       "physo", "pyoperon", "deepymod", "sympytorch", "commentjson", "tqdm"]
+
 # Add any paths that contain templates here, relative to this directory.
 templates_path = ["_templates"]
 

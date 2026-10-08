@@ -27,7 +27,7 @@ class KD_DLGA(DLGA):
 
     def generate_meta_data(self, X):
         self.Net.to(self.device)
-        X_tensor = torch.as_tensor(np.asarray(X, dtype=np.float32), device=self.device)
+        X_tensor = torch.as_tensor(np.asarray(X, dtype=self.numpy_dtype), device=self.device)
         X_tensor.requires_grad_(True)
         self.Net.load_state_dict(
             torch.load(
@@ -136,7 +136,9 @@ class KD_DLGA(DLGA):
             if i >= len(coef):
                 break
             item = chrom[i]
-            coef_str = str(np.round(coef[i, 0], 4))
+            # Preserve the fitted coefficient; display rounding changes the
+            # exported equation and prevents reproducible precision checks.
+            coef_str = str(float(coef[i, 0]))
             term_str = "*".join([name[gene] for gene in item if gene < len(name)])
             if not term_str:
                 continue
@@ -303,7 +305,7 @@ class KD_DLGA(DLGA):
             raise
 
     def predict(self, mesh_data):
-        X_tensor = torch.from_numpy(mesh_data.astype(np.float32)).to(
+        X_tensor = torch.from_numpy(mesh_data.astype(self.numpy_dtype)).to(
             self.device
         )  # Convert to tensor and predict
         with torch.no_grad():

@@ -12,14 +12,14 @@ Changes vs. the original:
   wrapper trains.
 """
 
-import math
 import logging
+import math
+import time
 
-from tqdm import tqdm
 import numpy as np
-
 import torch
 from torch.utils.data.dataloader import DataLoader
+from tqdm import tqdm
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +40,7 @@ class TrainerConfig:
     ckpt_path = None
     num_workers = 0  # for DataLoader
     show_progress = False
+    stop_at = None
 
     def __init__(self, **kwargs):
         for k, v in kwargs.items():
@@ -62,6 +63,8 @@ class Trainer:
 
     def train(self):
         model, config = self.model, self.config
+        self.completed_epochs = 0
+        self.training_batches = 0
         optimizer = model.configure_optimizers(config)
 
         def run_epoch(split):
@@ -85,6 +88,8 @@ class Trainer:
                 else enumerate(loader)
             )
             for it, (x, y, p, v) in pbar:
+                if config.stop_at is not None and time.perf_counter() >= config.stop_at:
+                    return False
 
                 x = x.to(self.device, non_blocking=use_pinned_memory)  # input equation
                 y = y.to(self.device, non_blocking=use_pinned_memory)  # output equation
@@ -102,6 +107,7 @@ class Trainer:
                     loss.backward()
                     torch.nn.utils.clip_grad_norm_(model.parameters(), config.grad_norm_clip)
                     optimizer.step()
+                    self.training_batches += 1
 
                     if config.lr_decay:
                         self.tokens += (y >= 0).sum()
@@ -126,12 +132,15 @@ class Trainer:
                 test_loss = float(np.mean(losses))
                 logger.info("test loss: %f", test_loss)
                 return test_loss
+            return True
 
         self.best_loss = float('inf') if self.best_loss is None else self.best_loss
         self.tokens = 0
         for epoch in range(config.max_epochs):
 
-            run_epoch('train')
+            if not run_epoch('train'):
+                break
+            self.completed_epochs += 1
             if self.test_dataset is not None:
                 test_loss = run_epoch('test')
 

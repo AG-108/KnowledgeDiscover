@@ -7,11 +7,16 @@ import hashlib
 import json
 import math
 import os
+import platform
 import shutil
+import subprocess
+from pathlib import Path
 
-RESOURCE_PROTOCOL = "slots-v1"
+from kd.benchmark_identity import stable_resources
+
+RESOURCE_PROTOCOL = "slots-v2"
 PARALLELISM_PROTOCOL = "d2-parallel-v1"
-CPU_METHODS = frozenset({"dscv", "gplearn", "pysr", "pyoperon", "sindy", "pysindy",
+CPU_METHODS = frozenset({"dscv", "gplearn", "pysr", "pyoperon", "sindy", "pysindy", "sisso",
                          "pdefind", "weakform", "sga", "pdefind_nd", "implicit_pde", "green_basis"})
 GPU_METHODS = frozenset({"dso", "symbolicgpt", "physo", "e2e", "eqgpt", "deepmod", "dlga",
                          "pdenet", "spr", "llmsr", "green_dso"})
@@ -29,7 +34,8 @@ def slot_for_model(model):
 
 
 def slot_policy(slot, *, cpus=None, gpu="0", memory_limit_mb=28_000_000_000 / (1024 ** 2),
-                sample_interval=0.05, service_pids=()):
+                sample_interval=0.05, service_pids=(), service_identity=None, service_bindings=None,
+                hardware_profile=None):
     if slot not in {"cpu", "gpu"}:
         raise ValueError(f"Invalid resource slot: {slot!r}")
     cpus = list(range(4) if slot == "cpu" else range(4, 8)) if cpus is None else list(cpus)
@@ -46,18 +52,34 @@ def slot_policy(slot, *, cpus=None, gpu="0", memory_limit_mb=28_000_000_000 / (1
         raise ValueError("External GPU services belong to the GPU slot")
     if any(isinstance(pid, bool) or not isinstance(pid, int) or pid <= 0 for pid in pids):
         raise ValueError("Service PIDs must be positive integers")
-    return dict(version=RESOURCE_PROTOCOL, parallelism_protocol=PARALLELISM_PROTOCOL,
+    result = dict(version=RESOURCE_PROTOCOL, parallelism_protocol=PARALLELISM_PROTOCOL,
                 slot=slot, cpu_affinity=cpus, threads=4,
                 cuda_visible_devices="" if slot == "cpu" else gpu,
                 memory_limit_mb=float(memory_limit_mb), sample_interval=float(sample_interval),
                 service_pids=sorted(set(pids)))
+    if service_identity is not None:
+        result["service_identity"] = service_identity
+    if service_bindings is not None:
+        result["service_bindings"] = service_bindings
+    if hardware_profile is not None:
+        if (not isinstance(hardware_profile, dict) or not hardware_profile.get("cpu_model")
+                or not hardware_profile.get("machine")
+                or (slot == "gpu" and not hardware_profile.get("gpu"))):
+            raise ValueError("Portable slots require an explicit CPU/GPU hardware profile")
+        result.update(version="slots-v3", hardware_profile=copy.deepcopy(hardware_profile))
+    return result
 
 
 def validate_policy(policy):
     expected = slot_policy(policy["slot"], cpus=policy["cpu_affinity"],
                            gpu=policy["cuda_visible_devices"] or "0",
                            memory_limit_mb=policy["memory_limit_mb"],
-                           sample_interval=policy["sample_interval"], service_pids=policy["service_pids"])
+                           sample_interval=policy["sample_interval"], service_pids=policy["service_pids"],
+                           service_identity=policy.get("service_identity"),
+                           service_bindings=policy.get("service_bindings"),
+                           hardware_profile=policy.get("hardware_profile"))
+    if policy.get("version") == "slots-v1":
+        expected["version"] = "slots-v1"
     # Preserve the original C5 policy for existing immutable histories; new slot
     # bindings carry a distinct parallelism version and therefore a new hash.
     if "parallelism_protocol" not in policy:
@@ -68,7 +90,7 @@ def validate_policy(policy):
 
 
 def policy_hash(policy):
-    return (hashlib.sha256(json.dumps(policy, sort_keys=True).encode()).hexdigest()
+    return (hashlib.sha256(json.dumps(stable_resources(policy), sort_keys=True).encode()).hexdigest()
             if policy else "unconstrained")
 
 
@@ -128,10 +150,60 @@ def validate_host(policy):
         raise ValueError(f"Slot CPUs {policy['cpu_affinity']} outside available affinity {available}")
     if os.name != "nt" and not shutil.which("taskset"):
         raise RuntimeError("D2 slot execution requires taskset on Linux")
+    if policy.get("version") == "slots-v3":
+        current = host_hardware_profile(policy["slot"], policy["cuda_visible_devices"] or "0")
+        if current != policy["hardware_profile"]:
+            raise ValueError("Frozen slot CPU/GPU hardware profile changed")
     for pid in policy["service_pids"]:
         process = psutil.Process(pid)
+        bindings = {binding["pid"]: binding for binding in policy.get("service_bindings", [])}
+        if pid in bindings and process.create_time() != bindings[pid]["create_time"]:
+            raise ValueError(f"Service PID {pid} was reused by a different process")
         if set(process.cpu_affinity()) != set(policy["cpu_affinity"]):
             raise ValueError(f"Service PID {pid} must already be bound to the GPU slot CPUs")
+
+
+def bind_services(pids):
+    import psutil
+
+    return [{"pid": pid, "create_time": psutil.Process(pid).create_time()} for pid in sorted(set(pids))]
+
+
+def host_hardware_profile(slot, gpu="0"):
+    """Bind portable allocations to CPU model and GPU model/memory/driver."""
+    cpuinfo = Path("/proc/cpuinfo")
+    models = set()
+    if cpuinfo.is_file():
+        models = {line.split(":", 1)[1].strip() for line in cpuinfo.read_text().splitlines()
+                  if line.startswith("model name")}
+    else:
+        models = {platform.processor()}
+    if len(models) != 1 or not next(iter(models)):
+        raise ValueError("Cannot establish one CPU model for portable slots")
+    profile = {"machine": platform.machine(), "cpu_model": next(iter(models)), "gpu": None}
+    if slot == "gpu":
+        output = subprocess.run(
+            ["nvidia-smi", "--id", gpu, "--query-gpu=name,memory.total,driver_version",
+             "--format=csv,noheader,nounits"], capture_output=True, text=True, timeout=10, check=True,
+        ).stdout.strip().splitlines()
+        if len(output) != 1:
+            raise ValueError("Portable GPU slot requires exactly one device")
+        name, memory, driver = [field.strip() for field in output[0].split(",")]
+        profile["gpu"] = {"name": name, "memory_mb": int(memory), "driver_version": driver}
+    return profile
+
+
+def gpu_uuid(device):
+    """Normalize physical index/UUID using the actual host device inventory."""
+    result = subprocess.run(["nvidia-smi", "--query-gpu=index,uuid", "--format=csv,noheader"],
+                            capture_output=True, text=True, timeout=10, check=True)
+    devices = {}
+    for line in result.stdout.splitlines():
+        index, uuid = (part.strip() for part in line.split(",", 1))
+        devices[index] = devices[uuid] = uuid
+    if device not in devices:
+        raise ValueError(f"GPU device {device!r} is not present on this host")
+    return devices[device]
 
 
 class ProcessTreeMonitor:
@@ -191,6 +263,8 @@ class ProcessTreeMonitor:
                     if root.pid != self.worker_pid:
                         self.service_keys.add(key)
             except self.psutil.NoSuchProcess:
+                if root.pid != self.worker_pid:
+                    self.error = "service_lost"
                 pass
             except self.psutil.AccessDenied:
                 self.error = "access_denied"

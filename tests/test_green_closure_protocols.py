@@ -330,7 +330,8 @@ def test_new_protocol_isolation_and_default_queue_preserved():
     assert modern["green_protocol_version"] == "green-v1"
     catalog, _ = b.dataset_catalog()
     cases = b.build_experiments(catalog, profile="full")
-    assert len(cases) == 3024
+    assert len(cases) == 3311
+    assert len([c for c in cases if c["model"] != "sisso"]) == 3024
     assert all(not catalog[c["dataset"]].get("opt_in") for c in cases)
     assert [c["model"] for c in b.build_experiments(catalog, datasets=["green_laplace"])] == [
         "green_dso",

@@ -13,9 +13,22 @@ def pytest_addoption(parser):
         action="store_true",
         help="Fail instead of skipping when a marked external dataset is absent.",
     )
+    parser.addoption(
+        "--require-sisso", action="store_true",
+        help="Fail instead of skipping SISSO integration tests when native bindings are absent.",
+    )
 
 
 def pytest_runtest_setup(item):
+    if item.get_closest_marker("native_sisso"):
+        from kd.model.kd_sisso import SISSOModel
+
+        try:
+            SISSOModel.check_available()
+        except ImportError as exc:
+            if item.config.getoption("--require-sisso"):
+                pytest.fail(str(exc), pytrace=False)
+            pytest.skip(str(exc))
     for marker in item.iter_markers("external_data"):
         missing = [
             pattern

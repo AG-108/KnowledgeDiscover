@@ -3,6 +3,7 @@
 import copy
 import pickle
 import random
+import time
 from typing import Any, List, Optional, Sequence, Tuple
 
 import numpy as np
@@ -79,6 +80,7 @@ class KD_SymbolicGPT(BaseEstimator):
         seed: int = 0,
         device: Optional[str] = None,
         verbose: bool = False,
+        pretrain_time_fraction: float = 0.6,
     ):
         """
         Parameters
@@ -153,6 +155,9 @@ class KD_SymbolicGPT(BaseEstimator):
         self.seed = seed
         self.device = device
         self.verbose = verbose
+        if not 0 < pretrain_time_fraction < 1:
+            raise ValueError("pretrain_time_fraction must be between zero and one")
+        self.pretrain_time_fraction = pretrain_time_fraction
 
         if self.max_conditioning_points is not None and self.max_conditioning_points < 1:
             raise ValueError("max_conditioning_points must be positive or None")
@@ -171,6 +176,9 @@ class KD_SymbolicGPT(BaseEstimator):
         attempts = 0
         max_attempts = self.pretrain_corpus_size * 5
         while len(corpus) < self.pretrain_corpus_size and attempts < max_attempts:
+            cutoff = getattr(self, "_pretrain_stop_at", None)
+            if cutoff is not None and time.perf_counter() >= cutoff and len(corpus) >= 2:
+                break
             attempts += 1
             try:
                 clean_eqn, skeleton_eqn = generate_equation(
@@ -305,6 +313,11 @@ class KD_SymbolicGPT(BaseEstimator):
 
     def _pretrain(self, num_vars, num_points, device):
         """Generate a synthetic corpus and train independently of target values."""
+        from kd.benchmark_deadline import current_deadline
+
+        deadline = current_deadline()
+        self._pretrain_stop_at = (time.perf_counter() + deadline.remaining() *
+                                 self.pretrain_time_fraction) if deadline else None
         corpus = self._build_pretrain_corpus(num_vars, num_points)
 
         text = "".join("<" + str(rec["Skeleton"]) + ">" for rec in corpus)
@@ -346,9 +359,13 @@ class KD_SymbolicGPT(BaseEstimator):
             learning_rate=self.learning_rate,
             num_workers=self.dataloader_workers,
             show_progress=self.verbose,
+            stop_at=self._pretrain_stop_at,
         )
         trainer = Trainer(model, train_dataset, None, tconf, device)
         trainer.train()
+        self.pretraining_.update(corpus_size=len(corpus),
+                                completed_epochs=getattr(trainer, "completed_epochs", None),
+                                training_batches=getattr(trainer, "training_batches", None))
         return model.eval(), train_dataset
 
     def _fit_candidates(self, model, train_dataset, X, y,
@@ -370,6 +387,12 @@ class KD_SymbolicGPT(BaseEstimator):
         validation = self.candidate_validation_
         remaining = self.num_candidates
         while remaining > 0:
+            from kd.benchmark_deadline import current_deadline
+
+            deadline = current_deadline()
+            if deadline is not None and deadline.expired():
+                deadline.stopped = True
+                break
             batch_size = min(self.candidate_batch_size, remaining)
             sampled_batch = sample_from_model(
                 model,
@@ -385,6 +408,9 @@ class KD_SymbolicGPT(BaseEstimator):
             remaining -= batch_size
 
             for sampled in sampled_batch:
+                if deadline is not None and deadline.expired():
+                    deadline.stopped = True
+                    break
                 validation["sampled"] += 1
                 decoded = "".join(train_dataset.itos[int(i)] for i in sampled)
                 prefix, end_token, _ = decoded.partition(">")
@@ -432,6 +458,8 @@ class KD_SymbolicGPT(BaseEstimator):
         self.candidates_ = candidates
         self.model_ = model
         self.train_dataset_ = train_dataset
+        self.stop_reason_ = "time_limit" if deadline is not None and deadline.expired() else "budget_exhausted"
+        self.stop_reason_source_ = "fit_deadline" if self.stop_reason_ == "time_limit" else "candidate_budget"
 
         if self.verbose:
             print(f"[SymbolicGPT] best skeleton: {best_skeleton}")

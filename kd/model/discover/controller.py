@@ -79,7 +79,7 @@ class Controller(object):
     prior : dso.prior.JointPrior
         JointPrior object used to adjust probabilities during sampling.
 
-    state_manager: dso.tf_state_manager.StateManager
+    state_manager: discover.state_manager.StateManager
         Object that handles the state features to be used
 
     summary : bool

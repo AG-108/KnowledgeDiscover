@@ -15,10 +15,10 @@ model/dataset/seed 组合（case）先枚举 instance/target，再为每个 targ
 ```text
 configs/benchmark/
 ├── benchmark.json                # 总配置：任务、profile、设备、输出和通用运行参数
-├── core_ode_track.json           # Core ODE：8 系统 × 11 方法 × 5 seeds = 440 cases
+├── core_ode_track.json           # Core ODE：8 系统 × 12 方法 × 5 seeds = 480 cases
 ├── core_v2*.json                 # 集成测试套件
 ├── llmsr_llama31_8b_1k.json      # LLM-SR 严格 1k-call 对照批次
-├── baselines/<name>.json         # 23 个方法键 的模型参数及 smoke/full 差异
+├── baselines/<name>.json         # 24 个方法键的模型参数及 smoke/full 差异
 └── tuning/                       # 探索性配置（含 per-dataset override），不进主表
 ```
 
@@ -157,7 +157,8 @@ Heat 缺发布的系数真值；不把从数据拟合的扩散系数登记为真
 `load_constitutive_instances` 展开，材料身份依据文件名而非跨研究的人工身份核验。
 空间块划分只使用坐标，不使用标签；这仍是同工况空间泛化，不声称跨几何 OOD。
 
-默认 `full` 单 seed 枚举 **330 个独立名称、3024 cases、4470 个 target fits**（含不适用组合）。
+加入 SISSO 后，默认 `full` 单 seed 枚举 **330 个独立名称、3311 cases**（含不适用组合）。
+此前 23 方法的记录为 3024 cases / 4470 target fits；最新 target 容量应重新导出库存。
 TLC 当前 89/99 组合不适用；矩阵枚举不等于正式主轨已经冻结。
 已接入、来源阻塞、opt-in 名称及重复资产可用以下命令导出；无需训练模型：
 

@@ -22,6 +22,13 @@ EQGPT_STRUCTURE = {
 
 
 def training_overlap(model, dataset):
+    if model == "llmsr":
+        return {
+            "status": "unknown", "scope": "external LLM backbone pretraining",
+            "reason": "Benchmark equations may occur in training; no disjoint corpus lineage is available",
+            "evidence": ["kd/model/kd_llmsr.py; backbone supplied by external vLLM service"],
+            "observation_overlap": "unknown", "report_partition": "unknown_prior_exposure",
+        }
     if model == "eqgpt":
         evidence = [
             "kd/model/kd_eqgpt.py:_KNOWN_EQUATION_NAMES",

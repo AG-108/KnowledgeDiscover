@@ -129,7 +129,7 @@ def frozen_fixture(directory, *, seeds=(0, 1), omit=False):
     cases, rows = [], []
     for seed in seeds:
         case = ode_case()
-        case.update(name=f"case_s{seed}", seed=seed)
+        case.update(name=f"case_s{seed}", seed=seed, benchmark_role="main")
         cases.append(case)
         plan = []
         for i, row in enumerate(analytic_rows(case)):
@@ -307,3 +307,61 @@ def test_reference_worker_failure_remains_recovery_ineligible(tmp_path):
     row = benchmark._worker_failure(case, spec, {"timeout_phase": "score"}, tmp_path / "run.log")
     assert row["status"] == "timeout"
     assert row["recovery_eligible"] is False and row["reference_floor_eligible"] is False
+
+
+def test_frozen_recovery_retains_eligible_missing_targets(tmp_path):
+    digest = frozen_fixture(tmp_path, seeds=(0,), omit=True)
+    summary_path = tmp_path / "benchmark_summary.json"
+    summary = json.loads(summary_path.read_text())
+    summary[0]["exact_recovery"] = 1
+    summary_path.write_text(json.dumps(summary))
+    _, rows, _ = load_frozen(tmp_path, digest)
+    main, intervals, _ = tables(rows, digest)
+    assert main[0]["recovery_lower_bound_macro_mean"] == 0.5
+    recovery = next(r for r in intervals if r["metric"] == "recovery_lower_bound")
+    assert recovery["n_evaluable_targets"] == 2
+
+
+def test_pde_support_recovery_survives_summary_and_frozen_report(tmp_path):
+    catalog, _ = benchmark.dataset_catalog()
+    case = benchmark.build_experiments(catalog, models=["pdefind"], datasets=["burgers"])[0]
+    plan = [{"target_id": "i0000_t0000", "instance": "burgers", "target": "PDE",
+             "ground_truth": case["ground_truth"], "recovery_eligible": True}]
+    row = benchmark._base_row(case, "burgers", "PDE")
+    row.update(benchmark.pde_structure_metrics("-u*u_x+0.1*u_xx", case["ground_truth"]))
+    row.update(status="ok", target_id=plan[0]["target_id"], execution_policy=benchmark.execution_policy(5))
+    benchmark.write_json(tmp_path / "cases" / case["name"] / "targets.json", plan)
+    benchmark.write_json(tmp_path / "benchmark_manifest.json",
+                         {"cases": [case], "execution_policy": benchmark.execution_policy(5)})
+    benchmark.save_summary(tmp_path, [row])
+    digest = hashlib.sha256((tmp_path / "benchmark_manifest.json").read_bytes()).hexdigest()
+    _, rows, _ = load_frozen(tmp_path, digest)
+    main, _, _ = tables(rows, digest)
+    assert main[0]["recovery_lower_bound_macro_mean"] == 1
+    assert main[0]["recovery_metric"] == "pde_support_recovery"
+
+
+def test_uncertified_reference_never_grants_recovery_to_missing_or_failed_target(tmp_path):
+    digest = frozen_fixture(tmp_path, seeds=(0,), omit=True)
+    path = tmp_path / "benchmark_manifest.json"
+    manifest = json.loads(path.read_text())
+    manifest["cases"][0]["dataset_metadata"]["reference_status"] = "source_declared_not_certified"
+    path.write_text(json.dumps(manifest))
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    _, rows, _ = load_frozen(tmp_path, digest)
+    missing = next(r for r in rows if r["status"] == "missing")
+    assert missing["recovery_eligible"] is False
+    case = manifest["cases"][0]
+    failed = benchmark._worker_failure(case, {"target_id": "i0000_t0000", "instance": case["dataset"],
+                                             "target": "d(x)/dt", "ground_truth": "v"}, {}, tmp_path / "log")
+    assert failed["recovery_eligible"] is False
+
+
+def test_diagnostic_and_oracle_rows_have_no_main_ranking():
+    case = ode_case()
+    row = analytic_rows(case)[0]
+    row.update(benchmark_role="main")
+    diagnostics = [{**row, "benchmark_role": role, "exact_recovery": True}
+                   for role in ("diagnostic", "oracle")]
+    main, _, _ = tables([row, *diagnostics], "1" * 64)
+    assert main[0]["n_target_rows"] == 1

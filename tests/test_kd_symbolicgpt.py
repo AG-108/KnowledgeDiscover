@@ -213,6 +213,27 @@ def test_fit_keeps_only_valid_finite_candidates(sampled_model):
     assert model.candidate_validation_["accepted"] == 2
 
 
+def test_fit_deadline_retains_an_already_fitted_candidate(sampled_model, monkeypatch):
+    import kd.model.kd_symbolicgpt as adapter
+    from kd.benchmark_deadline import current_deadline, deadline_scope
+
+    model = sampled_model(["<C*x1+C>", "<x1>"])
+    model.candidate_batch_size = 1
+    fitter = adapter.fit_constants
+
+    def fit_then_expire(*args):
+        result = fitter(*args)
+        current_deadline().expires = 0
+        return result
+
+    monkeypatch.setattr(adapter, "fit_constants", fit_then_expire)
+    with deadline_scope(10):
+        model.fit([[0.0], [1.0], [2.0]], [1.0, 3.0, 5.0])
+    assert model.stop_reason_ == "time_limit"
+    assert model.candidate_validation_["sampled"] == 1
+    np.testing.assert_allclose(model.predict([[0.5]]), [2.0], atol=1e-5)
+
+
 @pytest.mark.parametrize("sample", ["<x1+>", "<x1", "<x1_>", "<<x1>", "<>"])
 def test_fit_reports_no_valid_candidates(sampled_model, sample):
     model = sampled_model([sample])

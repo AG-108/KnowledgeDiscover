@@ -72,11 +72,11 @@ def test_full_matrix_covers_catalog_and_examples():
 def test_domain_datasets_are_included_in_the_full_matrix():
     catalog, _ = benchmark.dataset_catalog()
     expected = {
-        "cyt_flatplate": ("sr", 9),
-        "cyt_naca0012": ("sr", 9),
-        "solid_dif": ("sr", 9),
-        "solid_strain_stress": ("sr", 9),
-        "solid_hardening": ("sr", 9),
+        "cyt_flatplate": ("sr", 10),
+        "cyt_naca0012": ("sr", 10),
+        "solid_dif": ("sr", 10),
+        "solid_strain_stress": ("sr", 10),
+        "solid_hardening": ("sr", 10),
         "vgs_I_0-100": ("pde", 13),
         "vgs_I_100-200": ("pde", 13),
         "vgs_II_0-1000": ("pde", 13),
@@ -305,6 +305,98 @@ def test_gplearn_exp_primitive_and_physo_machine_expression():
             return np.asarray([sp.Symbol("x1") + sp.Float("0.33333334")], dtype=object)
 
     assert benchmark._physo_expression_text(FakeExpression()) == "x1 + 0.33333334"
+
+
+def test_physo_constant_export_does_not_mutate_prediction_state():
+    from types import SimpleNamespace
+
+    calls = []
+
+    class DeviceValues:
+        def detach(self):
+            calls.append("detach")
+            return self
+
+        def cpu(self):
+            calls.append("cpu")
+            return np.array([[0.731]])
+
+    class Expression:
+        def __init__(self):
+            self.free_consts = SimpleNamespace(class_values=DeviceValues(), spe_values=DeviceValues())
+
+        def get_infix_sympy(self, **kwargs):
+            assert isinstance(self.free_consts.class_values, np.ndarray)
+            return ["0.731+x1"]
+
+    original = Expression()
+    original_table = original.free_consts
+    assert benchmark._physo_expression_text(original) == "0.731+x1"
+    assert original.free_consts is original_table
+    assert isinstance(original.free_consts.class_values, DeviceValues)
+    assert calls == ["detach", "cpu", "detach", "cpu"]
+
+
+def test_physo_export_simplifies_real_log_exp_without_forcing_branches():
+    import sympy as sp
+
+    class Expression:
+        def __init__(self, symbolic):
+            self.symbolic = symbolic
+
+        def get_infix_sympy(self, **kwargs):
+            return [self.symbolic]
+
+    x, y = sp.symbols("x1 x2")
+    wrapped = sp.log(sp.Float("2.07715672727505") * sp.exp(sp.Float("1.23456789004864") * x))
+    exported = benchmark._physo_expression_text(Expression(wrapped))
+    metrics = benchmark.expression_metrics(exported, "0.731+1.23456789*x1", ["x1"])
+    assert metrics["exact_recovery"] == 1
+    assert metrics["coefficient_error"] < 1e-5
+    original_values = sp.lambdify(x, wrapped, "numpy")(np.array([-3., 0., 3.]))
+    exported_values = sp.lambdify(x, sp.sympify(exported), "numpy")(np.array([-3., 0., 3.]))
+    np.testing.assert_allclose(exported_values, original_values, rtol=1e-14)
+    # Real factors alone do not justify log(x*y) = log(x)+log(y).
+    assert benchmark._physo_expression_text(Expression(sp.log(x*y))) == "log(x1*x2)"
+
+
+def test_physo_preserves_declared_ode_state_names(monkeypatch):
+    from types import ModuleType, SimpleNamespace
+
+    import torch
+
+    physo = ModuleType("physo")
+    physo.config = SimpleNamespace(config0=SimpleNamespace(config0={}))
+
+    class Expression:
+        def get_infix_sympy(self, **kwargs):
+            import sympy as sp
+
+            return [sp.Symbol("q") + sp.Symbol("v")]
+
+        def __call__(self, X):
+            return X.sum(axis=0)
+
+    def fit(X, y, **kwargs):
+        assert kwargs["X_names"] == ["q", "v"]
+        return Expression(), SimpleNamespace()
+
+    physo.SR = fit
+    learn = ModuleType("physo.learn")
+    monitoring = ModuleType("physo.learn.monitoring")
+    physo.learn, learn.monitoring = learn, monitoring
+    for module in (physo, learn, monitoring):
+        monkeypatch.setitem(sys.modules, module.__name__, module)
+    X = np.array([[1., 2.], [3., 4.]])
+    problem = dict(X_train=X, y_train=X.sum(axis=1), X_test=X, y_test=X.sum(axis=1),
+                   variable_names=["q", "v"], target="d(q)/dt", split="synthetic",
+                   metadata={}, ground_truth="q+v")
+    case = dict(model="physo", model_params={"device": "cpu"}, task="ode",
+                dataset="development_ode", seed=0, run_params={})
+    result = benchmark.run_regression(problem, case)
+    assert result["exact_recovery"] == 1
+    assert result["test_mse"] == 0
+    assert torch.is_tensor(Expression()(torch.as_tensor(X.T)))
 
 
 def test_declared_benchmark_search_space_is_adapted_without_truth_inspection():

@@ -80,9 +80,10 @@ def test_core_configs_have_executable_noise_and_sparsity_parameters():
     degrees = {case["dataset"]: case["model_params"]["polynomial_degree"] for case in cases}
     assert tuple(config["datasets"]) == CORE_ODE_DATASETS
     assert len(cases) == 8
-    assert degrees["ode_core_damped_oscillator"] == 1
-    assert all(degrees[f"ode_core_{name}"] == 3 for name in (
-        "duffing", "van_der_pol", "fitzhugh_nagumo"))
+    # D3 uses a common method configuration, including systems outside this
+    # polynomial library's representational capacity.
+    assert set(degrees.values()) == {2}
+    assert not config["overrides"].get("model_datasets")
     overrides = config["overrides"]["datasets"]["ode_core_rational"]
     dataset = load_dataset("ode_core_rational", **overrides)
     assert dataset.generation_metadata["observation_noise"] == 0.01

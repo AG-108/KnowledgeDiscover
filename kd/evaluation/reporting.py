@@ -3,6 +3,16 @@
 import math
 from collections import defaultdict
 
+from kd.benchmark_protocol import digest
+
+
+def _comparison_row(row):
+    row = dict(row)
+    if row.get("execution_policy") is not None:
+        row["execution_policy_hash"] = digest({key: value for key, value in row["execution_policy"].items()
+                                             if key != "resource_policy"})
+    return row
+
 
 def _finite(value):
     try:
@@ -15,13 +25,16 @@ def seed_family_summary(rows, metric, *, family_key="family"):
     """Summarize per-seed values by family without pooling targets as seeds."""
     buckets = defaultdict(list)
     for row in rows:
+        row = _comparison_row(row)
         if _finite(row.get(metric)) and row.get("seed") is not None:
             buckets[(row.get("model"), row.get(family_key, row.get("task", "unknown")),
                      row.get("metric_protocol_version", "legacy/unknown"),
                      row.get("execution_protocol_version", "legacy/unknown"),
                      row.get("dataset_protocol_version", "legacy/unknown"),
                      row.get("scientific_task", "legacy/unknown"), row.get("profile"),
-                     row.get("regime"), row.get("resource_policy_hash", "unconstrained"), row["seed"])].append(
+                     row.get("regime"), row.get("resource_policy_hash", "unconstrained"),
+                     row.get("method_config_hash"), row.get("execution_policy_hash"),
+                     row.get("evaluation_protocol_hash"), row.get("experiment_identity_hash"), row.get("benchmark_role"), row["seed"])].append(
                 float(row[metric])
             )
     by_family = defaultdict(list)
@@ -32,13 +45,16 @@ def seed_family_summary(rows, metric, *, family_key="family"):
         case_counts[group] += len(values)
     result = []
     for group, seed_values in sorted(by_family.items(), key=repr):
-        model, family, protocol, execution, data_protocol, scientific_task, profile, regime, resources = group
+        model, family, protocol, execution, data_protocol, scientific_task, profile, regime, resources, config, timing, evaluation, identity, role = group
         mean = sum(seed_values) / len(seed_values)
         variance = sum((value - mean) ** 2 for value in seed_values) / (len(seed_values) - 1) if len(seed_values) > 1 else None
         result.append({"model": model, "family": family, "metric_protocol_version": protocol,
                        "execution_protocol_version": execution,
                        "dataset_protocol_version": data_protocol, "scientific_task": scientific_task,
                        "resource_policy_hash": resources,
+                       "method_config_hash": config, "execution_policy_hash": timing,
+                       "evaluation_protocol_hash": evaluation, "experiment_identity_hash": identity,
+                       "benchmark_role": role,
                        "profile": profile, "regime": regime, "metric": metric, "mean": mean,
                        "seed_std": math.sqrt(variance) if variance is not None else None,
                        "n_seeds": len(seed_values), "n_target_rows": case_counts[group],
@@ -46,11 +62,12 @@ def seed_family_summary(rows, metric, *, family_key="family"):
     return result
 
 
-def paired_comparison(rows, metric, model_a, model_b, *, pair_keys=("dataset", "instance", "target", "seed", "metric_protocol_version", "execution_protocol_version", "dataset_protocol_version", "scientific_task", "profile", "regime", "resource_policy_hash")):
+def paired_comparison(rows, metric, model_a, model_b, *, pair_keys=("dataset", "instance", "target", "seed", "metric_protocol_version", "execution_protocol_version", "dataset_protocol_version", "scientific_task", "profile", "regime", "resource_policy_hash", "execution_policy_hash", "evaluation_protocol_hash", "experiment_identity_hash", "benchmark_role")):
     """Compare only exact shared target/seed pairs and expose dropped denominators."""
     selected = {model_a: {}, model_b: {}}
     candidate = {model_a: 0, model_b: 0}
     for row in rows:
+        row = _comparison_row(row)
         model = row.get("model")
         if model in selected and _finite(row.get(metric)):
             candidate[model] += 1

@@ -1,0 +1,44 @@
+name: Core checks
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  core:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    env:
+      MPLBACKEND: Agg
+      PYTHONNOUSERSITE: '1'
+      OMP_NUM_THREADS: '1'
+      OPENBLAS_NUM_THREADS: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+          cache: pip
+      - run: python -m pip install . pytest==8.4.2 ruff==0.12.12
+      - name: Installed public imports and generated data
+        working-directory: ${{ runner.temp }}
+        run: python -c "import kd; from kd import *; from kd.dataset import load_dataset; assert load_dataset('ode_core_pendulum', n_points=21).n_traj > 0"
+      - name: Core regression without native runtimes or external assets
+        run: python -m pytest -q tests/test_benchmark_freeze.py tests/test_benchmark_planning.py tests/test_metrics.py tests/test_ode_core.py tests/test_physical_credibility.py tests/test_kd_sisso.py --junitxml=results/core.xml
+      - name: Static checks for the protocol modules
+        run: python -m ruff check kd/benchmark_batch.py kd/benchmark_identity.py kd/benchmark_protocol.py kd/benchmark_store.py kd/benchmark_planning.py scripts/plan_benchmark.py scripts/audit_main_config.py scripts/merge_benchmark_results.py tests/test_benchmark_freeze.py tests/test_benchmark_planning.py
+      - name: CLI dry-run
+        run: python run_benchmark.py --models gplearn --datasets Nguyen-1 --dry-run --output-dir results/core-dry-run
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: core-${{ matrix.os }}
+          path: results/core.xml

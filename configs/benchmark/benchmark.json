@@ -37,6 +37,7 @@
     "gplearn": "cpu",
     "physo": "cpu",
     "pysr": "cpu",
+    "sisso": "cpu",
     "sindy": "cpu",
     "pysindy": "cpu",
     "llmsr": "cpu",

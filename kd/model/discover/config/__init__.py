@@ -40,7 +40,7 @@ def load_config(config=None):
     else:
         assert config is None, "Config must be None, str, or dict."
         user_config = {}
-    
+
     # Determine the task and language prior
     try:
         task = user_config["task"]["task_type"]
@@ -59,31 +59,5 @@ def load_config(config=None):
     return safe_merge_dicts(base_config, user_config)
 
 
-def load_config_new(config=None):
-    # Load user config
-    if isinstance(config, str):
-        with open(config, encoding='utf-8') as f:
-            user_config = json.load(f)
-    elif isinstance(config, dict):
-        user_config = config
-    else:
-        assert config is None, "Config must be None, str, or dict."
-        user_config = {}
-    
-    # Determine the task and language prior
-    try:
-        task = user_config["task"]["task_type"]
-    except KeyError:
-        task = "regression"
-        print("WARNING: Task type not specified. Falling back to default task type '{}' to load config.".format(task))
-    try:
-        language_prior = user_config["prior"]["language_model"]["on"]
-    except KeyError:
-        language_prior = False
-
-    # Load task-specific base config
-    base_config = get_base_config(task, language_prior)
-
-    # Return combined configs
-    return safe_merge_dicts(base_config, user_config)
-
+# Historical name retained for compatibility.
+load_config_new = load_config

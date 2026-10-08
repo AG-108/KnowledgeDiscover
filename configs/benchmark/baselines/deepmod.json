@@ -9,8 +9,14 @@
   "profiles": {
     "full": {
       "model": {
-        "epochs": 20,
-        "hidden_layers": [50, 50, 50, 50, 1]
+        "epochs": 10000,
+        "hidden_layers": [
+          50,
+          50,
+          50,
+          50,
+          1
+        ]
       }
     }
   }

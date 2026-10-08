@@ -8,12 +8,10 @@ in parallel while accelerator cases are kept on a smaller, separate pool.
 from __future__ import annotations
 
 import argparse
-import csv
 import json
 import shutil
 import sys
 import time
-from collections import Counter, defaultdict, deque
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
@@ -22,6 +20,16 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from kd.benchmark_batch import organize_by_baseline, round_robin, save_checkpoint  # noqa: E402
+from kd.benchmark_identity import attach as attach_identity  # noqa: E402
+from kd.benchmark_identity import restore_paths  # noqa: E402
+from kd.benchmark_identity import verify as verify_identity  # noqa: E402
+from kd.benchmark_protocol import (  # noqa: E402
+    inherited_policy,
+    read_manifests,
+    validate_shared_manifests,
+)
+from kd.benchmark_store import freeze_run, verify_freeze  # noqa: E402
 from kd.dataset._metadata import DATASET_PROTOCOL_VERSION  # noqa: E402
 from run_benchmark import (  # noqa: E402
     EXECUTION_PROTOCOL_VERSION,
@@ -36,24 +44,6 @@ from run_benchmark import (  # noqa: E402
 
 def _load_json(path: Path):
     return json.loads(path.read_text(encoding="utf-8"))
-
-
-def _round_robin(cases: list[dict]) -> list[dict]:
-    """Interleave models so early progress covers more than one baseline."""
-    grouped: dict[str, deque] = defaultdict(deque)
-    for case in cases:
-        grouped[case["model"]].append(case)
-    ordered = []
-    names = sorted(grouped)
-    while names:
-        remaining = []
-        for name in names:
-            if grouped[name]:
-                ordered.append(grouped[name].popleft())
-            if grouped[name]:
-                remaining.append(name)
-        names = remaining
-    return ordered
 
 
 def _reuse_results(cases: list[dict], output: Path, sources: list[Path], policy: dict) -> int:
@@ -81,105 +71,13 @@ def _reuse_results(cases: list[dict], output: Path, sources: list[Path], policy:
     return reused
 
 
-def _status_payload(
-    cases: list[dict],
-    results: dict[str, list[dict]],
-    *,
-    started_at: str,
-    attempt: int,
-    retries: int,
-) -> dict:
-    expected_by_model = Counter(case["model"] for case in cases)
-    finished_by_model = Counter(
-        case["model"] for case in cases if case["name"] in results
-    )
-    rows = [row for case_rows in results.values() for row in case_rows]
-    return {
-        "started_at": started_at,
-        "updated_at": datetime.now(timezone.utc).isoformat(),
-        "attempt": attempt,
-        "maximum_attempts": retries + 1,
-        "expected_cases": len(cases),
-        "finished_cases": len(results),
-        "remaining_cases": len(cases) - len(results),
-        "expected_by_model": dict(sorted(expected_by_model.items())),
-        "finished_by_model": dict(sorted(finished_by_model.items())),
-        "row_statuses": dict(Counter(row.get("status") for row in rows)),
-        "stop_reasons": dict(Counter(row.get("stop_reason") for row in rows)),
-    }
-
-
 def _run_one(case: dict, output: Path, timeout: float | None, **timing) -> list[dict]:
     # Configuration/I/O/locking errors belong to the orchestrator, not a fake
     # case-level row that would overwrite completed targets or hide denominators.
     return execute_case(case, output, timeout=timeout, resume=True, **timing)
 
 
-def _save_checkpoint(
-    output: Path,
-    cases: list[dict],
-    results: dict[str, list[dict]],
-    *,
-    started_at: str,
-    attempt: int,
-    retries: int,
-) -> None:
-    rows = [row for case_rows in results.values() for row in case_rows]
-    rows.sort(
-        key=lambda row: (
-            row.get("task", ""),
-            row.get("model", ""),
-            row.get("dataset", ""),
-            row.get("instance", ""),
-            row.get("target", ""),
-            row.get("seed", -1),
-        )
-    )
-    save_summary(output, rows)
-    write_json(
-        output / "benchmark_status.json",
-        _status_payload(
-            cases,
-            results,
-            started_at=started_at,
-            attempt=attempt,
-            retries=retries,
-        ),
-    )
-
-
-def _organize_by_baseline(output: Path, rows: list[dict]) -> None:
-    by_model: dict[str, list[dict]] = defaultdict(list)
-    for row in rows:
-        by_model[row.get("model", "unknown")].append(row)
-    overview = []
-    for model, model_rows in sorted(by_model.items()):
-        directory = output / "by_baseline" / model
-        save_summary(directory, model_rows)
-        statuses = Counter(row.get("status") for row in model_rows)
-        overview.append(
-            {
-                "baseline": model,
-                "rows": len(model_rows),
-                "ok": statuses["ok"],
-                "skipped": statuses["skipped"],
-                "error": statuses["error"],
-                "timeout": statuses["timeout"],
-            }
-        )
-    write_json(output / "benchmark_overview.json", overview)
-    with (output / "benchmark_overview.csv").open(
-        "w", encoding="utf-8-sig", newline=""
-    ) as handle:
-        writer = csv.DictWriter(
-            handle,
-            fieldnames=("baseline", "rows", "ok", "skipped", "error", "timeout"),
-        )
-        writer.writeheader()
-        writer.writerows(overview)
-
-
-def _parse_args() -> argparse.Namespace:
+def _parse_args(argv=None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--manifest", action="append", type=Path, required=True)
     parser.add_argument("--compatibility", type=Path, required=True)
@@ -189,23 +87,30 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--cpu-workers", type=int, default=1,
                         help="Diagnostic pool only; use scripts/run_slots.py for the D2 resource protocol")
     parser.add_argument("--gpu-workers", type=int, default=1)
-    parser.add_argument("--timeout", type=float, default=21600.0, help="Fit seconds per target")
+    parser.add_argument("--timeout", type=float, default=None, help="Fit seconds per target (inherits source)")
     parser.add_argument("--soft-deadline", action=argparse.BooleanOptionalAction, default=None,
                         help="Return the best completed candidate at T (default enabled)")
-    parser.add_argument("--timeout-grace", type=float, default=5.0)
-    parser.add_argument("--setup-timeout", type=float, default=300.0)
-    parser.add_argument("--score-timeout", type=float, default=300.0)
+    parser.add_argument("--timeout-grace", type=float, default=None)
+    parser.add_argument("--setup-timeout", type=float, default=None)
+    parser.add_argument("--score-timeout", type=float, default=None)
     parser.add_argument("--retries", type=int, choices=[0], default=0,
                         help="Terminal failures are immutable; automatic retries are disabled")
     parser.add_argument("--checkpoint-every", type=int, default=10)
-    return parser.parse_args()
+    return parser.parse_args(argv)
 
 
-def main() -> int:
-    args = _parse_args()
+def main(argv=None) -> int:
+    args = _parse_args(argv)
+    manifests = read_manifests(args.manifest)
+    validate_shared_manifests(manifests)
+    if any(manifest.get("benchmark_mode") == "main" for manifest in manifests):
+        raise SystemExit("Formal main matrices require scripts/run_slots.py and D2 resources")
+    inherited = inherited_policy(manifests, {key: getattr(args, key) for key in
+                                 ("timeout", "soft_deadline", "timeout_grace", "setup_timeout", "score_timeout")})
+    args.timeout = inherited.pop("timeout")
     if args.cpu_workers < 1 or args.gpu_workers < 1:
         raise SystemExit("worker counts must be positive")
-    if args.timeout <= 0 or args.retries < 0 or args.checkpoint_every < 1:
+    if (args.timeout is not None and args.timeout <= 0) or args.retries < 0 or args.checkpoint_every < 1:
         raise SystemExit("timeout/checkpoint must be positive and retries non-negative")
 
     output = args.output_dir.resolve()
@@ -218,21 +123,23 @@ def main() -> int:
     }
     excluded = set(args.exclude_model)
     unique = {}
-    timing = dict(soft_deadline=True if args.soft_deadline is None else args.soft_deadline,
-                  timeout_grace=args.timeout_grace, setup_timeout=args.setup_timeout,
-                  score_timeout=args.score_timeout)
+    timing = inherited
     policy = execution_policy(args.timeout, **timing)
     source_manifests = []
     for manifest_path in args.manifest:
         resolved = manifest_path.resolve()
         manifest = _load_json(resolved)
+        bindings_path = resolved.parent / "runtime_asset_paths.json"
+        source_cases = restore_paths(manifest["cases"], _load_json(bindings_path) if bindings_path.is_file() else {})
+        if manifest.get("identity"):
+            verify_identity(manifest["identity"], ROOT, source_cases)
         if manifest.get("execution_protocol_version") != EXECUTION_PROTOCOL_VERSION:
             raise SystemExit("Legacy manifest; generate a new target-v1 manifest")
         if any(case.get("dataset_protocol_version") != DATASET_PROTOCOL_VERSION
                for case in manifest["cases"]):
             raise SystemExit(f"Legacy dataset protocol; generate a new {DATASET_PROTOCOL_VERSION} manifest")
         source_manifests.append(str(resolved))
-        for case in manifest["cases"]:
+        for case in source_cases:
             key = (case["task"], case["model"], case["dataset"])
             if case["model"] not in excluded and key in compatible:
                 unique[case["name"]] = case
@@ -240,9 +147,9 @@ def main() -> int:
     if not cases:
         raise SystemExit("no compatible cases selected")
 
-    save_manifest(
-        output,
-        {
+    manifest = {
+            "benchmark_mode": manifests[0].get("benchmark_mode", "diagnostic"),
+            "configuration_sources": manifests[0].get("configuration_sources", {}),
             "execution_protocol_version": EXECUTION_PROTOCOL_VERSION,
             "dataset_protocol_version": DATASET_PROTOCOL_VERSION,
             "execution_policy": policy,
@@ -255,8 +162,13 @@ def main() -> int:
             "timeout": args.timeout,
             "retries": args.retries,
             "cases": cases,
-        },
-    )
+        }
+    bindings = attach_identity(manifest, ROOT)
+    cases = manifest["cases"]
+    save_manifest(output, manifest)
+    write_json(output / "runtime_asset_paths.json", bindings)
+    if (output / "benchmark_freeze.json").exists():
+        verify_freeze(output)
     shutil.copy2(args.compatibility.resolve(), output / "compatibility_report.json")
     reused = _reuse_results(cases, output, [path.resolve() for path in args.reuse_dir], policy)
     print(
@@ -270,10 +182,10 @@ def main() -> int:
     pending = cases
     orchestration_errors = {}
     attempt = 1
-    cpu_cases = _round_robin(
+    cpu_cases = round_robin(
         [case for case in pending if not str(case["device"]).startswith("cuda")]
     )
-    gpu_cases = _round_robin(
+    gpu_cases = round_robin(
         [case for case in pending if str(case["device"]).startswith("cuda")]
     )
     print(
@@ -311,7 +223,7 @@ def main() -> int:
                 completed_this_attempt % args.checkpoint_every == 0
                 or time.monotonic() - checkpoint_time >= 60
             ):
-                _save_checkpoint(
+                save_checkpoint(
                     output,
                     cases,
                     results,
@@ -321,7 +233,7 @@ def main() -> int:
                 )
                 checkpoint_time = time.monotonic()
 
-    _save_checkpoint(
+    save_checkpoint(
         output,
         cases,
         results,
@@ -342,7 +254,8 @@ def main() -> int:
         )
     )
     save_summary(output, rows)
-    _organize_by_baseline(output, rows)
+    organize_by_baseline(output, rows)
+    freeze_run(output)
     failures = sum(row.get("status") in {"error", "timeout"} for row in rows)
     print(
         f"Finished {len(cases)} cases / {len(rows)} rows; failures={failures}; "

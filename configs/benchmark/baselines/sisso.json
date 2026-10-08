@@ -1,0 +1,24 @@
+{
+  "name": "sisso",
+  "device": "cpu",
+  "model": {
+    "n_dim": 1,
+    "max_rung": 1,
+    "n_sis_select": 1,
+    "n_residual": 1,
+    "allowed_ops": ["add", "sub", "mult", "div", "sin", "cos", "exp", "log", "sq", "cb"],
+    "fix_intercept": false,
+    "verbose": false,
+    "workdir": "sisso"
+  },
+  "profiles": {
+    "full": {
+      "model": {
+        "n_dim": 2,
+        "max_rung": 2,
+        "n_sis_select": 10,
+        "n_residual": 1
+      }
+    }
+  }
+}

@@ -1,29 +1,76 @@
 {
   "profile": "smoke",
-  "tasks": ["ode"],
-  "models": ["sindy"],
-  "datasets": ["ode_core_damped_oscillator", "ode_core_pendulum", "ode_core_duffing", "ode_core_van_der_pol", "ode_core_sir", "ode_core_fitzhugh_nagumo", "ode_core_rational", "ode_core_robertson"],
-  "seeds": [0, 1, 2, 3, 4],
+  "tasks": [
+    "ode"
+  ],
+  "models": [
+    "sindy"
+  ],
+  "datasets": [
+    "ode_core_damped_oscillator",
+    "ode_core_pendulum",
+    "ode_core_duffing",
+    "ode_core_van_der_pol",
+    "ode_core_sir",
+    "ode_core_fitzhugh_nagumo",
+    "ode_core_rational",
+    "ode_core_robertson"
+  ],
+  "seeds": [
+    0,
+    1,
+    2,
+    3,
+    4
+  ],
   "timeout": 300,
-  "output_dir": "results/core_v2_ode_noisy_sparse",
+  "output_dir": "results/core_v2_ode_noisy_sparse_uniform_grammar_v1",
   "overrides": {
     "datasets": {
-      "ode_core_rational": {"observation_noise": 0.01, "time_stride": 2},
-      "ode_core_damped_oscillator": {"observation_noise": 0.01, "time_stride": 2},
-      "ode_core_pendulum": {"observation_noise": 0.01, "time_stride": 2},
-      "ode_core_duffing": {"observation_noise": 0.01, "time_stride": 2},
-      "ode_core_van_der_pol": {"observation_noise": 0.01, "time_stride": 2},
-      "ode_core_sir": {"observation_noise": 0.01, "time_stride": 2},
-      "ode_core_fitzhugh_nagumo": {"observation_noise": 0.01, "time_stride": 2},
-      "ode_core_robertson": {"observation_noise": 0.01, "time_stride": 2}
-    },
-    "model_datasets": {
-      "sindy": {
-        "ode_core_damped_oscillator": {"polynomial_degree": 1},
-        "ode_core_duffing": {"polynomial_degree": 3},
-        "ode_core_van_der_pol": {"polynomial_degree": 3},
-        "ode_core_fitzhugh_nagumo": {"polynomial_degree": 3}
+      "ode_core_rational": {
+        "observation_noise": 0.01,
+        "time_stride": 2
+      },
+      "ode_core_damped_oscillator": {
+        "observation_noise": 0.01,
+        "time_stride": 2
+      },
+      "ode_core_pendulum": {
+        "observation_noise": 0.01,
+        "time_stride": 2
+      },
+      "ode_core_duffing": {
+        "observation_noise": 0.01,
+        "time_stride": 2
+      },
+      "ode_core_van_der_pol": {
+        "observation_noise": 0.01,
+        "time_stride": 2
+      },
+      "ode_core_sir": {
+        "observation_noise": 0.01,
+        "time_stride": 2
+      },
+      "ode_core_fitzhugh_nagumo": {
+        "observation_noise": 0.01,
+        "time_stride": 2
+      },
+      "ode_core_robertson": {
+        "observation_noise": 0.01,
+        "time_stride": 2
       }
     }
-  }
+  },
+  "benchmark_mode": "diagnostic",
+  "core_ode_grammar": [
+    "add",
+    "sub",
+    "mul",
+    "div",
+    "sin",
+    "cos",
+    "exp",
+    "log",
+    "sqrt"
+  ]
 }

@@ -50,7 +50,16 @@ from kd.benchmark_execution import (
     score_call,
     supervise,
 )
+from kd.benchmark_identity import attach as attach_identity
+from kd.benchmark_identity import (
+    canonical_case,
+    public_manifest,
+    stable_execution,
+    stable_resources,
+)
+from kd.benchmark_protocol import comparison_fields, recovery_eligibility, validate_main_matrix
 from kd.benchmark_resources import policy_hash
+from kd.benchmark_store import freeze_run, verify_freeze
 
 ROOT = Path(__file__).resolve().parent
 RESULTS_DIR = ROOT / "results" / "benchmark"
@@ -87,6 +96,7 @@ BASELINES = {
     "gplearn": {"tasks": ("sr", "ode"), "example": "kd_gplearn_example.py", "accelerator": "cpu"},
     "physo": {"tasks": ("sr", "ode"), "example": "kd_physo_example.py", "accelerator": "cuda"},
     "pysr": {"tasks": ("sr", "ode"), "example": "kd_pysr_example.py", "accelerator": "cpu"},
+    "sisso": {"tasks": ("sr", "ode"), "example": "kd_sisso_example.py", "accelerator": "cpu"},
     "sindy": {"tasks": ("ode", "pde"), "example": "kd_sindy_example.py", "accelerator": "cpu"},
     "pysindy": {
         "tasks": ("ode", "pde"),
@@ -118,6 +128,7 @@ MODEL_CLASSES = {
     "symbolicgpt": ("kd.model.kd_symbolicgpt", "KD_SymbolicGPT"),
     "gplearn": ("gplearn.genetic", "SymbolicRegressor"),
     "pysr": ("pysr", "PySRRegressor"),
+    "sisso": ("kd.model.kd_sisso", "SISSOModel"),
     "sindy": ("kd.model.kd_sindy", "SINDyModel"),
     "pysindy": ("kd.model.kd_sindy", "PySINDyModel"),
     "weakform": ("kd.model.kd_wsindy", "WSINDyPDEModel"),
@@ -262,6 +273,9 @@ def load_benchmark_config(path=None):
         "devices",
         "profiles",
         "overrides",
+        "benchmark_mode",
+        "core_ode_grammar",
+        "configuration_sources",
     }
     unknown = set(value) - allowed
     if unknown:
@@ -355,6 +369,14 @@ def validate_benchmark_config(value, catalog):
     for model, device in value["devices"].items():
         validate_device_assignment(model, device)
     overrides = value["overrides"]
+    if value.get("benchmark_mode", "diagnostic") not in {"main", "diagnostic", "control"}:
+        raise ValueError("benchmark_mode must be main, diagnostic or control")
+    if value.get("benchmark_mode") == "main" and overrides.get("model_datasets"):
+        raise ValueError("Formal main track forbids overrides.model_datasets (D3)")
+    grammar = value.get("core_ode_grammar")
+    if grammar is not None and (not isinstance(grammar, list) or not grammar or
+                                not all(isinstance(token, str) and token for token in grammar)):
+        raise ValueError("core_ode_grammar must be a non-empty array of operator names")
     if set(overrides) - {"models", "model_datasets", "datasets", "run", "evaluation"}:
         raise ValueError("overrides supports only models, model_datasets, datasets, run, evaluation")
     for key, choices in (("models", BASELINES), ("datasets", catalog)):
@@ -513,7 +535,7 @@ def build_experiments(
                 model_params = copy.deepcopy(params)
                 if "seed" in model_params:
                     model_params["seed"] = seed
-                if model in {"gplearn", "llmsr", "pyoperon", "pysr"}:
+                if model in {"gplearn", "llmsr", "pyoperon", "pysr", "sisso"}:
                     model_params["random_state"] = seed
                 model_override = copy.deepcopy(config.get("models", {}).get(model, {}))
                 override_device = model_override.pop("device", None)
@@ -634,6 +656,8 @@ def check_compatibility(cases, excluded=None, progress=False):
                     _new_model(model, next(c["model_params"] for c in cases if c["model"] == model)).check_available()
                 elif model == "pysindy":
                     importlib.import_module("pysindy")
+                elif model == "sisso":
+                    _new_model(model, next(c["model_params"] for c in cases if c["model"] == model)).check_available()
                 else:
                     module, attribute = MODEL_CLASSES[model]
                     getattr(importlib.import_module(module), attribute)
@@ -895,6 +919,9 @@ def regression_problems(dataset, case):
             "test_trajectories": [dataset.trajectories[i]["id"] for i in test_ids],
             "generation_metadata": getattr(dataset, "generation_metadata", None),
         }
+        if case.get("task_grammar"):
+            metadata["benchmark_function_set"] = list(case["task_grammar"]) + ["const"]
+            metadata["grammar_source"] = "predeclared_shared_core_ode_task"
         ground_truth = getattr(dataset, "sym_true", None)
     elif case["dataset"] == "pyqg_subgrid":
         from kd.evaluation.closure import problems
@@ -1510,6 +1537,16 @@ def _dataset_search_space(params, metadata, model_name, reference_expression=Non
             raise SkipCase(f"{model_name} has no supported operators in the declared function set")
         params["binary_operators"] = list(dict.fromkeys(binary))
         params["unary_operators"] = list(dict.fromkeys(unary))
+    elif model_name == "sisso":
+        aliases = {"mul": ("mult",), "n2": ("sq",), "n3": ("cb",),
+                   "neg": ("sub",), "expneg": ("neg_exp",)}
+        supported = {"add", "sub", "mult", "div", "inv", "sq", "cb", "sqrt",
+                     "sin", "cos", "exp", "neg_exp", "log"}
+        params["allowed_ops"] = list(dict.fromkeys(
+            symbol for op in operations for symbol in aliases.get(op, (op,)) if symbol in supported
+        ))
+        if not params["allowed_ops"]:
+            raise SkipCase("sisso has no supported operators in the declared function set")
     elif model_name == "symbolicgpt":
         # This wrapper builds a fresh training corpus from these operators.
         # Its generator has no native tan/tanh/abs, nor DSO's poly terminal.
@@ -1571,11 +1608,30 @@ def _new_model(name, params):
 
 def _physo_expression_text(expression):
     """Return a machine-readable PhySO expression with fitted constants."""
+    if getattr(expression, "free_consts", None) is not None:
+        expression = copy.copy(expression)
+        expression.free_consts = copy.copy(expression.free_consts)
+        for name in ("class_values", "spe_values"):
+            values = getattr(expression.free_consts, name, None)
+            if hasattr(values, "detach"):
+                setattr(expression.free_consts, name, values.detach().cpu())
     symbolic = expression.get_infix_sympy(do_simplify=True, evaluate_consts=True)
     if hasattr(symbolic, "flat"):
         symbolic = next(iter(symbolic.flat))
     elif isinstance(symbolic, (list, tuple)):
         symbolic = symbolic[0]
+    # Observed inputs are real. Expand only identities justified by those
+    # assumptions, so a fitted log(k * exp(a*x)) has an ordinary affine
+    # export when k is positive. Never force logarithm branch identities.
+    import sympy as sp
+
+    if isinstance(symbolic, sp.Basic):
+        real_symbols = {
+            symbol: sp.Symbol(symbol.name, real=True)
+            for symbol in symbolic.free_symbols
+            if symbol.is_real is None
+        }
+        symbolic = sp.expand_log(symbolic.xreplace(real_symbols), force=False)
     return str(symbolic)
 
 
@@ -1695,7 +1751,7 @@ def _train_dscv_regression(problem, case, params):
 def run_regression(problem, case, *, pretrain_cache=None):
     model = None
     name, params = case["model"], copy.deepcopy(case["model_params"])
-    if name in {"gplearn", "physo", "pyoperon", "pysr", "dso", "dscv", "spr", "symbolicgpt"}:
+    if name in {"gplearn", "physo", "pyoperon", "pysr", "dso", "dscv", "spr", "symbolicgpt", "sisso"}:
         params = _dataset_search_space(
             params, problem["metadata"], name, problem.get("ground_truth")
         )
@@ -1707,7 +1763,11 @@ def run_regression(problem, case, *, pretrain_cache=None):
         import torch
 
         options = dict(params)
-        options.setdefault("X_names", [f"x{i + 1}" for i in range(problem["X_train"].shape[1])])
+        # PhySO's upstream documentation recommends CPU expression/constant
+        # evaluation. The backend can use CPU inside the allocated GPU slot;
+        # it keeps the same four-core limit and reserves that slot's GPU.
+        options["device"] = options.pop("execution_device", options.get("device", "cpu"))
+        options.setdefault("X_names", list(problem["variable_names"]))
         options.setdefault("y_name", "y")
         options.setdefault("y_units", [0, 0, 0])
         options.setdefault(
@@ -1779,7 +1839,7 @@ def run_regression(problem, case, *, pretrain_cache=None):
                 variable_names=problem["variable_names"],
                 target_name=problem["target"],
             )
-        elif name in {"sindy", "pysindy", "e2e"}:
+        elif name in {"sindy", "pysindy", "e2e", "sisso"}:
             fit_call(model.fit,
                 problem["X_train"],
                 problem["y_train"],
@@ -1858,8 +1918,18 @@ def run_regression(problem, case, *, pretrain_cache=None):
         if name == "physo":
             result["search_space"]["fixed_consts"] = params.get("fixed_consts", [])
             result["search_space"]["free_consts_names"] = params.get("free_consts_names", [])
+            result["search_space"]["execution_device"] = options["device"]
     if name == "e2e":
         result["method_provenance"] = model.provenance_
+    if name == "sisso":
+        result["notes"] = "SISSO++ dimensionless single-task regression; native hard timeout, CPU backend."
+        result["search_space"] = {
+            "policy": ("declared" if case["model_params"].get("use_dataset_function_set")
+                       and problem["metadata"].get("benchmark_function_set") else "configured_fallback"),
+            "operators": params["allowed_ops"], "max_rung": params["max_rung"], "n_dim": params["n_dim"],
+            "selected_dimension": model.selected_dimension_,
+            "effective_n_sis_select": model.effective_n_sis_select_,
+        }
     if name == "llmsr":
         result["method_provenance"] = dict(model.search_stats_)
         result["best_program"] = model.best_program_
@@ -2870,7 +2940,7 @@ def _base_row(case, instance=None, target=None):
         equation_residual_finite_coverage=None,
         coefficient_error=None,
         coefficient_recovery=None,
-        recovery_eligible=bool(case.get("ground_truth")) and case["model"] not in {"pdefind_nd", "implicit_pde"},
+        recovery_eligible=recovery_eligibility(case),
         recovery_evaluator_status=("not_certified" if case["model"] in {"pdefind_nd", "implicit_pde"} else
                                    "pending" if case.get("ground_truth") else "not_applicable"),
         pde_support_recovery=None,
@@ -2898,7 +2968,7 @@ def _base_row(case, instance=None, target=None):
         stop_reason_source="runner",
         error="",
     )
-    if case["model"] in {"eqgpt","e2e","symbolicgpt"}:
+    if case["model"] in {"eqgpt","e2e","symbolicgpt", "llmsr"}:
         from kd.dataset._overlap import training_overlap
         row["training_data_overlap"] = training_overlap(case["model"],case["dataset"])
     if case["task"] == "green" or case["dataset"] == "pyqg_subgrid" or case["dataset"].startswith("dso_file_"):
@@ -2923,6 +2993,9 @@ def _base_row(case, instance=None, target=None):
         row.update(metadata(case))
         row["metric_protocol_version"] = case.get("metric_protocol_version", METRIC_PROTOCOL_VERSION)
     row["evaluation_protocol"] = copy.deepcopy(case.get("evaluation", {}))
+    row["implementation_variant"] = case.get("method_declaration", {}).get("implementation_variant", "undeclared_legacy_variant")
+    row["configuration_source"] = case.get("method_declaration", {}).get("source")
+    row.update(comparison_fields(case))
     return row
 
 
@@ -2931,7 +3004,7 @@ def _failure(case, exc, instance=None, target=None, ground_truth=None):
     if ground_truth:
         row.update(
             ground_truth_expression=ground_truth,
-            recovery_eligible=True,
+            recovery_eligible=recovery_eligibility(case, {"ground_truth": ground_truth}),
             recovery_evaluator_status="not_run",
         )
     row.update(
@@ -3045,6 +3118,7 @@ def run_case(case, work_dir=None, checkpoint=None, *, selection=None, cache_root
                                     "pysindy",
                                     "pysr",
                                     "sindy",
+                                    "sisso",
                                 }:
                                     import torch
 
@@ -3056,7 +3130,7 @@ def run_case(case, work_dir=None, checkpoint=None, *, selection=None, cache_root
                             row["status"] = "ok"
                             row.update(result)
                             if row.get("ground_truth_expression") and case["model"] not in {"reference", "pdefind_nd", "implicit_pde"}:
-                                row["recovery_eligible"] = True
+                                row["recovery_eligible"] = recovery_eligibility(case, {"ground_truth": row["ground_truth_expression"]})
                                 if case["task"] not in {"pde", "steady_pde"}:
                                     row["recovery_evaluator_status"] = (
                                         "parsed" if row.get("exact_recovery") is not None else "unparsed"
@@ -3129,6 +3203,8 @@ def write_json(path, value):
 
 
 CSV_FIELDS = [
+    "benchmark_role", "implementation_variant", "configuration_source", "training_data_overlap",
+    "method_config_hash", "execution_policy_hash", "evaluation_protocol_hash", "experiment_identity_hash",
     "benchmark_role", "ranking_eligible", "reference_protocol_version", "reference_status",
     "reference_floor_eligible", "reference_source_status", "reference_error", "evaluation_protocol",
     "ode_rollout_protocol_version", "system_score_seconds",
@@ -3279,6 +3355,8 @@ CSV_FIELDS = [
 
 
 AGGREGATE_FIELDS = [
+    "method_config_hash", "execution_policy_hash", "evaluation_protocol_hash", "experiment_identity_hash",
+    "benchmark_role", "profile", "regime",
     "resource_policy_hash", "resource_slot", "n_resource_limit",
     "cpu_seconds_total", "cpu_seconds_mean", "cpu_seconds_measured_rows",
     "gpu_occupied_seconds_total", "gpu_occupied_seconds_mean", "gpu_occupied_seconds_measured_rows",
@@ -3356,11 +3434,21 @@ def aggregate_results(rows):
         data_version = row.get("dataset_protocol_version") or "legacy/unknown"
         scientific_task = row.get("scientific_task") or "legacy/unknown"
         resource_hash = row.get("resource_policy_hash", "unconstrained")
-        groups.setdefault((version, execution, data_version, resource_hash, "all", "all", "all"), []).append(row)
-        groups.setdefault((version, execution, data_version, resource_hash,
+        dimensions = tuple(row.get(key, "legacy/unknown") for key in (
+            "benchmark_role", "profile", "regime", "execution_policy_hash", "evaluation_protocol_hash",
+            "experiment_identity_hash"))
+        # Actual row timing wins over an unbound hash from an adapter-only fixture.
+        if row.get("execution_policy"):
+            from kd.benchmark_protocol import digest
+            dimensions = (*dimensions[:3], digest({k: v for k, v in row["execution_policy"].items()
+                                                    if k != "resource_policy"}), *dimensions[4:])
+        common = (version, execution, data_version, resource_hash, *dimensions)
+        groups.setdefault((*common, "all_configurations", "all", "all", "all"), []).append(row)
+        groups.setdefault((*common, row.get("method_config_hash", "legacy/unknown"),
                            scientific_task, row["task"], row["model"]), []).append(row)
     aggregates = []
-    for (version, execution, data_version, resource_hash, scientific_task, task, model), group in sorted(groups.items()):
+    for (version, execution, data_version, resource_hash, role, profile, regime, timing_hash,
+         evaluation_hash, identity_hash, config_hash, scientific_task, task, model), group in sorted(groups.items(), key=repr):
         statuses = [row.get("status") for row in group]
         runtimes = _numeric_values(group, "runtime")
         memories = _numeric_values(group, "peak_memory_mb")
@@ -3427,6 +3515,9 @@ def aggregate_results(rows):
                 "dataset_protocol_version": data_version,
                 "scientific_task": scientific_task,
                 "resource_policy_hash": resource_hash,
+                "method_config_hash": config_hash, "execution_policy_hash": timing_hash,
+                "evaluation_protocol_hash": evaluation_hash, "experiment_identity_hash": identity_hash,
+                "benchmark_role": role, "profile": profile, "regime": regime,
                 "resource_slot": group[0].get("resource_slot", "unconstrained"),
                 "n_resource_limit": sum(row.get("stop_reason") == "resource_limit" for row in group),
                 "cpu_seconds_total": sum(cpu_seconds) if cpu_seconds else None,
@@ -3709,6 +3800,8 @@ def _prepare_targets(case):
             specs = _case_failure_targets(case, exc)
     if not specs:
         specs = _fallback_targets(case, ValueError("Dataset produced no targets"))
+    for spec in specs:
+        spec["recovery_eligible"] = recovery_eligibility(case, spec)
     return specs
 
 
@@ -3773,6 +3866,7 @@ def _commit_target_attempt(case, spec, attempt, policy, outcome):
         if own_cpu is not None and cpu is not None:
             row["cpu_seconds"] = cpu + max(0.0, own_cpu - sampled_root)
     row.update(target_id=spec["target_id"], attempt=int(attempt.name), execution_policy=policy)
+    row.update(comparison_fields(case, policy))
     _finalize_stop_reason(row)
     write_json(attempt / "result.json", row)
     return row
@@ -3787,7 +3881,7 @@ def _worker_failure(case, spec, outcome, log_path):
                "Process-tree RSS exceeded slot memory limit" if outcome.get("resource_limit") else
                f"Worker exited without a terminal result (code {outcome.get('returncode')})"),
         ground_truth_expression=spec.get("ground_truth"),
-        recovery_eligible=bool(spec.get("ground_truth")), recovery_evaluator_status="not_run",
+        recovery_eligible=recovery_eligibility(case, spec), recovery_evaluator_status="not_run",
         target_id=spec["target_id"], log_path=str(log_path),
         runtime=outcome.get("worker_elapsed_seconds"), **outcome,
     )
@@ -3835,7 +3929,8 @@ def _ensure_target_plan(directory, case, policy):
             write_json(plan_path, specs)
             return specs
     attempt = _new_attempt(directory / "preparation")
-    outcome = _launch_worker(directory / "case.json", attempt, policy)
+    live_case = directory / "case_runtime.json"
+    outcome = _launch_worker(live_case if live_case.exists() else directory / "case.json", attempt, policy)
     candidate = attempt / "target_candidate.json"
     if candidate.exists() and not outcome.get("timeout_phase") and not outcome.get("resource_limit"):
         write_json(attempt / "targets.json", json.loads(candidate.read_text(encoding="utf-8")))
@@ -3872,8 +3967,8 @@ def execute_case(case, output_dir, timeout=None, resume=False, *, timeout_grace=
     with case_lock(directory):
         request_path, policy_path = directory / "case.json", directory / "execution.json"
         if policy_path.exists():
-            if (json.loads(policy_path.read_text(encoding="utf-8")) != policy
-                    or json.loads(request_path.read_text(encoding="utf-8")) != case):
+            if (stable_execution(json.loads(policy_path.read_text(encoding="utf-8"))) != stable_execution(policy)
+                    or canonical_case(json.loads(request_path.read_text(encoding="utf-8"))) != canonical_case(case)):
                 raise ValueError("Case configuration or timing policy changed; use a new output directory")
             if not resume:
                 raise FileExistsError("Case already attempted; use --resume or a new output directory")
@@ -3882,6 +3977,9 @@ def execute_case(case, output_dir, timeout=None, resume=False, *, timeout_grace=
                 raise ValueError("Unversioned existing results; use a new output directory")
             write_json(request_path, case)
             write_json(policy_path, policy)
+        # Preserve first declarations; live PID/path rebinding is separately recorded.
+        write_json(directory / "execution_runtime.json", policy)
+        write_json(directory / "case_runtime.json", case)
         specs = _ensure_target_plan(directory, case, policy)
         rows = []
         for spec in specs:
@@ -3892,10 +3990,11 @@ def execute_case(case, output_dir, timeout=None, resume=False, *, timeout_grace=
                 if "preparation_row" in spec:
                     row = _finalize_stop_reason(dict(spec["preparation_row"]))
                 else:
-                    outcome = _launch_worker(request_path, attempt, policy, spec)
+                    outcome = _launch_worker(directory / "case_runtime.json", attempt, policy, spec)
                     row = _commit_target_attempt(case, spec, attempt, policy, outcome)
                 row.update(target_id=spec["target_id"], attempt=int(attempt.name),
                            execution_policy=policy)
+                row.update(comparison_fields(case, policy))
                 if "preparation_row" in spec:
                     resources = policy.get("resource_policy")
                     row.update(resource_policy=resources, resource_policy_hash=policy_hash(resources),
@@ -3975,11 +4074,22 @@ def save_manifest(output, manifest):
     path = Path(output) / "benchmark_manifest.json"
     if path.exists():
         previous = json.loads(path.read_text(encoding="utf-8"))
-        for key in ("execution_protocol_version", "execution_policy", "resource_slots", "cases"):
-            if previous.get(key) != manifest.get(key):
+        for key in ("execution_protocol_version", "execution_policy", "resource_slots", "cases",
+                    "identity", "parent_matrix_hash", "experiment_identity_hash", "benchmark_mode"):
+            before, after = previous.get(key), manifest.get(key)
+            if key == "execution_policy" and before and after:
+                before, after = stable_execution(before), stable_execution(after)
+            elif key == "resource_slots" and before and after:
+                before = {k: stable_resources(v) for k, v in before.items()}
+                after = {k: stable_resources(v) for k, v in after.items()}
+            elif key == "cases" and before and after:
+                before, after = [canonical_case(c) for c in before], [canonical_case(c) for c in after]
+            elif key == "identity" and before and after:
+                before, after = before.get("sha256"), after.get("sha256")
+            if before != after:
                 raise ValueError(f"Existing manifest differs at {key}; use a new output directory")
         return
-    write_json(path, manifest)
+    write_json(path, public_manifest(manifest) if manifest.get("identity") else manifest)
 
 
 def main(argv=None):
@@ -4059,7 +4169,8 @@ def main(argv=None):
         attempt = args._attempt_dir
         if attempt is None:
             parser.error("Internal worker requires --_attempt-dir")
-        policy = json.loads((directory / "execution.json").read_text(encoding="utf-8"))
+        policy_path = directory / "execution_runtime.json"
+        policy = json.loads((policy_path if policy_path.exists() else directory / "execution.json").read_text(encoding="utf-8"))
         with PhaseClock(attempt / "phase.json",
                         started=float(os.environ["KD_BENCHMARK_STARTED"]), policy=policy) as clock:
             if args._prepare_targets:
@@ -4150,6 +4261,16 @@ def main(argv=None):
             devices=devices,
             run_defaults=settings["profiles"][profile]["run"],
         )
+        for case in cases:
+            case["method_declaration"] = copy.deepcopy(settings.get("configuration_sources", {}).get(case["model"], {}))
+            if settings.get("benchmark_mode", "diagnostic") != "main":
+                case["benchmark_role"] = "diagnostic"
+            if case["dataset"].startswith("ode_core_") and settings.get("core_ode_grammar"):
+                case["task_grammar"] = list(settings["core_ode_grammar"])
+        if settings.get("benchmark_mode") == "main":
+            validate_main_matrix(cases, policy, configuration_sources=settings.get("configuration_sources", {}))
+            if not args.dry_run and not args.check_compatibility and not args.check_devices:
+                raise ValueError("Formal main execution requires a resource-bound parent manifest and scripts/run_slots.py")
         if not cases:
             raise ValueError("Selection contains no compatible task/model/dataset combinations")
         if args.include_reference:
@@ -4180,6 +4301,8 @@ def main(argv=None):
         else _project_path(settings["output_dir"]).resolve()
     )
     manifest = {
+        "benchmark_mode": settings.get("benchmark_mode", "diagnostic"),
+        "configuration_sources": settings.get("configuration_sources", {}),
         "execution_protocol_version": EXECUTION_PROTOCOL_VERSION,
         "dataset_protocol_version": next(iter(catalog.values()))["dataset_protocol_version"],
         "execution_policy": policy,
@@ -4200,7 +4323,12 @@ def main(argv=None):
         "excluded": excluded,
         "cases": cases,
     }
+    bindings = attach_identity(manifest, ROOT)
+    cases = manifest["cases"]
+    if manifest["benchmark_mode"] == "main":
+        validate_main_matrix(cases, policy, configuration_sources=manifest["configuration_sources"])
     save_manifest(output, manifest)
+    write_json(output / "runtime_asset_paths.json", bindings)
     print(
         f"Selected {len(cases)} cases; profile={profile}; manifest={output / 'benchmark_manifest.json'}",
         flush=True,
@@ -4216,6 +4344,8 @@ def main(argv=None):
         }
         print(f"Compatibility report saved to {output}: {counts}")
         return 1 if counts["error"] else 0
+    if (output / "benchmark_freeze.json").exists():
+        verify_freeze(output)
     rows = []
     for i, case in enumerate(cases, 1):
         print(f"[{i}/{len(cases)}] {case['name']} device={case['device']}", flush=True)
@@ -4230,6 +4360,7 @@ def main(argv=None):
         status: sum(r["status"] == status for r in rows)
         for status in ("ok", "skipped", "error", "timeout")
     }
+    freeze_run(output)
     print(f"Saved {len(rows)} rows to {output}: {counts}")
     return 1 if counts["error"] or counts["timeout"] else 0
 

@@ -11,6 +11,8 @@ from deepymod.model.library import Library1D
 from deepymod.model.sparse_estimators import Threshold
 from torch.utils.data import DataLoader, TensorDataset
 
+from kd.benchmark_deadline import SoftDeadline, check_deadline
+
 
 class KD_DeepMoD:
     """Lightweight benchmark wrapper around DeepMoD.
@@ -57,8 +59,9 @@ class KD_DeepMoD:
             if usol.shape != (len(x), len(t)):
                 usol = usol.T
             X, T = np.meshgrid(x, t, indexing="ij")
-            coords = np.column_stack([X.ravel(), T.ravel()])
-            target = usol.T.ravel()[:, None]
+            # Library1D differentiates column 0 in time and column 1 in space.
+            coords = np.column_stack([T.ravel(), X.ravel()])
+            target = usol.ravel()[:, None]
             return coords, target
 
         raise TypeError("dataset must provide get_data() for DeepMoD.")
@@ -95,24 +98,34 @@ class KD_DeepMoD:
         )
 
         optimizer = torch.optim.Adam(model.parameters(), lr=self.learning_rate)
-        for _ in range(self.epochs):
-            for xb, yb in loader:
-                xb = xb.to(self.device)
-                yb = yb.to(self.device)
-                prediction, time_derivs, thetas = model(xb)
-                coeff_vectors = model.constraint_coeffs(scaled=False, sparse=True)
-                reg_terms = [
-                    torch.mean((dt - theta @ coeff_vector) ** 2)
-                    for dt, theta, coeff_vector in zip(time_derivs, thetas, coeff_vectors)
-                ]
-                reg = torch.stack(reg_terms).mean()
-                mse = torch.mean((prediction - yb) ** 2)
-                loss = mse + reg
-                optimizer.zero_grad()
-                loss.backward()
-                optimizer.step()
+        steps = 0
+        self.stop_reason_ = "budget_exhausted"
+        try:
+            for _ in range(self.epochs):
+                for xb, yb in loader:
+                    check_deadline()
+                    xb = xb.to(self.device)
+                    yb = yb.to(self.device)
+                    prediction, time_derivs, thetas = model(xb)
+                    coeff_vectors = model.constraint_coeffs(scaled=False, sparse=True)
+                    reg_terms = [
+                        torch.mean((dt - theta @ coeff_vector) ** 2)
+                        for dt, theta, coeff_vector in zip(time_derivs, thetas, coeff_vectors)
+                    ]
+                    reg = torch.stack(reg_terms).mean()
+                    mse = torch.mean((prediction - yb) ** 2)
+                    loss = mse + reg
+                    optimizer.zero_grad()
+                    loss.backward()
+                    optimizer.step()
+                    steps += 1
+        except SoftDeadline:
+            self.stop_reason_ = "time_limit"
+            if not steps:
+                raise RuntimeError("Time limit reached before a completed DeepMoD update") from None
 
         self.model_ = model
+        self.completed_steps_ = steps
         self.best_equation_ = self._equation_summary(model)
         return self
 

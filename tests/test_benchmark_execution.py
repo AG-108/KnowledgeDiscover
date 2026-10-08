@@ -277,8 +277,10 @@ def test_rss_limit_counts_child_and_kills_whole_tree(tmp_path):
     pid = int(pid_path.read_text())
     try:
         child = psutil.Process(pid)
-        if child.status() != psutil.STATUS_ZOMBIE:
-            child.wait(timeout=3)
+        deadline = time.monotonic() + 3
+        while child.is_running() and child.status() != psutil.STATUS_ZOMBIE and time.monotonic() < deadline:
+            time.sleep(0.02)
+        assert not child.is_running() or child.status() == psutil.STATUS_ZOMBIE
     except psutil.NoSuchProcess:
         pass
     from test_run_benchmark import make_case
@@ -460,7 +462,7 @@ def test_slot_scheduler_serializes_each_queue_and_runs_both_queues(monkeypatch, 
     assert {r["resource_slot"] for r in rows} == {"cpu", "gpu"}
 
 
-@pytest.mark.parametrize("model", ["gplearn", "pyoperon", "pysr", "llmsr", "dso"])
+@pytest.mark.parametrize("model", ["gplearn", "pyoperon", "pysr", "llmsr", "dso", "sisso"])
 def test_method_thread_environment_is_applied_before_numpy_import(tmp_path, model):
     from kd.benchmark_resources import slot_for_model
 
@@ -480,7 +482,7 @@ def test_method_thread_environment_is_applied_before_numpy_import(tmp_path, mode
                         policy=execution_policy(10, resource_policy=resources), model=model)
     assert outcome["returncode"] == 0
     actual = json.loads(report.read_text())
-    count = 4 if model == "dso" else 1
+    count = 4 if model in {"dso", "sisso"} else 1
     assert actual["omp"] == actual["julia"] == actual["juliacall"] == str(count)
     assert actual["torch"] == "4"
     assert actual["blas"] and all(library["num_threads"] == count for library in actual["blas"])

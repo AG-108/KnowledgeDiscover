@@ -23,6 +23,7 @@ only the paper's method name. Budget and fairness rules are in
 | `symbolicgpt` | SR, ODE | Small model, synthetic pretraining per fit (default) or reused within one case instance | Neither variant is the original shared checkpoint; report the two protocols separately and include training cost |
 | `e2e` | SR, ODE | Official pretrained Transformer (see below) | Corpus overlap and full-paper fidelity unknown |
 | `gplearn`, `pysr`, `pyoperon` | SR, ODE | Library defaults through their Python APIs | PySR needs Julia |
+| `sisso` | SR, ODE | SISSO++ v1.2.6 Python bindings; dimensionless single-task CPU regression | Separate native installation; fixed descriptor depth and hard timeout only; [details](sisso.md) |
 | `physo` | SR, ODE | Dimensionless default | Physical-unit priors unused without unit cards |
 | `llmsr` | SR, ODE | LLM-SRBench LLM-SR searcher (see below) | Backbone must be served separately |
 | pdefind_nd | PDE | 多维内部差分 + 同库 STLS；u_tt 与配置坐标基 | 观测残差子轨，缺来源几何时阻塞 |

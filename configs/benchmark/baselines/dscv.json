@@ -8,7 +8,7 @@
   "profiles": {
     "full": {
       "model": {
-        "n_iterations": 10,
+        "n_iterations": 100,
         "n_samples_per_batch": 100,
         "config_out": {
           "controller": {
@@ -28,7 +28,7 @@
         }
       },
       "run": {
-        "dscv_epochs": 10
+        "dscv_epochs": 100
       }
     }
   }

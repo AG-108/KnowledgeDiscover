@@ -1,13 +1,14 @@
 # Benchmark metric protocol
 
-当前工程验收见 [验收摘要](validation.md)，来源条件见 [待解决问题](deferred_source_issues.md)。数据 domain-v4；新增轨指标 2.3。
+当前工程验收见 [验收摘要](validation.md)，来源条件见 [待解决问题](deferred_source_issues.md)。本地开发树数据协议 `domain-v5`；服务器冻结实验仍为 `domain-v4`，两者不混用。新增轨指标 2.3；本地修复范围见[数据接入修复](data.md#domain-v5-接入修复2026-10-11)。
 
 Raw per-target records are written to `benchmark_summary.json/csv`; method/task aggregates
 are written to `benchmark_aggregate.json/csv`. Original adapter records declare
 `metric_protocol_version = "2.1"`. Older records remain readable, but failed legacy rows
 cannot be retroactively classified as recovery-eligible when that fact was not stored.
-Aggregates are partitioned by metric, execution (`target-v1`) and dataset
-(`domain-v4`) protocol versions, and by `scientific_task` within each method.
+Aggregates are partitioned by metric, execution (`target-v2` for current runs;
+legacy `target-v1` remains readable) and dataset (`domain-v5` locally,
+`domain-v4` for the frozen server experiment) protocol versions, and by `scientific_task` within each method.
 Paired and seed-family reports also isolate dataset versions. CYT closure and
 material constitutive targets are separate physical tasks even though both use
 the numerical `sr` adapter. `n_cases`, `n_target_rows`, and `denominator_unit = target_row` make clear that a
@@ -121,14 +122,15 @@ Each row records wall-clock runtime, peak CPU RSS, optional CUDA allocator peak,
 `ok`, `timeout`, `error`, or `skipped`. Success and timeout rates use all rows. Missing
 values serialize as JSON `null`, never non-standard NaN.
 
-`target-v1` additionally records `target_id`, attempt number, execution policy,
+Fields inherited from `target-v1` include `target_id`, attempt number, execution policy,
 `setup_seconds`, `fit_seconds`, `score_seconds`, and `worker_elapsed_seconds`.
 The legacy `runtime` measures the target adapter including scoring; killed workers use
 elapsed worker time. Use `fit_seconds` when comparing the fit budget. Preparation is
 separately supervised, and fit is hard-limited to T + grace. Scoring has its own cap.
 `timeout_phase` distinguishes setup, fit and score failures; a score timeout is never a
 successful recovery. C5/C6 resource accounting is described below; C7 method parallelism
-is implemented, while C3 soft stopping remains pending.
+is implemented. `target-v2` also implements cooperative soft stopping at the fit deadline;
+native blocking work remains protected by the T + grace hard limit.
 
 Every new row has one of seven `stop_reason` values: `budget_exhausted`, `time_limit`,
 `converged`, `early_stop`, `hard_timeout`, `error`, `resource_limit`. Explicit adapter `stop_reason_`
@@ -139,8 +141,8 @@ Where the backend exposes no reason, a normal return uses `budget_exhausted` wit
 every native budget unit was consumed. Other sources are `adapter`, `generation_count`
 and `runner`. Failed/skipped rows use `error`, RSS-limit failures use `resource_limit`,
 and hard timeouts use `hard_timeout`;
-the separate status retains the failure/skip distinction. Soft `time_limit` signals will
-be wired in C3. Aggregates include reason counts/rates and source counts. Legacy rows
+the separate status retains the failure/skip distinction. `target-v2` records soft
+`time_limit` signals from the cooperative fit deadline. Aggregates include reason counts/rates and source counts. Legacy rows
 without a reason remain `unknown` in these distributions; their files are not rewritten.
 
 ## C5/C6 resource protocol slots-v1
@@ -216,6 +218,27 @@ A1/A2 来源、资格、同源观测与协议迁移见 [验收记录](validation
 
 Green primary score: held-out whole-forcing response MSE and RMSE divided by training (U-U_hom) RMS. Per-forcing error, inverse rank/conditioning and coverage are recorded. Reference AST is scoring-only; reference-forward floor uses all-response RMS as a separate diagnostic. Fixed offdiagonal mask abs(x-xi)>1e-12 includes exclusion fraction; forward integration retains the diagonal. No certified kernel recovery.
 
+FDE responses use metric protocol 2.3 and `fde-response-v1`, numerical task `sr`,
+scientific task `fractional_equation_response`. Targets are observed `u(x,t)` or
+`ex(t)`; no integer or fractional derivatives are estimated. The latest unique
+times form the test block; tied times and all spatial points in each frame stay
+together. Training caps sample only the earlier block, with raw units retained.
+Scores reuse SR MSE, RMSE, test-standard-deviation NRMSE, R² and finite prediction
+coverage. Reference formulas and fractional orders are unknown, so recovery is
+ineligible. Missing coordinates retain `source_blocked` targets; byte duplicates
+and the rounded tsfade DAT alias add no independent fits. See [FDE](fde_dataset.md).
+
+FDE PDE views use `fde-pde-diagnostic-v1` and the separate scientific task
+`fractional_field_integer_pde_diagnostic`. All 13 PDE adapters are enumerated;
+PDE-Net retains an unsupported status for scalar 1D fields. Integer derivative
+residuals retain the adapters' metric protocols 2.1 or 2.2 and their respective
+normalization definitions. All methods use disjoint temporal blocks with two
+unused frames and at least three test frames; derivatives follow the split.
+Implicit search uses the same observations with an implicit target representation.
+No fractional operator is evaluated, recovery is ineligible, and rollout abstains
+because boundary evidence is absent. These are views of existing observations;
+response scores and residual scores belong to separate comparison groups.
+
 pyqg scores physical s^-2 MSE/RMSE, held-out-run layer/frame NRMSE and finite coverage of declared sampled points. Training-only normalization, indices/weights are recorded; expressions use standardized inputs/output. Offline closure does not establish online stability. File SR keeps official pairs or fixed input-range interpolation holdout, with unknown truth. New tracks are recovery-ineligible until source certification.
 
 ## E1–E3 evaluation extensions
@@ -246,7 +269,7 @@ Declared formula/generator/coefficient references can provide a numerical error 
 unverified source references remain diagnostics. Missing or unsupported truth is an
 explicit abstention. Reference recovery and ranking are ineligible.
 
-`frozen-report-v1` validates manifest SHA256, row identity/timing and declared targets.
+`frozen-report-v2` validates manifest SHA256, row identity/timing and declared targets.
 It isolates metric/data/execution protocols, task, profile, scoring settings and CPU/GPU.
 Error means average targets within instance, instances within dataset, datasets within
 family, families within seed, then seeds equally. Available-success means expose

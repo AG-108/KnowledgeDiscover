@@ -53,7 +53,7 @@ target-version = ["py310"]
 extend-exclude = '''
 /(
   archive
-  | kd/dataset/(CYT|DeepSymbolicOptimization|Discover_Green_function|Discovery_of_soild_consititutive|EqGPT|SymbolicGPT|ViscousGravityCurrent|discovery-of-physics-from-data)
+  | kd/dataset/(CYT|DeepSymbolicOptimization|Discover_Green_function|Discovery_of_soild_consititutive|EqGPT|FDE|SymbolicGPT|ViscousGravityCurrent|discovery-of-physics-from-data)
   | kd/model/(PDENet2|discover|dso|eqgpt|sga|symbolicgpt)
 )/
 '''
@@ -68,6 +68,7 @@ extend-exclude = [
   "kd/dataset/Discover_Green_function",
   "kd/dataset/Discovery_of_soild_consititutive",
   "kd/dataset/EqGPT",
+  "kd/dataset/FDE",
   "kd/dataset/SymbolicGPT",
   "kd/dataset/ViscousGravityCurrent",
   "kd/dataset/discovery-of-physics-from-data",

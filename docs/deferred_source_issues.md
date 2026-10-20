@@ -1,6 +1,8 @@
 # 已记录的来源问题
 
-更新：2026-09-30。用户指示先记录、后续解决。下列问题不自动解除。
+更新：2026-10-16。用户指示先记录、后续解决。下列问题不自动解除。
+
+两个参数 NPY 与二维 `Advection_diffusion.mat` 已经核对坐标并接入，见[新增接入记录](data.md#a3a4-参数方程与二维对流扩散2026-10-16)。Burgers 尚缺字节一致上游文件；二维对流扩散尚缺生成系数与边界，均保留未认证状态。
 
 | 范围 | 未决问题 | 当前处理 |
 | --- | --- | --- |
@@ -9,7 +11,7 @@
 | A1 VGS／WaveBreaking | 仿真/实验尺度、几何/边界、记录独立性与投影误差基准 | 保留局部窗口/帧划分，不认证跨系统 OOD |
 | A2 Heat／compound | Heat 系数真值；compound 源符号冲突 | 不计认证恢复，不调阈值放行 |
 | A3 WDwake／TLC | 物理坐标、边界、六份散点几何与界面 | source_blocked |
-| A3 Beam／裸 NPY | Beam 阶数／系数；两个参数 NPY 坐标 | source_blocked |
+| A3 Beam | Beam 阶数／系数 | source_blocked |
 | A4 TLC／Smile／EITech | 九份稳态几何；两个掩码／非数值域及来源约束 | source_blocked |
 | A5 periodic／jump | 原 MAT 无 ExactGreen；plot_Green.py 发现结果不是参考真值 | 留出响应拟合可运行；参考核评分 abstain |
 | A5 两份 data2 同名 MAT | negative_helmholtz、periodic_helmholtz 字节不同，来源未知 | 不注册、不覆盖、不增加家族分母 |
@@ -18,5 +20,5 @@
 | A6 外部资产 | 数据许可证／可再分发依据 | manifest 记录 unknown；不用代码许可替代数据许可 |
 | A6 预训练 | E2E 原语料；SymbolicGPT 精确结构交集；EqGPT 系数／观测重叠 | 分开记录结构暴露与观测重叠；不下载权重 |
 
-证据：[资产清单](asset_manifest.json) 与 [验收摘要](validation.md)；逐文件历史诊断压缩保存在本地 results/validation/source_evidence.json.gz。
+证据：[资产清单](asset_manifest.json) 与 [验收摘要](validation.md)；原逐文件历史诊断 results/validation/source_evidence.json.gz 已于 2026-10-20 随 results/validation/ 删除。
 正式实验仍须 C3/C5–C7、选定来源条件、预算与矩阵冻结。

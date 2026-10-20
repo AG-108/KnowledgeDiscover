@@ -6,12 +6,13 @@ inventory even in a public checkout without optional assets.
 
 from copy import deepcopy
 
-DATASET_PROTOCOL_VERSION = "domain-v4"
+DATASET_PROTOCOL_VERSION = "domain-v5"
 
 
 def dataset_metadata(name, task, *, family=None):
     """Return JSON-safe protocol declarations; availability is checked separately."""
     from ._domain import FIELD_SPECS, SOLID_SUBDIRS
+    from ._fractional import FDE_PDE_SPECS, FDE_SPECS, response_target
 
     card = {
         "dataset_protocol_version": DATASET_PROTOCOL_VERSION,
@@ -68,10 +69,34 @@ def dataset_metadata(name, task, *, family=None):
                     integration_status="offline_resolved_field_adapter_available",
                     instance_policy="one_two_layer_system; two targets",benchmark_role="physical_extension",
                     requirements=["generator_version_filter_cutoff_license; online_validation_future"])
+    elif name in FDE_SPECS or name in FDE_PDE_SPECS:
+        response = FDE_PDE_SPECS.get(name, name)
+        spec = FDE_SPECS[response]
+        target = response_target(response)
+        card.update(
+            scientific_task="fractional_equation_response", physical_family=response,
+            source_paths=[spec["path"]], source_status="user_supplied_archive",
+            reference_status="unknown", benchmark_role="physical_extension",
+            target_definition="ex=f(t)" if target == "ex" else "u=f(x,t)",
+            split_protocol="temporal_unique_time_holdout", instance_policy="one_observed_record",
+            integration_status=("response_adapter_available" if spec["layout"] else
+                                "response_adapter_requires_explicit_coordinates"),
+            requirements=["fractional_operator_orders_and_reference_for_equation_discovery"] +
+                         ([] if spec["layout"] else ["explicit_x_t_layout_and_coordinate_evidence"]),
+        )
+        if name in FDE_PDE_SPECS:
+            card.update(
+                scientific_task="fractional_field_integer_pde_diagnostic",
+                target_definition="integer evolution RHS or implicit integer derivative relation",
+                split_protocol="temporal_block_with_support_gap",
+                instance_policy="same_observed_record_as_response_view",
+                integration_status=("pde_diagnostic_adapter_available" if spec["layout"] else
+                                    "pde_diagnostic_requires_explicit_coordinates"),
+            )
     elif task == "sr":
-        card.update(source_paths=["data/benchmarks.csv"], source_status="packaged_definition",
+        card.update(source_paths=["data/benchmarks.csv", "data/function_sets.csv"], source_status="packaged_definition",
                     reference_status="formula_declared", physical_family=name.rsplit("-", 1)[0])
-    if name in advanced:
+    if name in advanced or name in FDE_SPECS or name in FDE_PDE_SPECS:
         pass
     elif name.startswith("ode_core_"):
         development = {"oscillator", "population", "chaotic", "brusselator"}
@@ -112,7 +137,10 @@ def dataset_metadata(name, task, *, family=None):
                     target_definition="stress=f(lambda,C,T)", split_protocol="official_rubber_split",
                     instance_policy="official_train_test_pair", reference_status="unknown",
                     source_status="local_research_snapshot", benchmark_role="physical_extension",
-                    source_paths=[f"Discovery_of_soild_consititutive/data/data_rubber/{name[7:]}/*.xlsx"])
+                    source_paths=[
+                        f"Discovery_of_soild_consititutive/data/data_rubber/{split}/*.xlsx"
+                        for split in (("train", "test") if name == "rubber_train" else ("test",))
+                    ])
     elif name.startswith("tlc_"):
         from ._catalog import _TLC_TIME_SERIES_FILES
 
@@ -165,7 +193,9 @@ def dataset_metadata(name, task, *, family=None):
         spec = EVOLUTION_SPECS[name]
         card["target_definition"] = (
             "implicit relation with u_t,u_xt,u_x" if name == "implicit_mixed" else
-            "u_"+"t"*spec["order"]+"=F(observed fields,spatial derivatives)")
+            "u_"+"t"*spec["order"]+"=F(observed fields,spatial derivatives,coordinates)")
+        if spec.get("coefficient_dependencies"):
+            card["requirements"] = ["configured_variable_coefficient_basis; no reference-derived features"]
     elif name.startswith("tlc_") and name not in advanced:
         regular = {"tlc_burgers1d", "tlc_heat_longtime", "tlc_heat_multiscale_lesspoints"}
         card.update(integration_status="observed_residual_available" if name in regular else "source_blocked",
@@ -173,11 +203,14 @@ def dataset_metadata(name, task, *, family=None):
     from ._provenance import source_evidence
 
     card["source_evidence"] = source_evidence(name)
+    if card["source_evidence"].get("source_status"):
+        card["source_status"] = card["source_evidence"]["source_status"]
+        card["reference_status"] = card["source_evidence"]["reference_status"]
     from ._core_sources import ASSETS, evidence
 
     if card["source_paths"] and all(path in ASSETS for path in card["source_paths"]):
         card["source_status"] = "packaged_definition_verified" if task == "sr" else "upstream_byte_verified"
-        card["source_evidence"] = evidence(card["source_paths"])
+        card["source_evidence"] = {**evidence(card["source_paths"]), **card["source_evidence"]}
     return deepcopy(card)
 
 
@@ -221,15 +254,14 @@ def pending_datasets():
     add("pyqg_subgrid", "turbulence_closure", [prefix + "data/eddy_forcing1_run=*_scipy.nc"],
         "field closure targets, filtering and run holdout", family="pyqg")
     fields = [
+        ("diffusion_raw", "data/Diffusion_equation.txt", "evolution_pde",
+         "source layout, coordinates and governing equation unverified; cannot substitute Heat"),
         ("beam", "data/Beam_equation.mat", "evolution_pde", "verify temporal/spatial derivative orders"),
         ("klein_gordon", "data/KG_equation.mat", "evolution_pde", "second temporal derivative adapter"),
         ("wave", "EqGPT/data/Wave_equation/wave.mat", "evolution_pde", "second temporal derivative adapter"),
         ("burgers2d", "EqGPT/data/Burgers_2D/Burgers2D.mat", "evolution_pde", "2D scalar PDE adapter"),
         ("implicit_mixed", "EqGPT/data/Eq_6_2_12/data_Eq_6_2_12.csv", "evolution_pde", "mixed u_xt implicit equation"),
         ("pde_compound_eqgpt", "EqGPT/data/PDE_compound/PDE_compound.csv", "evolution_pde", "source sign conflict and high reference residual"),
-        ("parametric_burgers", "data/Parametric_Burgers_equation.npy", "evolution_pde", "coordinates and variable coefficients missing"),
-        ("parametric_convection_diffusion", "data/Parametric_convection_diffusion.npy", "evolution_pde", "coordinates and variable coefficients missing"),
-        ("advection_diffusion", "data/Advection_diffusion.mat", "evolution_pde", "Expression1 layout undecoded"),
         ("laplace_disk", "EqGPT/data/Possion_equation/Possion_x_y.xlsx", "steady_pde", "steady Laplace residual and disk geometry"),
         ("laplace_smile", "EqGPT/data/Laplacian_smile/Laplacian_smile.xlsx", "steady_pde", "steady Laplace residual and mask"),
         ("poisson_eitech", "EqGPT/data/Laplacian_EITech/Laplacian_EITech.xlsx", "steady_pde", "steady Poisson residual and source"),
@@ -243,7 +275,15 @@ def pending_datasets():
             paths.append(dso + name + "_test.csv")
         add("dso_file_" + name, "algebraic_formula", paths, "verify column semantics and reference",
             family="DSO_file_" + name.split("-")[0])
+    for name in [f"Constant-{i}" for i in range(1, 9)] + [f"Nguyen-{i}" for i in range(1, 13)]:
+        add("dso_fixed_" + name, "algebraic_formula",
+            [dso + name + ".csv", dso + name + "_test.csv"],
+            "fixed sample variant of formula task; source/split identity requires verification",
+            family=name.split("-")[0], role="fixed_sample_variant",
+            aliases=["dso_file_Test-1"] if name == "Nguyen-1" else [])
     duplicates = {
+        "fde_burgers_alias": ["FDE/data/burgers.mat"],
+        "fde_kdv_alias": ["FDE/data/KdV.mat"],
         "kdv_aliases": ["data/Kdv.mat", "EqGPT/data/KdV_equation/KdV-PINN.mat"],
         "burgers_sine_aliases": ["data/Burgers_equation.mat", "EqGPT/data/Burgers_equation/burgers_sine.mat"],
         "klein_gordon_alias": ["EqGPT/data/KG_equation/KG_Exp.mat"],
@@ -254,6 +294,9 @@ def pending_datasets():
     for name, paths in duplicates.items():
         add(name, "duplicate_asset", paths, "byte-duplicate assets, excluded from independent task counts",
             role="duplicate")
+    add("fde_tsfade_fft_dat_alias", "duplicate_asset", ["FDE/data/tsfade_fft.dat"],
+        "same field at rounded text precision; use fde_tsfade_fft", role="duplicate",
+        aliases=["fde_tsfade_fft"])
     add("symbolicgpt_generation_configs", "training_asset", ["SymbolicGPT/datasets/*/config.txt"],
         "configuration only; sample corpus absent", role="training_asset")
     add("eqgpt_equation_handbook", "training_asset", ["EqGPT/code/PDE_dataset_0725.xlsx"],

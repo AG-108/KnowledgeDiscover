@@ -1,0 +1,11 @@
+{
+  "profile": "smoke",
+  "tasks": ["pde"],
+  "models": ["*"],
+  "datasets": ["fde_pt_fade_pde", "fde_pt_fde_pde", "fde_tsfade_fft_pde"],
+  "seeds": [0],
+  "output_dir": "results/fde_pde",
+  "timeout": 90,
+  "setup_timeout": 120,
+  "score_timeout": 90
+}

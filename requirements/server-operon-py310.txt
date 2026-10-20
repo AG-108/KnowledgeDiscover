@@ -1,0 +1,9 @@
+# Pinned Python 3.10 numeric stack and PyOperon (Windows or Linux).
+# Server recipe: install server-unified-py310.txt on top; see docs/server_setup.md.
+numpy==2.0.2
+pandas==2.2.3
+scikit-learn==1.6.1
+scipy==1.13.1
+sympy==1.13.1
+matplotlib==3.9.4
+pyoperon==0.6.1

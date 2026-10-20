@@ -56,11 +56,16 @@ def execution_policy(timeout=None, *, timeout_grace=5.0, setup_timeout=300.0,
 
 
 def atomic_json(path, value):
+    # Match write_text's platform newline translation for existing consumers.
+    data = json.dumps(value, ensure_ascii=False, indent=2, allow_nan=False)
+    atomic_bytes(path, data.replace("\n", os.linesep).encode("utf-8"))
+
+
+def atomic_bytes(path, data):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(path.suffix + ".tmp")
-    temporary.write_text(json.dumps(value, ensure_ascii=False, indent=2, allow_nan=False),
-                         encoding="utf-8")
+    temporary.write_bytes(data)
     # Windows readers briefly deny replacement unless opened with share-delete.
     # Keep the previous complete snapshot visible while retrying that transient race.
     deadline = time.perf_counter() + 1.0

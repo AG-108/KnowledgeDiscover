@@ -46,6 +46,12 @@ def digest(path):
 
 
 def _origin(relative):
+    from kd.dataset._core_sources import ASSETS
+
+    if relative in ASSETS:
+        repository, revision, upstream_path, sha256 = ASSETS[relative]
+        return {"repository": repository, "revision": revision, "path": upstream_path,
+                "status": "upstream_byte_verified", "expected_sha256": sha256}
     folder = relative.split("/")[0]
     if folder == "Discovery_of_soild_consititutive":
         return {
@@ -67,6 +73,30 @@ def _origin(relative):
     }
 
 
+def _role(relative):
+    """Identify retained models, definitions and results before using file suffixes."""
+    path = Path(relative)
+    suffix = path.suffix.lower()
+    if suffix == ".zip":
+        return "archive_copy"
+    if "results_save/" in relative or "/results/" in relative:
+        return "upstream_result"
+    if suffix == ".png":
+        return "illustration"
+    if path.name == "function_sets.csv":
+        return "grammar_definition"
+    if path.name == "benchmarks.csv":
+        return "benchmark_definition"
+    if (suffix in {".pt", ".pth", ".index", ".meta", ".data-00000-of-00001"}
+            or "SymbolicGPT" in relative or "PDE_dataset_0725" in relative
+            or "dict_datas_0725" in relative or "/control/data/" in relative
+            or path.name == "word_dict.pkl"):
+        return "training_asset"
+    if suffix in {".json", ".txt"}:
+        return "generator_configuration"
+    return "observation_or_definition"
+
+
 def asset_manifest(*, root=SOURCE_ROOT, expected=None):
     root = Path(root)
     assets = {}
@@ -77,18 +107,7 @@ def asset_manifest(*, root=SOURCE_ROOT, expected=None):
     )
     for path in paths:
         relative = path.relative_to(root).as_posix()
-        role = (
-            "archive_copy"
-            if path.suffix == ".zip"
-            else "training_asset"
-            if path.suffix in {".pt", ".pth", ".index", ".meta", ".data-00000-of-00001"}
-            or "SymbolicGPT" in relative
-            or "PDE_dataset_0725" in relative
-            or "dict_datas_0725" in relative
-            else "generator_configuration"
-            if path.suffix in {".json", ".txt"}
-            else "observation_or_definition"
-        )
+        role = _role(relative)
         assets[relative] = {
             "path": relative,
             "bytes": path.stat().st_size,
@@ -119,6 +138,16 @@ def asset_manifest(*, root=SOURCE_ROOT, expected=None):
                     continue
                 row = assets.get(path.relative_to(root).as_posix())
                 if row:
+                    declared_role = card.get("benchmark_role")
+                    if declared_role in {"training_asset", "duplicate", "fixed_sample_variant"}:
+                        row["role"] = declared_role
+                    elif row["role"] == "generator_configuration":
+                        row["role"] = "observation_or_definition"
+                    row.setdefault("integration", []).append({
+                        "dataset": card["dataset"],
+                        "status": card.get("integration_status", "registered"),
+                        "requirements": card.get("requirements", []),
+                    })
                     row["datasets"].append(card["dataset"])
                     row["families"].append(card["physical_family"])
                     row["instances"].append(card["dataset"] + "; see expanded dataset inventory")

@@ -7,6 +7,7 @@ import time
 from pathlib import Path
 
 import pytest
+from benchmark_helpers import host_slots
 
 import run_benchmark as benchmark
 from kd.benchmark_execution import atomic_json, case_lock, execution_policy, supervise
@@ -160,7 +161,7 @@ def test_real_first_target_timeout_still_runs_second_target(monkeypatch, tmp_pat
 
 
 def test_parallel_reuses_terminal_failures_without_overwriting_destination(monkeypatch, tmp_path):
-    from test_run_benchmark import make_case, mock_target_workers
+    from benchmark_helpers import make_case, mock_target_workers
 
     from scripts import run_parallel_benchmark as parallel
 
@@ -209,18 +210,6 @@ def test_cpu_cost_includes_exited_child_and_excludes_sleep(tmp_path):
     assert outcome["gpu_occupied_seconds"] == 0
     assert outcome["resource_monitor_source"] == "psutil_process_tree_sampled"
     assert json.loads((tmp_path / "supervision.json").read_text())["cpu_seconds"] == outcome["cpu_seconds"]
-
-
-def host_slots():
-    import psutil
-
-    from kd.benchmark_resources import slot_policy
-
-    available = psutil.Process().cpu_affinity()
-    if len(available) < 8:
-        pytest.skip("Two D2 slots require eight available CPUs")
-    return {slot: slot_policy(slot, cpus=cpus) for slot, cpus in
-            (("cpu", available[:4]), ("gpu", available[4:8]))}
 
 
 def test_two_real_slot_workers_have_disjoint_affinity_and_environment(tmp_path):
@@ -283,7 +272,7 @@ def test_rss_limit_counts_child_and_kills_whole_tree(tmp_path):
         assert not child.is_running() or child.status() == psutil.STATUS_ZOMBIE
     except psutil.NoSuchProcess:
         pass
-    from test_run_benchmark import make_case
+    from benchmark_helpers import make_case
 
     case = make_case()
     spec = dict(instance=case["dataset"], target="y", target_id="i0000_t0000", ground_truth="x1")
@@ -319,7 +308,7 @@ def test_slot_resources_in_summary_and_resume_are_immutable(tmp_path):
 
 
 def test_recover_supervised_candidate_without_rerunning(monkeypatch, tmp_path):
-    from test_run_benchmark import make_case
+    from benchmark_helpers import make_case
 
     case = make_case()
     spec = benchmark._target_spec(case["dataset"], 0, "y", 0, "x1")
@@ -339,7 +328,7 @@ def test_recover_supervised_candidate_without_rerunning(monkeypatch, tmp_path):
 
 
 def test_slot_mapping_uses_method_instead_of_source_device():
-    from test_run_benchmark import make_case
+    from benchmark_helpers import make_case
 
     from kd.benchmark_resources import slot_policy
     from scripts.run_slots import bind_case
@@ -355,7 +344,7 @@ def test_slot_mapping_uses_method_instead_of_source_device():
 
 
 def test_slot_dry_run_does_not_load_data_or_models(monkeypatch, tmp_path):
-    from test_run_benchmark import make_case
+    from benchmark_helpers import make_case
 
     from scripts import run_slots
 
@@ -375,7 +364,7 @@ def test_slot_dry_run_does_not_load_data_or_models(monkeypatch, tmp_path):
 
 
 def test_resource_aggregation_separates_constraints_and_counts_shared_cost_once():
-    from test_run_benchmark import make_case
+    from benchmark_helpers import make_case
 
     row = dict(benchmark._base_row(make_case()), status="ok", cpu_seconds=2.0,
                gpu_occupied_seconds=0.0, preparation_cpu_seconds=0.5, system_score_cpu_seconds=0.7)
@@ -427,7 +416,7 @@ def test_external_gpu_service_is_metered_and_only_killed_on_resource_limit(tmp_p
 def test_slot_scheduler_serializes_each_queue_and_runs_both_queues(monkeypatch, tmp_path):
     import threading
 
-    from test_run_benchmark import make_case
+    from benchmark_helpers import make_case
 
     from scripts import run_slots
 
@@ -555,7 +544,7 @@ def test_legacy_c5_parallel_policy_is_preserved_and_separate_from_c7():
 
 def test_native_operon_uses_four_threads_with_a_small_search(tmp_path):
     import numpy as np
-    from test_run_benchmark import make_case
+    from benchmark_helpers import make_case
 
     params = make_case(model="pyoperon", profile="full")["model_params"]
     params.update(population_size=32, generations=2, max_evaluations=2000, optimizer_iterations=2)

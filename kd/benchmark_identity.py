@@ -13,13 +13,53 @@ from pathlib import Path
 
 from kd.benchmark_protocol import digest
 
-SCHEMA = "benchmark-identity-v1"
+SCHEMA = "benchmark-identity-v2"
 DEPENDENCIES = (
     "numpy", "scipy", "pandas", "sympy", "scikit-learn", "matplotlib", "psutil",
     "torch", "gplearn", "pysindy", "pysr", "pyoperon", "physo", "DeePyMoD",
     "epde", "juliacall", "juliapkg", "sympytorch", "requests", "numba", "xarray",
 )
 ASSET_PARAMETERS = ("checkpoint_path", "source_dir", "model_path")
+DATASET_ASSET_PARAMETERS = ("root", "benchmark_source")
+METHOD_ASSETS = {
+    "eqgpt": ("kd/model/eqgpt/data/dict_datas_0725.json",
+              "kd/model/eqgpt/data/PDE_dataset_0725.xlsx"),
+}
+
+
+def _dataset_sources(root, case):
+    """Resolve the files used by loaders without importing or loading data."""
+    params = case.get("dataset_params", {})
+    dataset_root = Path(root) / "kd/dataset"
+    symbolic = case.get("source") == "symbolic"
+    root_capable = symbolic or case.get("dataset", "").startswith(
+        ("fde_", "dso_file_", "green_")
+    ) or case.get("dataset") == "pyqg_subgrid"
+    overridden_root = root_capable and params.get("root") is not None
+    default_base = dataset_root / "data" if symbolic else dataset_root
+    base = Path(params["root"]) if overridden_root else default_base
+    base = base.resolve()
+    if symbolic:
+        benchmark_source = params.get("benchmark_source", "benchmarks.csv")
+        benchmark = Path(benchmark_source)
+        if not benchmark.is_absolute():
+            benchmark = base / benchmark
+        sources = [(logical, [path] if path.is_file() else []) for logical, path in (
+            ("data/benchmarks.csv", benchmark.resolve()),
+            ("data/function_sets.csv", base / "function_sets.csv"),
+        )]
+        parameters = {"root": base} if overridden_root else {}
+        if "benchmark_source" in params:
+            parameters["benchmark_source"] = benchmark.resolve()
+        return sources, parameters
+    sources = []
+    for pattern in case.get("dataset_metadata", {}).get("source_paths", []):
+        matches = sorted(path for path in base.glob(pattern) if path.is_file())
+        if matches:
+            sources.extend((path.relative_to(base).as_posix(), [path]) for path in matches)
+        else:
+            sources.append((pattern, []))
+    return sources, {"root": base} if overridden_root else {}
 
 
 def file_digest(path):
@@ -34,14 +74,14 @@ def file_digest(path):
 
 def source_fingerprint(root):
     root = Path(root)
-    paths = [root / "run_benchmark.py"]
-    for directory in ("kd", "scripts", "configs/benchmark"):
+    paths = [root / "run_benchmark.py", root / "examples/_common.py"]
+    for directory in ("kd", "scripts", "server/launch", "configs/benchmark"):
         paths.extend(path for path in (root / directory).rglob("*")
                      if path.is_file() and path.suffix in {".py", ".json", ".toml", ".sh"}
                      and "__pycache__" not in path.parts)
-    paths.extend(root / name for name in ("pyproject.toml", "requirements.txt",
-                                        "requirements-server-unified-py310.txt",
-                                        "requirements-operon-py310.txt"))
+    paths.extend(root / name for name in ("pyproject.toml", "requirements/core.txt",
+                                        "requirements/server-unified-py310.txt",
+                                        "requirements/server-operon-py310.txt"))
     files = {path.relative_to(root).as_posix(): file_digest(path)
              for path in sorted(set(paths)) if path.is_file()}
     return {"sha256": digest(files), "files": files}
@@ -117,19 +157,44 @@ def asset_fingerprints(root, cases):
         return file_hashes[key]
     for case in cases:
         references = {}
-        for pattern in case.get("dataset_metadata", {}).get("source_paths", []):
-            matches = sorted(path for path in (root / "kd/dataset").glob(pattern) if path.is_file())
+        sources, dataset_parameters = _dataset_sources(root, case)
+        dataset_references = {}
+        benchmark_hash = None
+        for logical_path, matches in sources:
             if not matches:
-                references[f"dataset:{pattern}"] = None
+                dataset_references[f"dataset:{logical_path}"] = None
             for path in matches:
-                asset_id = "dataset:" + path.relative_to(root / "kd/dataset").as_posix()
-                assets[asset_id] = {"sha256": checked_hash(path), "bytes": path.stat().st_size}
+                fingerprint = checked_hash(path)
+                # Different roots may contain different bytes for the same
+                # logical source. Neither their records nor bindings may alias.
+                asset_id = f"dataset:{logical_path}:sha256:{fingerprint}"
+                assets[asset_id] = {"sha256": fingerprint, "bytes": path.stat().st_size}
                 bindings[asset_id] = str(path.resolve())
-                references[asset_id] = assets[asset_id]["sha256"]
+                dataset_references[asset_id] = fingerprint
+                if logical_path == "data/benchmarks.csv":
+                    benchmark_hash = fingerprint
                 expected = case.get("dataset_metadata", {}).get("source_evidence", {}).get("asset_sha256", {}).get(
-                    path.relative_to(root / "kd/dataset").as_posix())
-                if expected and references[asset_id] != expected:
+                    logical_path)
+                params = case.get("dataset_params", {})
+                symbolic_override = (case.get("source") == "symbolic"
+                                     and (params.get("root") is not None or "benchmark_source" in params))
+                if expected and not symbolic_override and fingerprint != expected:
                     raise ValueError(f"Verified source asset content changed: {asset_id}")
+        references.update(dataset_references)
+        for parameter, path in dataset_parameters.items():
+            fingerprint = (benchmark_hash or digest({"missing": "benchmark_source"})
+                           if parameter == "benchmark_source" else digest(dataset_references))
+            references[f"dataset.{parameter}"] = fingerprint
+            bindings[f"dataset:{parameter}:{fingerprint}"] = str(path)
+        for relative in METHOD_ASSETS.get(case["model"], ()):
+            asset_id = f"method:{case['model']}:{relative}"
+            path = root / relative
+            if not path.is_file():
+                references[asset_id] = None
+                continue
+            assets[asset_id] = {"sha256": checked_hash(path), "bytes": path.stat().st_size}
+            bindings[asset_id] = str(path.resolve())
+            references[asset_id] = assets[asset_id]["sha256"]
         for parameter in ASSET_PARAMETERS:
             value = case.get("model_params", {}).get(parameter)
             if not value:
@@ -185,6 +250,10 @@ def canonical_case(case):
             fingerprint = value.get("asset_fingerprints", {}).get(parameter)
             if fingerprint:
                 value["model_params"][parameter] = "sha256:" + fingerprint
+    for parameter in DATASET_ASSET_PARAMETERS:
+        fingerprint = value.get("asset_fingerprints", {}).get(f"dataset.{parameter}")
+        if fingerprint and parameter in value.get("dataset_params", {}):
+            value["dataset_params"][parameter] = "sha256:" + fingerprint
     return value
 
 
@@ -218,6 +287,33 @@ def attach(manifest, root):
     cases = copy.deepcopy(manifest["cases"])
     for case in cases:
         case["asset_fingerprints"] = per_case[case["name"]]
+        if case.get("source") == "symbolic":
+            metadata = case.get("dataset_metadata", {})
+            evidence = metadata.get("source_evidence", {})
+            mismatches = []
+            for logical, expected in evidence.get("asset_sha256", {}).items():
+                prefix = f"dataset:{logical}:sha256:"
+                actual = next((value for key, value in case["asset_fingerprints"].items()
+                               if key.startswith(prefix)), None)
+                if actual is not None and actual != expected:
+                    mismatches.append(logical)
+            if mismatches:
+                # A different definition is a diagnostic input, not the
+                # certified named benchmark represented by the original card.
+                metadata["source_status"] = "custom_definition_unverified"
+                metadata["source_evidence"] = {
+                    "unverified_assets": mismatches,
+                    "declared_source_evidence": copy.deepcopy(evidence),
+                }
+                if "data/benchmarks.csv" in mismatches:
+                    metadata["reference_status"] = "unknown"
+                    case["ground_truth"] = None
+        # Resolve relative overrides before workers change their working
+        # directory; the public manifest records only the logical binding.
+        for parameter in DATASET_ASSET_PARAMETERS:
+            fingerprint = case["asset_fingerprints"].get(f"dataset.{parameter}")
+            if fingerprint and parameter in case.get("dataset_params", {}):
+                case["dataset_params"][parameter] = bindings[f"dataset:{parameter}:{fingerprint}"]
     matrix = [canonical_case(case) for case in cases]
     matrix.sort(key=digest)
     matrix_hash = digest({"cases": matrix, "execution_policy": stable_execution(manifest["execution_policy"]),
@@ -260,6 +356,10 @@ def public_manifest(manifest):
         for parameter in ASSET_PARAMETERS:
             if case.get("asset_fingerprints", {}).get(parameter):
                 case["model_params"][parameter] = f"asset:method:{case['model']}:{parameter}"
+        for parameter in DATASET_ASSET_PARAMETERS:
+            fingerprint = case.get("asset_fingerprints", {}).get(f"dataset.{parameter}")
+            if fingerprint and parameter in case.get("dataset_params", {}):
+                case["dataset_params"][parameter] = f"asset:dataset:{parameter}:{fingerprint}"
     return value
 
 
@@ -273,4 +373,11 @@ def restore_paths(cases, bindings):
                 if asset_id not in bindings:
                     raise ValueError(f"Missing local asset binding: {asset_id}")
                 case["model_params"][parameter] = bindings[asset_id]
+        for parameter in DATASET_ASSET_PARAMETERS:
+            value = case.get("dataset_params", {}).get(parameter)
+            if isinstance(value, str) and value.startswith("asset:"):
+                asset_id = value.removeprefix("asset:")
+                if asset_id not in bindings:
+                    raise ValueError(f"Missing local asset binding: {asset_id}")
+                case["dataset_params"][parameter] = bindings[asset_id]
     return cases

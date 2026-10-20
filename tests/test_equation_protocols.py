@@ -454,9 +454,18 @@ def test_anchored_poisson_does_not_discover_copy_of_constant_forcing():
 
 
 def test_new_equation_timeout_keeps_next_rhs_and_resume_terminal(monkeypatch, tmp_path):
-    # Reuse the public execution-v1 supervisor contract with a real two-RHS declaration.
+    # Use a verified analytic domain: source-blocked observations now terminate in planning.
     c = case("implicit_pde", "tlc_steady_ns2d")
+    axis = np.linspace(0, 1, 11)
+    data = SteadyPDEDataset(
+        "analytic", np.zeros((3, 11, 11)), coords={"x": axis, "y": axis},
+        state_vars=("u", "v", "p"), geometry={"verified": True, "kind": "box",
+                                             "bounds": [[0, 1], [0, 1]]},
+        equation_targets=declared_targets("tlc_steady_ns2d"),
+    )
+    monkeypatch.setattr(b, "_load_instances", lambda _: iter([("analytic", data)]))
     specs = b._prepare_targets(c)
+    assert all("preparation_row" not in spec for spec in specs)
     calls = []
 
     def launch(case_path, attempt, policy, spec=None):
@@ -498,8 +507,7 @@ def test_real_tlc_symbols_units_and_pressure_denominator():
 
 def test_metric_versions_do_not_pool_legacy_and_new_residual_normalizations():
     modern = b._base_row(case())
-    legacy_case = case()
-    legacy_case["model"] = "pdefind"
+    legacy_case = case("pdefind", "heat")
     legacy = b._base_row(legacy_case)
     assert modern["metric_protocol_version"] == "2.2"
     assert legacy["metric_protocol_version"] == "2.1"

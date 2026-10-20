@@ -6,41 +6,29 @@ import numpy as np
 from scipy.spatial import cKDTree
 
 from kd.dataset._base import GridPDEDataset
-from kd.dataset._derivatives import namespace
+from kd.dataset._derivatives import default_stencil, namespace
 from kd.dataset._domain import spatial_blocks
 from kd.dataset._equations import SteadyPDEDataset, equation_spec, state_fields, targets
-from kd.model.kd_equation import SparseEquationModel, library, relative_residual
+from kd.evaluation.fractional import is_pde_diagnostic, method_view, temporal_views
+from kd.model.kd_equation import (
+    SparseEquationModel,
+    coordinate_basis_symbols,
+    library,
+    relative_residual,
+)
 
 METHODS = {"pdefind_nd", "implicit_pde"}
 
 
 def validate(dataset, model):
-    from kd.benchmark_execution import SkipCase
+    from kd.benchmark_capabilities import validate_pde
 
-    name = dataset.equation_name.lower()
-    if name in {"wake", "wdwake"}:
-        raise SkipCase("source_blocked: WDwake physical coordinates and boundaries are unverified")
-    if name == "tlc_wave_darcy":
-        raise SkipCase(
-            "source_blocked: temporal order, coefficient and interface evidence required"
-        )
-    steady = isinstance(dataset, SteadyPDEDataset)
-    if not isinstance(dataset, GridPDEDataset) and not (
-        getattr(dataset, "geometry", None) or {}
-    ).get("verified"):
-        raise SkipCase("source_blocked: scatter valid domain/holes/interfaces are unverified")
-    if model == "pdefind_nd" and (steady or any(t.kind == "implicit" for t in targets(dataset))):
-        raise SkipCase("method_unsupported: explicit adapter requires evolution RHS")
-    if (
-        model == "implicit_pde"
-        and not steady
-        and all(t.kind != "implicit" for t in targets(dataset))
-    ):
-        raise SkipCase("method_unsupported: use pdefind_nd for explicit evolution targets")
+    validate_pde(dataset, model)
 
 
 def problems(dataset, case):
     # Enumeration has no derivative estimation, reference-dependent target selection or fit.
+    dataset = method_view(dataset, case.get("reference_adapter", case["model"]))
     for target in targets(dataset):
         yield {
             "target": target.key,
@@ -115,17 +103,22 @@ def _spatial_views(dataset, case, model):
 
 def _temporal_views(dataset, case):
     from kd.benchmark_execution import SkipCase
-    from run_benchmark import _slice_pde_time
+    from kd.benchmark_preparation import slice_pde_time
 
+    if is_pde_diagnostic(dataset):
+        return temporal_views(dataset, case["run_params"]["test_size"])
     nt = len(dataset.t)
-    cut = nt - max(3, round(nt * case["run_params"]["test_size"]))
+    # One frame on the held-out side of cut is the support gap, so reserving
+    # four frames leaves at least three actual test observations.
+    cut = nt - max(4, round(nt * case["run_params"]["test_size"]))
     # A three-point temporal stencil has radius one. No shared observation frames.
     train_stop, test_start = cut - 1, cut + 1
     if train_stop < 5 or nt - test_start < 3:
-        raise SkipCase("insufficient_support: temporal gap requires at least nine frames")
+        raise SkipCase("insufficient_support: temporal gap requires five training and "
+                       "three test frames plus two unused frames")
     if isinstance(dataset, GridPDEDataset):
-        train = _slice_pde_time(dataset, 0, train_stop)
-        test = _slice_pde_time(dataset, test_start, nt)
+        train = slice_pde_time(dataset, 0, train_stop)
+        test = slice_pde_time(dataset, test_start, nt)
     else:
         train, test = copy.deepcopy(dataset), copy.deepcopy(dataset)
         for result, sl in ((train, slice(0, train_stop)), (test, slice(test_start, nt))):
@@ -145,16 +138,40 @@ def _temporal_views(dataset, case):
     )
 
 
-def run(dataset, problem, case):
-    from run_benchmark import fit_call
+def prepare_views(dataset, case, model=None):
+    """Choose observation views and check cheap coordinate support before fitting."""
+    from kd.benchmark_execution import SkipCase
 
+    if model is None:
+        model = SparseEquationModel(**case["model_params"])
+    coordinates = set(dataset.spatial_vars)
+    if not isinstance(dataset, SteadyPDEDataset):
+        coordinates.add("t")
+    basis_symbols = coordinate_basis_symbols(model.coordinate_basis, coordinates)
+    dependencies = set(getattr(dataset, "protocol_metadata", {}).get("coefficient_dependencies", []))
+    if dependencies - basis_symbols:
+        raise SkipCase("method_unsupported: variable coefficients require a configured "
+                       f"coordinate_basis involving {sorted(dependencies)}")
+    if isinstance(dataset, SteadyPDEDataset):
+        return _spatial_views(dataset, case, model)
+    train, test, split = _temporal_views(dataset, case)
+    if isinstance(train, GridPDEDataset):
+        stencil = default_stencil(model.spatial_order)
+        if any(len(axis) < stencil for axis in train.coords_spatial.values()):
+            raise SkipCase("insufficient_support: spatial derivative "
+                           f"library requires at least {stencil} points per axis")
+    return train, test, split
+
+
+def run(dataset, problem, case):
+    from kd.benchmark_execution import fit_call
+
+    dataset = method_view(dataset, case.get("reference_adapter", case["model"]))
     validate(dataset, case.get("reference_adapter", case["model"]))
     model = SparseEquationModel(**case["model_params"])
     steady = isinstance(dataset, SteadyPDEDataset)
     target = next(t for t in targets(dataset) if t.key == problem["target"])
-    train, test, split = (
-        _spatial_views(dataset, case, model) if steady else _temporal_views(dataset, case)
-    )
+    train, test, split = prepare_views(dataset, case, model)
     options = dict(
         spatial_order=model.spatial_order,
         temporal_order=0 if steady else target.time_order,
@@ -205,6 +222,7 @@ def run(dataset, problem, case):
         try:
             numeric_expression(reference, names)
             import sympy as sp
+
             declared = sp.expand(expression_sympy(reference, names))
             expanded = [sp.expand(expression_sympy(term, names)) for term in terms]
             coefficients = np.zeros(len(terms))
@@ -226,8 +244,11 @@ def run(dataset, problem, case):
             model.train_scale_ = float(np.linalg.norm(coefficients * scales))
         model.coefficients_ = coefficients
         model.expression_ = str(reference)
-        model.diagnostics_ = {"train_rows": int(np.isfinite(X).all(axis=1).sum()),
-                              "ambiguous": False, "role": "source_reference; no fitting"}
+        model.diagnostics_ = {
+            "train_rows": int(np.isfinite(X).all(axis=1).sum()),
+            "ambiguous": False,
+            "role": "source_reference; no fitting",
+        }
     else:
         fit_call(model.fit, X, terms, y, excluded_relations=constraints)
     coef = model.coefficients_
@@ -277,15 +298,28 @@ def run(dataset, problem, case):
         "equation_protocol_version": "equation-v1",
         "metric_target": "observed_equation_residual",
         "equation_residual_normalization": "training_term_RMS_and_coefficient_unit_norm",
+        **(
+            {
+                "equation_residual_status": "ok"
+                if metric["equation_residual_points"]
+                else "abstain_insufficient_support"
+            }
+            if is_pde_diagnostic(dataset)
+            else {}
+        ),
         "normalization_train_scale": scale,
         "split": split,
         "n_train": model.diagnostics_["train_rows"],
         "n_test": metric["equation_residual_points"],
         "ground_truth_expression": reference,
         "recovery_eligible": False,
-        "recovery_evaluator_status": "ambiguous"
-        if model.diagnostics_["ambiguous"]
-        else "source_reference_not_certified",
+        "recovery_evaluator_status": (
+            "not_applicable"
+            if is_pde_diagnostic(dataset)
+            else "ambiguous"
+            if model.diagnostics_["ambiguous"]
+            else "source_reference_not_certified"
+        ),
         "equation_rollout_status": "abstain",
         "prediction_status": "abstain",
         "prediction_abstain_reason": "No independently validated boundary/initial-value solver for this subtrack",

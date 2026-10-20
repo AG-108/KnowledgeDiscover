@@ -66,6 +66,7 @@ class SGAPDE_Solver:
         
         # Run the genetic algorithm
         best_eq, best_mse = sga.run(self.config.sga_run)
+        self.best_equation_ = best_eq
         
         # Return the best PDE and its score
         return best_eq.visualize(), best_mse

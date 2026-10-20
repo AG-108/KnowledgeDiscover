@@ -131,6 +131,7 @@ class WSINDyPDEModel:
         ridge=0.0,
         max_iter=20,
         threshold=None,
+        coordinate_terms=False,
     ):
         self.terms = None if terms is None else [tuple(term) for term in terms]
         self.polynomial_degree = polynomial_degree
@@ -150,6 +151,7 @@ class WSINDyPDEModel:
         self.ridge = ridge
         self.max_iter = max_iter
         self.threshold = threshold
+        self.coordinate_terms = coordinate_terms
         self._validate_configuration()
 
     def _validate_configuration(self):
@@ -313,6 +315,23 @@ class WSINDyPDEModel:
                 u**power, wx[derivative], wt[0], dx, dt
             )
             columns.append(weak_column[slices].reshape(-1))
+        if self.coordinate_terms and (np.min(x) > 1e-8 or np.max(x) < -1e-8):
+            # Integrate derivatives of a(x)u by parts, including derivatives
+            # of a(x). No observed-field differentiation is introduced.
+            def integral(values, order):
+                return self._weak_convolution(values, wx[order], wt[0], dx, dt)
+            radial = {
+                "u_x/x": integral(u / x[:, None]**2, 0) - integral(u / x[:, None], 1),
+                "u/x": integral(u / x[:, None], 0),
+                "u/x**2": integral(u / x[:, None]**2, 0),
+            }
+            if max_spatial_derivative >= 2:
+                radial["u_xx/x"] = (2 * integral(u / x[:, None]**3, 0)
+                                      - 2 * integral(u / x[:, None]**2, 1)
+                                      + integral(u / x[:, None], 2))
+            for name, column in radial.items():
+                terms.append(name)
+                columns.append(column[slices].reshape(-1))
         theta = np.column_stack(columns)
         if theta.shape[0] < 2:
             raise ValueError("test-function support and query stride leave too few weak samples")
@@ -415,6 +434,8 @@ class WSINDyPDEModel:
 
     @staticmethod
     def _feature_name(term):
+        if isinstance(term, str):
+            return term
         power, derivative = term
         if power == 0:
             base = "1"
@@ -433,13 +454,20 @@ class WSINDyPDEModel:
         replacements.update(
             {
                 sp.diff(field, coordinate, order): sp.Symbol("u_" + "x" * order)
-                for order in range(1, max(derivative for _, derivative in self.terms_) + 1)
+                for order in range(1, self.max_derivative + 1)
             }
         )
         expression = 0
-        for coefficient, (power, derivative) in zip(self.coefficients_, self.terms_):
+        for coefficient, term in zip(self.coefficients_, self.terms_):
             if coefficient == 0:
                 continue
+            if isinstance(term, str):
+                expression += float(coefficient) * sp.sympify(term, locals={
+                    "u": field, "x": coordinate, "u_x": sp.diff(field, coordinate),
+                    "u_xx": sp.diff(field, coordinate, 2),
+                })
+                continue
+            power, derivative = term
             base = sp.Integer(1) if power == 0 else field**power
             expression += float(coefficient) * sp.diff(base, coordinate, derivative)
         return str(sp.expand(expression.doit().xreplace(replacements)))

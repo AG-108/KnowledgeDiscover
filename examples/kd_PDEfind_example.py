@@ -21,10 +21,8 @@ dataset = GridPDEDataset(
 )
 
 model = PDEFindModel(
-    derivative_order=3,
+    derivative_order=3,  # Include third derivatives for KdV dispersion.
     threshold=5,
-    alpha=1e-5,
-    max_iter=500,  # Include second derivatives so the library can represent diffusion.
 )
 
 # Fit the PDE from the grid coordinates and solution field.

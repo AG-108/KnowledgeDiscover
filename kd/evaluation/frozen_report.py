@@ -121,8 +121,6 @@ def load_frozen(directory, expected_hash):
                 raise ValueError("Incomplete instance/target denominator; freeze requires a complete target plan")
             row["device_group"] = "gpu" if str(case.get("device", "cpu")).startswith("cuda") else "cpu"
             row["resource_policy_hash"] = policy_hash(case.get("resource_policy"))
-            row["evaluation_protocol_hash"] = hashlib.sha256(json.dumps(
-                case.get("evaluation", {}), sort_keys=True).encode()).hexdigest()
             if row.get("evaluation_protocol", case.get("evaluation", {})) != case.get("evaluation", {}):
                 raise ValueError("Summary scoring protocol differs from manifest")
             row["family"] = row.get("family") or case.get("physical_family", case.get("family", case["dataset"]))

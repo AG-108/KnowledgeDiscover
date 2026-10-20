@@ -34,6 +34,7 @@ from ._base import (
 from ._closure import load_pyqg
 from ._domain import FIELD_SPECS, load_domain_field
 from ._file_sr import FILE_SR_NAMES, load_file_sr
+from ._fractional import FDE_PDE_SPECS, FDE_SPECS, load_fde_pde, load_fde_response
 from ._green import GREEN_SPECS, load_green
 from ._pdeformer_sinus import load_pdeformer_sinus_benchmark
 from ._registry import PDE_REGISTRY
@@ -75,16 +76,11 @@ TLC_STEADY_STATE_FILES = (
     "poisson/poisson_manyarea.csv",
 )
 
-# PDE_REGISTRY entries known to be broken and deliberately excluded from the
-# unified catalog: `advection_diffusion` -> Advection_diffusion.mat does not
-# actually contain 'x'/'t'/'u' keys (only a single 'Expression1' array of
-# shape (634644, 1) whose format has not been reverse-engineered yet), so
-# `load_pde_dataset()` raises KeyError internally and silently returns None.
-# Remove a name from this set once its underlying loader is fixed.
 # Steady observations now have their own task; geometry may remain source-blocked.
 TLC_UNSUPPORTED_STEADY_STATE = ()
 
-KNOWN_BROKEN_DATASETS = frozenset({"advection_diffusion"})
+# Kept as an inspection API; Expression1 now uses the checked evolution loader.
+KNOWN_BROKEN_DATASETS = frozenset()
 
 
 def _make_pde_registry_loader(name: str) -> Callable[..., Any]:
@@ -174,7 +170,7 @@ def _make_vgs_loader(case: str, window: str) -> Callable[..., Any]:
 DATASET_REGISTRY: Dict[str, Dict[str, Any]] = {}
 
 for _name in PDE_REGISTRY:
-    if _name in KNOWN_BROKEN_DATASETS:
+    if _name in KNOWN_BROKEN_DATASETS or _name in EVOLUTION_SPECS:
         continue
     DATASET_REGISTRY[_name] = {"category": "pde", "loader": _make_pde_registry_loader(_name)}
 
@@ -267,6 +263,24 @@ def _file_loader(name):
     def loader(**kwargs):
         return load_file_sr(name, **kwargs)
     return loader
+
+
+def _fde_loader(name):
+    def loader(**kwargs):
+        load = load_fde_pde if name in FDE_PDE_SPECS else load_fde_response
+        return load(name, **kwargs)
+    return loader
+
+
+for _name in FDE_SPECS:
+    DATASET_REGISTRY[_name] = {
+        "category": "regression", "family": _name, "loader": _fde_loader(_name), "opt_in": True,
+    }
+
+for _name, _response in FDE_PDE_SPECS.items():
+    DATASET_REGISTRY[_name] = {
+        "category": "pde", "family": _response, "loader": _fde_loader(_name), "opt_in": True,
+    }
 
 for _name, _spec in GREEN_SPECS.items():
     DATASET_REGISTRY[_name] = {"category":"green", "family":_spec["family"],

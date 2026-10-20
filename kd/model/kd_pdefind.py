@@ -13,13 +13,14 @@
 #
 # NOTE (known limitation): `fit()` currently solves the library with a
 # plain `np.linalg.lstsq` + hard threshold, not PySINDy's actual STLSQ/
-# STRidge optimizer. `function_library`, `differentiation_method`, and
-# `alpha` are accepted in `__init__` for API compatibility but are not
+# STRidge optimizer. `function_library`, `differentiation_method`,
+# `alpha`, and `max_iter` are accepted in `__init__` for API compatibility but are not
 # used by `fit()`; only `threshold`, `derivative_order`, and `terms` take
 # effect. Picking a `threshold` that's too large relative to the
 # true coefficients will silently zero out every term (degenerate
 # `u_t = 0` result). A future implementation should use a real STRidge/STLSQ solver.
 
+import warnings
 from typing import Any, Dict, Optional, Sequence
 
 import numpy as np
@@ -42,9 +43,14 @@ class PDEFindModel:
         function_library: Optional[ps.PDELibrary] = None,
         differentiation_method: ps.differentiation.BaseDifferentiation = FiniteDifference,
         threshold: float = 0.05,
-        alpha: float = 1e-5,
-        max_iter: int = 50,
+        alpha: Optional[float] = None,
+        max_iter: Optional[int] = None,
         terms: Optional[Sequence[str]] = None,
+        solver: str = "legacy",
+        library_kind: str = "compact",
+        coordinate_terms: bool = False,
+        stencil: int = 7,
+        ridge: float = 1e-6,
     ):
         if derivative_order not in (0, 1, 2, 3):
             raise ValueError("derivative_order must be 0, 1, 2, or 3")
@@ -61,6 +67,21 @@ class PDEFindModel:
             degree=2, include_bias=False
         )
         self.threshold = threshold
+        self.solver = solver
+        self.library_kind = library_kind
+        self.coordinate_terms = coordinate_terms
+        self.stencil = stencil
+        self.ridge = ridge
+        if solver not in {"legacy", "stridge"}:
+            raise ValueError("solver must be legacy or stridge")
+        ignored = [name for name, value in (("alpha", alpha), ("max_iter", max_iter)) if value is not None]
+        if ignored:
+            warnings.warn(
+                f"PDEFindModel ignores {', '.join(ignored)}: fit uses a single least-squares "
+                "solve followed by thresholding. Remove these legacy parameters.",
+                UserWarning,
+                stacklevel=2,
+            )
         self.alpha = alpha
         self.max_iter = max_iter
 
@@ -72,6 +93,19 @@ class PDEFindModel:
         self._diff_method = differentiation_method
 
     def fit(self, dataset: Any) -> None:
+        if self.solver == "stridge":
+            from kd.model.pde_library import grid_problem, normalized_stlsq
+            theta, target, names = grid_problem(
+                dataset, self.library_kind, self.coordinate_terms, self.stencil
+            )
+            self._coeffs = normalized_stlsq(theta, target, self.threshold, self.ridge)
+            self._feature_names = names
+            self._model = {"coeffs": self._coeffs, "names": names}
+            self.n_train_ = len(target)
+            data = dataset.get_data()
+            self._x = np.asarray(data["x"], dtype=float).reshape(-1)
+            self._t = np.asarray(data["t"], dtype=float).reshape(-1)
+            return self
         data: Dict[str, Any] = dataset.get_data()
         x = np.asarray(data["x"], dtype=float).flatten()
         t = np.asarray(data["t"], dtype=float).flatten()
@@ -135,7 +169,7 @@ class PDEFindModel:
             raise RuntimeError("Model not fitted. Call fit() first.")
         terms = []
         for name, coeff in zip(self._feature_names, self._coeffs):
-            if abs(coeff) < self.threshold:
+            if coeff == 0 or (self.solver == "legacy" and abs(coeff) < self.threshold):
                 continue
             sign = "+" if coeff >= 0 else "-"
             magnitude = abs(coeff)
@@ -164,6 +198,13 @@ class PDEFindModel:
         ux = np.gradient(U0, x, edge_order=2)
         uxx = np.gradient(ux, x, edge_order=2)
         uxxx = np.gradient(uxx, x, edge_order=2)
+
+        if self.solver == "stridge":
+            from kd.model.pde_library import evaluate_terms
+            values = evaluate_terms(self._feature_names, {
+                "u": U0, "u_x": ux, "u_xx": uxx, "u_xxx": uxxx, "x": x,
+            })
+            return U0 + dt * sum(c * value for c, value in zip(self._coeffs, values))
 
         candidate_terms = [
             np.ones_like(U0),

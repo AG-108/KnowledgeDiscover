@@ -36,6 +36,49 @@ reductions (for example PhySO and DeepMoD 20 epochs, DSCV 10 iterations). Under
 decision D3 of the plan they must be replaced by upstream defaults or justified here
 before the main run.
 
+## Four-method calibration variants (2026-10-05)
+
+The frozen server main matrix (`configs/benchmark/four_methods_full.json`) uses one
+calibrated parameter set per method and task for PhySO, SISSO, SymbolicGPT and DLGA.
+The user authorized this use of D3's development set: parameters were selected on
+disjoint synthetic development data only; formal test responses and reference
+equations were not used for optimization or selection, and there are no per-dataset
+overrides. Calibration results are not main-experiment results.
+
+- Fixtures: data seed 314159, algorithm seeds 0, 1, 2, 300 s fit cap, four-core slot.
+  SR methods: affine and quadratic functions, 64 training / 128 independent scoring
+  points. DLGA: polynomial travelling-wave advection, 512 random space-time points.
+  Reference formulas are used only after fitting; DLGA's network receives no PDE
+  residual, true derivatives or reference coefficients.
+- Gate: `exact_recovery=1` (additive-term structure, ignoring coefficients) and relative
+  coefficient L2 error strictly below `1e-5`; this is not `algebraic_exact_recovery`.
+  All 21 trials passed (PhySO, SISSO, SymbolicGPT 6/6; DLGA 3/3).
+- PhySO: dimensionless config0, three trainable constants, batch 128, tighter constant
+  LBFGS tolerance. Expression evaluation runs on CPU but holds the whole GPU slot and
+  its four cores; GPU reservation cost is recorded. Export moves free constants to CPU
+  in a copy and expands real-input log/exp identities with `force=False`.
+- SISSO: two-dimensional, two-round descriptor search, at most 20 SIS candidates; the
+  lowest-dimensional native model reaching the tolerance is chosen by training error
+  only. Candidate counts are capped at the actual feature-pool capacity, recording the
+  request, capacity and chosen dimension, within the same fit budget.
+- SymbolicGPT: per-fit synthetic pretraining of a small Transformer (64-d embedding,
+  2 layers, 2 heads), 1500 synthetic samples, at most 40 epochs, 2000 candidates.
+  Corpus generation and pretraining take at most 55% of the remaining fit time; all
+  costs count towards the 300 s budget and no weights are reused across datasets.
+- DLGA: Sin network 1 layer × 16, float64, 1000 Adam steps, learning-rate decay 0.3,
+  bias-initialization scale 1.0, observation-only neural least-squares refinement
+  (at most 10000 evaluations, tolerance 1e-14, at most 70% of the remaining fit time),
+  then genetic search with population 400 / generations 100, epi 1e-6. The full
+  profile keeps 10% training-observation sampling; exports keep full-precision
+  coefficients.
+
+These are explicit adapter variants, not claimed paper settings. Passing the affine,
+quadratic and travelling-wave gate does not imply recovery on complex, noisy, stiff or
+main-matrix data; the first main-run batch already contained recovery failures, and
+parameters were not reselected from main results. `scripts/calibrate_four_methods.py`
+and the local evidence `results/calibration/four_methods_20261005/` were deleted on
+2026-10-20; the script and the original calibration record are in commit 718588b.
+
 ## D2 method parallelism (C7)
 
 The `full` profile allocates the four cores of each D2 slot as follows. These are
@@ -67,8 +110,10 @@ The resource policy additionally identifies `parallelism_protocol=d2-parallel-v1
 old C5 resource histories remain readable and cannot be pooled with the new policy.
 
 Direct diagnostic runners do not enforce D2 affinity or these per-task thread limits.
-Native Linux/CUDA/vLLM deployment verification and the remaining budget/grammar audits
-are still required before the main experiment.
+The frozen server main experiment has Linux/CUDA deployment evidence; vLLM real
+generation, disconnect cancellation and restart checks were recorded on 2026-10-09.
+See [historical deployment records](validation.md#持久化恢复与-llm-sr-入队2026-10-09); other methods and budget/grammar
+audits retain their own acceptance boundaries.
 
 ## Search spaces
 
@@ -98,7 +143,7 @@ training only. Current engineering coverage and source boundaries are recorded i
 | --- | --- |
 | DSCV, SPR, SGA, DLGA, DeepMoD, PDE-FIND, WSINDy, EqGPT, SINDy, PySINDy | 18 scalar 1D regular-grid names: the previous 13 plus `tlc_burgers1d`, `heat`, `allen_cahn`, `convection_diffusion`, `burgers_sine`; SGA has known fitting failures |
 | PDE-Net | Rectangular/anisotropic grids supported with verified periodic endpoint-excluded boundaries; retained WDwake/TLC lack that evidence |
-| pdefind_nd | 两份恢复的 TLC 2D 网格及 Burgers2D/Wave/KG；有已验证几何时支持守护散点导数 |
+| pdefind_nd | 两份恢复的 TLC 2D 网格及 Burgers2D/Wave/KG、二维 advection_diffusion；两个 parametric 数据需配置相应空间/时间坐标基，见[接入说明](data.md#a3a4-参数方程与二维对流扩散2026-10-16)；有已验证几何时支持守护散点导数 |
 | Source blocked | 六份保留的 TLC 散点缺几何/界面证据 |
 
 SR and ODE input preparation admits their registered method groups; this does not
@@ -190,7 +235,7 @@ environment (it pins its own PyTorch).
 ```bash
 python scripts/check_llmsr_backbone.py --model-path "$LLMSR_BACKBONE_PATH" --sha256
 CUDA_VISIBLE_DEVICES=0 LLMSR_BACKBONE_PATH=... LLMSR_VLLM_ENV=... \
-  bash scripts/serve_llmsr_backbone.sh          # HF_HUB_OFFLINE=1, port 10005
+  bash server/launch/serve_llmsr_backbone.sh    # HF_HUB_OFFLINE=1, port 10005
 python scripts/check_llmsr_backbone.py --server --calls 4   # real generation + BFGS
 python -u run_benchmark.py --models llmsr --datasets ode_core_duffing --tasks ode \
   --output-dir results/llmsr_smoke --timeout 3600
@@ -288,6 +333,7 @@ can still exceed the soft budget; the independent T + grace watchdog remains aut
 A deadline without a valid candidate is an error, and a forced termination is a hard timeout.
 
 The strict 1000-call LLM-SR control disables soft deadlines, retaining its existing 43200 s
-hard safety limit. Real Linux/CUDA/vLLM deployment, including server-side cancellation after
-HTTP disconnect, still needs smoke validation. These engineering checks do not freeze
-scientific budgets or run the full benchmark.
+hard safety limit. Server-side cancellation after HTTP disconnect and service restart
+were validated in the 2026-10-09 deployment record; see [validation](validation.md#持久化恢复与-llm-sr-入队2026-10-09).
+The frozen main run uses T=300 with soft deadlines; the strict control was not launched.
+Deployment checks do not establish full benchmark quality.

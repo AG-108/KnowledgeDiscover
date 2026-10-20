@@ -146,6 +146,10 @@ class PySINDyModel:
         tolerance=1e-5,
         max_iter=30,
         normalize_columns=True,
+        library_kind=None,
+        coordinate_terms=False,
+        stencil=7,
+        debias=True,
     ):
         self.polynomial_degree = int(polynomial_degree)
         self.include_bias = bool(include_bias)
@@ -155,6 +159,38 @@ class PySINDyModel:
         self.tolerance = float(tolerance)
         self.max_iter = int(max_iter)
         self.normalize_columns = bool(normalize_columns)
+        self.library_kind = library_kind
+        self.coordinate_terms = coordinate_terms
+        self.stencil = stencil
+        self.debias = debias
+
+    def fit_dataset(self, dataset):
+        import pysindy as ps
+        from kd.model.pde_library import grid_problem
+
+        theta, y, names = grid_problem(
+            dataset, self.library_kind or "compact", self.coordinate_terms, self.stencil
+        )
+        scales = np.linalg.norm(theta, axis=0)
+        safe = np.where(scales > np.finfo(float).eps, scales, 1.0)
+        scale_y = max(np.linalg.norm(y), np.finfo(float).tiny)
+        design = theta / safe
+        optimizer = ps.SR3(
+            reg_weight_lam=self.reg_weight_lam, regularizer=self.regularizer,
+            relax_coeff_nu=self.relax_coeff_nu, tol=self.tolerance,
+            max_iter=self.max_iter, normalize_columns=False, unbias=False,
+        )
+        optimizer.fit(design, y[:, None] / scale_y)
+        coefficients = np.asarray(optimizer.coef_[0], dtype=float)
+        active = (coefficients != 0) & (scales > np.finfo(float).eps)
+        coefficients[~active] = 0
+        if self.debias and active.any():
+            coefficients[active] = np.linalg.lstsq(design[:, active], y / scale_y, rcond=None)[0]
+        self.coefficients_ = coefficients * scale_y / safe
+        self.feature_names_ = names
+        self.best_expression_ = _format_expression(names, self.coefficients_)
+        self.n_train_ = len(y)
+        return self
 
     def fit(self, X, y, variable_names=None):
         import pysindy as ps

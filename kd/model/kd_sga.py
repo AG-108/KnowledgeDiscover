@@ -139,6 +139,14 @@ class KD_SGA(BaseEstimator):
         self.context_ = context
         self.config_ = config
         self.dataset_ = dataset
+        from .sga.adapter import fitted_rhs
+
+        self.best_expression_ = None
+        try:
+            self.best_expression_ = fitted_rhs(solver.best_equation_, context)
+            self.equation_export_status_ = "weighted_native_equation"
+        except (AttributeError, ValueError, TypeError, KeyError) as exc:
+            self.equation_export_status_ = f"abstain: {type(exc).__name__}: {exc}"
 
         print("\n--- SGA PDE Discovery Finished ---")
         print(f"Best PDE Found: {self.best_pde_}")

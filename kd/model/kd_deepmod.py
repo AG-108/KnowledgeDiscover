@@ -35,6 +35,16 @@ class KD_DeepMoD:
         learning_rate: float = 1e-3,
         seed: int = 0,
         device: str = "cpu",
+        training_variant: str = "legacy",
+        library_kind: str = "compact",
+        coordinate_terms: bool = False,
+        precision: str = "float32",
+        activation: str = "tanh",
+        max_steps: int = 4000,
+        warmup_steps: int = 1000,
+        sparsity_interval: int = 200,
+        pde_weight: float = 0.1,
+        lbfgs_steps: int = 0,
     ):
         self.hidden_layers = tuple(hidden_layers)
         self.poly_order = poly_order
@@ -47,6 +57,16 @@ class KD_DeepMoD:
         self.device = torch.device(device)
         self.model_ = None
         self.best_equation_ = ""
+        self.training_variant = training_variant
+        self.library_kind = library_kind
+        self.coordinate_terms = coordinate_terms
+        self.precision = precision
+        self.activation = activation
+        self.max_steps = max_steps
+        self.warmup_steps = warmup_steps
+        self.sparsity_interval = sparsity_interval
+        self.pde_weight = pde_weight
+        self.lbfgs_steps = lbfgs_steps
 
     def _to_coordinates_and_targets(self, dataset: Any):
         if hasattr(dataset, "get_data"):
@@ -71,6 +91,9 @@ class KD_DeepMoD:
         return self.fit(X, y)
 
     def fit(self, X, y):
+        if self.training_variant == "scheduled":
+            from kd.model.deepmod_scheduled import fit_scheduled
+            return fit_scheduled(self, X, y)
         X = np.asarray(X, dtype=np.float32)
         y = np.asarray(y, dtype=np.float32)
         if X.ndim != 2 or X.shape[1] < 2:

@@ -51,6 +51,12 @@ def _tag_dataset(dataset: Optional[GridPDEDataset], name: str) -> Optional[GridP
 
 def load_pde_grid(name: str, **kwargs) -> GridPDEDataset:
     """Load a registered PDE dataset through its specialized or declarative loader."""
+    from ._advanced import EVOLUTION_SPECS, load_evolution
+
+    if name in EVOLUTION_SPECS:
+        if kwargs:
+            raise ValueError(f"Unsupported checked loader options: {sorted(kwargs)}")
+        return _tag_dataset(load_evolution(name), name)
     # Prefer dedicated loaders for datasets with custom parsing rules.
     if name == "kdv":
         return _tag_dataset(load_kdv_equation(), name)
@@ -129,9 +135,11 @@ def load_pde_grid(name: str, **kwargs) -> GridPDEDataset:
 from ._catalog import DATASET_REGISTRY, get_dataset_category, list_datasets, load_dataset
 from ._closure import ClosureDataset
 from ._file_sr import FileRegressionDataset
+from ._fractional import FractionalResponseDataset, load_fde_pde, load_fde_response
 from ._green import GreenOperatorDataset
 
 __all__ = [
+    "FractionalResponseDataset", "load_fde_response", "load_fde_pde",
     "GreenOperatorDataset", "ClosureDataset", "FileRegressionDataset",
     "SteadyPDEDataset", "Derivative", "EquationTarget",
     "GridPDEDataset",

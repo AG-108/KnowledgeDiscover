@@ -1,0 +1,21 @@
+{
+  "benchmark_mode": "diagnostic",
+  "profile": "smoke",
+  "tasks": ["pde"],
+  "models": ["pdefind_nd"],
+  "datasets": [
+    "parametric_burgers",
+    "parametric_convection_diffusion",
+    "advection_diffusion"
+  ],
+  "seeds": [0],
+  "output_dir": "results/parametric_advection",
+  "timeout": 60.0,
+  "overrides": {
+    "models": {
+      "pdefind_nd": {
+        "coordinate_basis": ["x", "t", "sin(x)", "cos(x)", "exp(t)"]
+      }
+    }
+  }
+}

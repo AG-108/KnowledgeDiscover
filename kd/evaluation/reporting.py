@@ -3,14 +3,13 @@
 import math
 from collections import defaultdict
 
-from kd.benchmark_protocol import digest
+from kd.benchmark_protocol import execution_policy_hash
 
 
 def _comparison_row(row):
     row = dict(row)
     if row.get("execution_policy") is not None:
-        row["execution_policy_hash"] = digest({key: value for key, value in row["execution_policy"].items()
-                                             if key != "resource_policy"})
+        row["execution_policy_hash"] = execution_policy_hash(row["execution_policy"])
     return row
 
 

@@ -57,12 +57,6 @@ PDE_REGISTRY = {
         "sym_true": "add,diff2,u1,x1,add,u1,n2,u1",
         "domain": None,
     },
-    "advection_diffusion": {
-        "file": "Advection_diffusion.mat",
-        "keys": {"x_key": "x", "t_key": "t", "u_key": "u"},
-        "sym_true": None,
-        "domain": None,
-    },
 }
 
 

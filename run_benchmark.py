@@ -20,7 +20,6 @@ import contextlib
 import copy
 import csv
 import fnmatch
-import gc
 import hashlib
 import importlib
 import io
@@ -57,7 +56,14 @@ from kd.benchmark_identity import (
     stable_execution,
     stable_resources,
 )
-from kd.benchmark_protocol import comparison_fields, recovery_eligibility, validate_main_matrix
+from kd.benchmark_preparation import prepare_pde, slice_pde_time, temporal_block_holdout
+from kd.benchmark_protocol import (
+    comparison_fields,
+    execution_policy_hash,
+    metric_protocol_version,
+    recovery_eligibility,
+    validate_main_matrix,
+)
 from kd.benchmark_resources import policy_hash
 from kd.benchmark_store import freeze_run, verify_freeze
 
@@ -597,13 +603,10 @@ def build_experiments(
                     "dataset_params": copy.deepcopy(data_params),
                     "run_params": copy.deepcopy(run),
                 }
-                if task == "green" or name == "pyqg_subgrid" or name.startswith("dso_file_"):
-                    case["metric_protocol_version"] = "2.3"
                 if model == "green_dso":
                     case["model_params"]["seed"] = seed
                 if model in {"pdefind_nd", "implicit_pde"}:
                     case["equation_protocol_version"] = "equation-v1"
-                    case["metric_protocol_version"] = "2.2"
                     case["dataset_metadata"]["fit_unit"] = "one independently budgeted equation target"
                     case["dataset_metadata"]["split_protocol"] = (
                         "spatial_blocks_with_support_gap" if task == "steady_pde" else
@@ -622,166 +625,23 @@ def build_experiments(
                     target_name = data_params.get("target", "Mut")
                     features = data_params.get("feature_columns", "default_local_flow_features")
                     case["dataset_metadata"]["target_definition"] = f"{target_name}=f({features})"
+                if name.startswith("fde_") and task == "pde":
+                    from kd.dataset._fractional import FDE_PDE_PROTOCOL_VERSION
+                    case["fde_pde_protocol_version"] = FDE_PDE_PROTOCOL_VERSION
+                    case["dataset_metadata"]["split_protocol"] = "temporal_block_with_support_gap"
+                case["metric_protocol_version"] = metric_protocol_version(case, METRIC_PROTOCOL_VERSION)
                 digest = hashlib.sha256(json.dumps(case, sort_keys=True).encode()).hexdigest()[:12]
                 case["name"] = f"{task}_{model}_{name}_s{seed}_{digest}"
                 cases.append(case)
     return cases
 
 
-def check_compatibility(cases, excluded=None, progress=False):
-    """Load one instance per dataset and apply every selected baseline adapter.
+def check_compatibility(cases, excluded=None, progress=False, *, mode="sample", check_runtime=True):
+    """Audit selected seeds and targets; full mode enumerates every instance."""
+    from kd.benchmark_compatibility import check
 
-    This preflight checks dataset construction, task-level array conversion,
-    baseline imports, temporal holdout construction, and the explicit shape
-    constraints enforced by the benchmark. It intentionally does not optimize
-    a model, so it is suitable for auditing the complete matrix.
-    """
-    from kd.dataset import GridPDEDataset
-
-    grouped = {}
-    for case in cases:
-        grouped.setdefault(case["dataset"], []).append(case)
-
-    runtime = {}
-    selected_models = list(dict.fromkeys(case["model"] for case in cases))
-    for model in selected_models:
-        start = time.perf_counter()
-        try:
-            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(
-                io.StringIO()
-            ):
-                if model == "physo":
-                    importlib.import_module("physo")
-                elif model == "e2e":
-                    _new_model(model, next(c["model_params"] for c in cases if c["model"] == model)).check_available()
-                elif model == "pysindy":
-                    importlib.import_module("pysindy")
-                elif model == "sisso":
-                    _new_model(model, next(c["model_params"] for c in cases if c["model"] == model)).check_available()
-                else:
-                    module, attribute = MODEL_CLASSES[model]
-                    getattr(importlib.import_module(module), attribute)
-            runtime[model] = {"status": "ok", "seconds": time.perf_counter() - start}
-        except Exception as exc:
-            runtime[model] = {
-                "status": "error",
-                "seconds": time.perf_counter() - start,
-                "error": f"{type(exc).__name__}: {exc}",
-            }
-
-    pair_rows = []
-    dataset_rows = []
-    for index, (dataset_name, group) in enumerate(sorted(grouped.items()), 1):
-        start = time.perf_counter()
-        dataset = None
-        instance_name = None
-        load_error = None
-        try:
-            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(
-                io.StringIO()
-            ):
-                instance_name, dataset = next(_load_instances(group[0]))
-            if group[0]["task"] in {"pde", "steady_pde"}:
-                if isinstance(dataset, GridPDEDataset):
-                    details = {
-                        "class": type(dataset).__name__,
-                        "field_shape": list(dataset.usol.shape),
-                        "spatial_dimensions": len(dataset.spatial_vars),
-                        "responses": dataset.n_response,
-                        "time_points": len(dataset.t),
-                    }
-                elif group[0]["task"] == "steady_pde":
-                    details = {"class": type(dataset).__name__, "field_shape": list(dataset.values.shape),
-                               "spatial_dimensions": len(dataset.spatial_vars),
-                               "responses": dataset.n_response, "time_points": 0}
-                else:
-                    details = {
-                        "class": type(dataset).__name__,
-                        "points_shape": list(dataset.points.shape),
-                        "field_shape": list(dataset.usol.shape),
-                        "time_points": len(dataset.t),
-                    }
-            else:
-                problems = list(_case_problems(dataset, group[0]))
-                if not problems:
-                    raise ValueError("Task adapter produced no regression targets")
-                details = {
-                    "class": type(dataset).__name__,
-                    "targets": len(problems),
-                    "n_features": int(problems[0]["X_train"].shape[1]),
-                    "n_train": int(len(problems[0]["X_train"])),
-                    "n_test": int(len(problems[0]["X_test"])),
-                }
-            load_status = "ok"
-        except Exception as exc:
-            load_status = "source_blocked" if "source_blocked" in str(exc) else "error"
-            load_error = f"{type(exc).__name__}: {exc}"
-            details = {}
-
-        dataset_rows.append(
-            {
-                "dataset": dataset_name,
-                "task": group[0]["task"],
-                "status": load_status,
-                "instance": instance_name,
-                "seconds": time.perf_counter() - start,
-                "error": load_error,
-                **details,
-            }
-        )
-
-        for case in group:
-            row = {
-                "task": case["task"],
-                "baseline": case["model"],
-                "dataset": dataset_name,
-                "instance": instance_name,
-                "status": "compatible",
-                "reason": "",
-            }
-            if load_error:
-                row.update(status="incompatible" if "source_blocked" in load_error else "error",
-                           reason=load_error)
-                if "source_blocked" in load_error:
-                    row["capability_status"] = "source_blocked"
-            elif runtime[case["model"]]["status"] != "ok":
-                row.update(status="error", reason=runtime[case["model"]]["error"])
-            elif case["model"] in {"pdefind_nd", "implicit_pde"}:
-                try:
-                    from kd.evaluation.equation import validate
-                    validate(dataset, case["model"])
-                except SkipCase as exc:
-                    row.update(status="incompatible", reason=str(exc))
-                except Exception as exc:
-                    row.update(status="error", reason=f"{type(exc).__name__}: {exc}")
-            elif case["task"] == "pde":
-                try:
-                    prepared = prepare_pde(dataset, case["model"])
-                    temporal_block_holdout(prepared, case["run_params"]["test_size"])
-                except SkipCase as exc:
-                    row.update(status="incompatible", reason=str(exc))
-                except Exception as exc:
-                    row.update(status="error", reason=f"{type(exc).__name__}: {exc}")
-            pair_rows.append(row)
-
-        if progress and (index % 25 == 0 or index == len(grouped)):
-            print(f"[{index}/{len(grouped)}] checked {dataset_name}", flush=True)
-        del dataset
-        gc.collect()
-
-    return {
-        "scope": {
-            "datasets": len(grouped),
-            "pairs": len(pair_rows),
-            "excluded_datasets": excluded or {},
-            "level": (
-                "dataset load + task adapter + baseline import + explicit compatibility guards"
-            ),
-        },
-        "runtime_imports": runtime,
-        "dataset_loads": dataset_rows,
-        "pairs": pair_rows,
-    }
+    return check(cases, runner=sys.modules[__name__], excluded=excluded,
+                 progress=progress, mode=mode, check_runtime=check_runtime)
 
 
 def save_compatibility_report(output_dir, report):
@@ -792,10 +652,14 @@ def save_compatibility_report(output_dir, report):
     with (output_dir / "compatibility_pairs.csv").open(
         "w", encoding="utf-8-sig", newline=""
     ) as file:
-        fields = ["task", "baseline", "dataset", "instance", "status", "reason", "capability_status"]
+        fields = ["task", "baseline", "dataset", "case", "instance", "seed", "target",
+                  "status", "reason", "capability_status", "load_status", "preparation_status",
+                  "asset_status", "instance_eligibility", "runtime_status", "runtime_key", "fit_evidence",
+                  "equation_targets"]
         writer = csv.DictWriter(file, fieldnames=fields)
         writer.writeheader()
-        writer.writerows(report["pairs"])
+        writer.writerows({key: json.dumps(value, ensure_ascii=False) if isinstance(value, (list, dict))
+                          else value for key, value in row.items()} for row in report["pairs"])
 
 
 def _load_instances(case):
@@ -883,7 +747,12 @@ def regression_problems(dataset, case):
     """Independent scalar targets and explicit, reproducible evaluation splits."""
     import numpy as np
 
-    from kd.dataset import ODEDataset, SymbolicRegressionDataset, load_dataset
+    from kd.dataset import (
+        FractionalResponseDataset,
+        ODEDataset,
+        SymbolicRegressionDataset,
+        load_dataset,
+    )
 
     seed, options = case["seed"], case["run_params"]
     if isinstance(dataset, ODEDataset):
@@ -934,6 +803,14 @@ def regression_problems(dataset, case):
         metadata=copy.deepcopy(dataset.protocol_metadata)
         split=metadata["split_protocol"]
         ground_truth=None
+    elif isinstance(dataset, FractionalResponseDataset):
+        train, test, split_details = dataset.temporal_holdout(options["test_size"])
+        X_train, y_train = dataset.X[train], dataset.y[train]
+        X_test, y_test = dataset.X[test], dataset.y[test]
+        names, targets = dataset.variable_names, [dataset.target_name]
+        split = dataset.split_protocol
+        metadata = {**copy.deepcopy(dataset.protocol_metadata), **split_details}
+        ground_truth = None
     elif isinstance(dataset, SymbolicRegressionDataset):
         d = dataset.get_data()
         X_train, y_train, X_test, y_test = (
@@ -996,6 +873,9 @@ def regression_problems(dataset, case):
         rate_axis = 0 if case["dataset"] == "solid_dif" else 1
         if len(np.unique(X_train[:, rate_axis])) < 2 or np.ptp(y_train) == 0:
             raise SkipCase("Constitutive eligibility: training sample cap removed rate or target variation")
+    if isinstance(dataset, FractionalResponseDataset):
+        metadata["n_train_rows_used"] = len(X_train)
+        metadata["training_sample_policy"] = "seeded_without_replacement; training block only"
     for i, target in enumerate(targets):
         target_truth = ground_truth
         if isinstance(ground_truth, dict):
@@ -1606,8 +1486,12 @@ def _new_model(name, params):
     return model
 
 
-def _physo_expression_text(expression):
-    """Return a machine-readable PhySO expression with fitted constants."""
+def _physo_expression_text(expression, aliases=None):
+    """Return a machine-readable PhySO expression with fitted constants.
+
+    ``aliases`` maps the short input names given to PhySO back to the declared
+    variable names.
+    """
     if getattr(expression, "free_consts", None) is not None:
         expression = copy.copy(expression)
         expression.free_consts = copy.copy(expression.free_consts)
@@ -1626,6 +1510,11 @@ def _physo_expression_text(expression):
     import sympy as sp
 
     if isinstance(symbolic, sp.Basic):
+        if aliases:
+            symbolic = symbolic.xreplace({
+                symbol: sp.Symbol(aliases[symbol.name], **symbol.assumptions0)
+                for symbol in symbolic.free_symbols if symbol.name in aliases
+            })
         real_symbols = {
             symbol: sp.Symbol(symbol.name, real=True)
             for symbol in symbolic.free_symbols
@@ -1767,7 +1656,19 @@ def run_regression(problem, case, *, pretrain_cache=None):
         # evaluation. The backend can use CPU inside the allocated GPU slot;
         # it keeps the same four-core limit and reserves that slot's GPU.
         options["device"] = options.pop("execution_device", options.get("device", "cpu"))
-        options.setdefault("X_names", list(problem["variable_names"]))
+        # PhySO rejects token names of 10+ characters (MAX_NAME_SIZE), e.g. the
+        # SIR state "susceptible". Alias only those names; the exported
+        # expression maps them back so scoring sees the declared names.
+        names = list(problem["variable_names"])
+        aliases = {}
+        for index, variable in enumerate(names):
+            if len(variable) >= 10:
+                alias = f"x{index}"
+                while alias in names or alias in aliases:
+                    alias = "_" + alias
+                aliases[alias] = variable
+        reverse = {variable: alias for alias, variable in aliases.items()}
+        options.setdefault("X_names", [reverse.get(variable, variable) for variable in names])
         options.setdefault("y_name", "y")
         options.setdefault("y_units", [0, 0, 0])
         options.setdefault(
@@ -1798,7 +1699,7 @@ def run_regression(problem, case, *, pretrain_cache=None):
             raise RuntimeError("PhySO did not return an expression")
         result = _score_regression(
             {
-                "expression": _physo_expression_text(expr),
+                "expression": _physo_expression_text(expr, aliases),
                 "notes": "Dimensionless PhySO configuration; physical units require explicit configuration.",
                 **_model_stop_reason(logger),
             },
@@ -1950,105 +1851,17 @@ def run_regression(problem, case, *, pretrain_cache=None):
     )
     if case["task"] == "ode":
         result["metric_target"] = "state_time_derivative"
+    if case["dataset"].startswith("fde_"):
+        result["metric_target"] = "observed_response"
     if case["dataset"] == "pyqg_subgrid":
         from kd.evaluation.closure import finish
         result = finish(result, problem, model)
     return result
 
 
-def prepare_pde(dataset, model_name):
-    """Keep spatial/channel axes explicit; never silently flatten them."""
-    import numpy as np
-
-    from kd.dataset import GridPDEDataset
-
-    if not isinstance(dataset, GridPDEDataset):
-        raise SkipCase(
-            "PDE baselines require a regular grid; scatter data need an explicit adapter"
-        )
-    coords = [np.asarray(v) for v in dataset.coords_spatial.values()] + [np.asarray(dataset.t)]
-    if any(len(c) < 3 or not np.isfinite(c).all() or not np.all(np.diff(c) > 0) for c in coords):
-        raise SkipCase("PDE fitting requires >=3 finite, strictly increasing points per axis")
-    if not np.isfinite(dataset.usol).all():
-        raise SkipCase(
-            "PDE grid contains NaN/Inf (e.g. masked geometry); an explicit mask adapter is required"
-        )
-    dim = len(dataset.spatial_vars)
-    if model_name == "pdenet":
-        if dim != 2:
-            raise SkipCase(f"{model_name} example adapter requires two spatial dimensions")
-        if any(
-            not np.allclose(np.diff(c), np.diff(c)[0], rtol=1e-3, atol=1e-10) for c in coords
-        ):
-            raise SkipCase("PDE-Net requires uniform spatial and time axes")
-        from kd.evaluation.equation import periodic_grid_options
-        periodic_grid_options(dataset)
-        return dataset
-    if dim != 1 or dataset.n_response != 1:
-        raise SkipCase(f"{model_name} adapter supports a scalar field in one spatial dimension")
-    if model_name in {"dscv", "spr", "sga", "weakform"} and any(
-        not np.allclose(np.diff(c), np.diff(c)[0], rtol=1e-3, atol=1e-10) for c in coords
-    ):
-        raise SkipCase(f"{model_name} adapter requires uniform axes")
-    u = dataset.usol if dataset.legacy else dataset.usol[0]
-    result = GridPDEDataset(
-        equation_name=dataset.equation_name,
-        pde_data=None,
-        x=coords[0],
-        t=coords[-1],
-        usol=u,
-        domain={
-            "x": (float(coords[0][0]), float(coords[0][-1])),
-            "t": (float(coords[-1][0]), float(coords[-1][-1])),
-        },
-        epi=dataset.epi,
-        legacy=True,
-    )
-    for attr in ("registry_name", "legacy_name", "sym_true", "rollout_metadata", "state_vars", "protocol_metadata", "equation_targets", "geometry", "region_ids"):
-        if hasattr(dataset, attr):
-            setattr(result, attr, copy.deepcopy(getattr(dataset, attr)))
-    return result
-
-
 def _slice_pde_time(dataset, start, stop):
-    """Clone a regular-grid dataset over an explicit contiguous time slice."""
-    from kd.dataset import GridPDEDataset
-
-    coords = {name: values.copy() for name, values in dataset.coords.items()}
-    coords[dataset.time_var] = coords[dataset.time_var][start:stop]
-    domain = copy.deepcopy(dataset.domain)
-    if isinstance(domain, dict) and len(coords[dataset.time_var]):
-        domain[dataset.time_var] = (
-            float(coords[dataset.time_var][0]),
-            float(coords[dataset.time_var][-1]),
-        )
-    result = GridPDEDataset(
-        equation_name=dataset.equation_name,
-        pde_data=None,
-        coords=coords,
-        usol=dataset.usol[..., start:stop].copy(),
-        domain=domain,
-        epi=dataset.epi,
-        time_var=dataset.time_var,
-        legacy=dataset.legacy,
-    )
-    for attr in ("registry_name", "legacy_name", "sym_true", "rollout_metadata", "state_vars", "protocol_metadata", "equation_targets", "geometry", "region_ids"):
-        if hasattr(dataset, attr):
-            setattr(result, attr, copy.deepcopy(getattr(dataset, attr)))
-    return result
-
-
-def temporal_block_holdout(dataset, test_size):
-    """Use the final contiguous time block only for PDE evaluation."""
-    nt = len(dataset.t)
-    if not 0 < test_size < 1:
-        raise ValueError("PDE temporal holdout needs 0 < test_size < 1")
-    if nt < 5:
-        raise SkipCase("PDE temporal holdout requires at least five time frames")
-    n_test = min(nt - 3, max(2, round(nt * test_size)))
-    split = nt - n_test
-    # The evaluation view includes the last training frame as the rollout initial condition.
-    return _slice_pde_time(dataset, 0, split), _slice_pde_time(dataset, split - 1, nt), split
+    """Compatibility entrypoint for the shared grid slicing helper."""
+    return slice_pde_time(dataset, start, stop)
 
 
 def _linear_term_map(expression, variable_names=()):
@@ -2300,6 +2113,11 @@ def pde_equation_residual(expression, dataset):
     if field.shape[-1] < 3:
         return {}
     namespace = {"u": field, "u1": field}
+    fde = bool(getattr(dataset, "protocol_metadata", {}).get("pde_protocol_version"))
+    axes = np.meshgrid(*dataset.coords_spatial.values(), dataset.t, indexing="ij")
+    for index, (name, values) in enumerate(zip(dataset.coords_spatial, axes)):
+        namespace.update({name: values, "xyz"[index]: values, f"x{index + 1}": values})
+    namespace["t"] = axes[-1]
     for axis, (name, coordinate) in enumerate(dataset.coords_spatial.items()):
         suffix = {"x1": "x", "x2": "y", "x3": "z"}.get(name, name)
         first = np.gradient(field, coordinate, axis=axis, edge_order=2)
@@ -2319,20 +2137,27 @@ def pde_equation_residual(expression, dataset):
         )
     parsed = _pde_rhs_sympy(expression, tuple(namespace))
     if parsed is None:
-        return {}
+        return {"equation_residual_status": "abstain_unsupported_expression"}
     free = sorted(parsed.free_symbols, key=str)
     if any(str(symbol) not in namespace for symbol in free):
-        return {}
+        return {"equation_residual_status": "abstain_unknown_symbols"}
+    if parsed.has(sp.zoo, sp.oo, -sp.oo, sp.nan):
+        return {"equation_residual_status": "nonfinite_candidate",
+                "equation_residual_points": 0,
+                "equation_residual_total_points": int(field[..., (0 if fde else 1):].size),
+                "equation_residual_finite_coverage": 0.0}
     try:
         rhs = sp.lambdify(free, parsed, modules="numpy")(
             *(namespace[str(symbol)] for symbol in free)
         )
         rhs = np.broadcast_to(np.asarray(rhs, dtype=float), field.shape)
     except (TypeError, ValueError, ZeroDivisionError, FloatingPointError):
-        return {}
+        return {"equation_residual_status": "abstain_evaluation_error"}
     ut = np.gradient(field, dataset.t, axis=-1, edge_order=2)
-    # Index zero is the rollout initial condition from the training block.
-    target, prediction = ut[..., 1:].reshape(-1), rhs[..., 1:].reshape(-1)
+    # Legacy views share a rollout initial frame. FDE blocks are disjoint and
+    # every test frame belongs to the scoring domain.
+    start = 0 if fde else 1
+    target, prediction = ut[..., start:].reshape(-1), rhs[..., start:].reshape(-1)
     target_finite = np.isfinite(target)
     prediction_finite = np.isfinite(prediction)
     finite = target_finite & prediction_finite
@@ -2342,6 +2167,7 @@ def pde_equation_residual(expression, dataset):
         "equation_residual_total_points": total,
         "equation_residual_finite_coverage": float(finite.sum() / total) if total else None,
     }
+    result["equation_residual_status"] = "ok" if finite.all() else "nonfinite_candidate"
     # A partially non-finite candidate has not made predictions over the full
     # declared scoring domain.  Keep diagnostic coverage, but do not award an
     # error score on the easier finite subset.
@@ -2559,9 +2385,15 @@ def run_pde(dataset, case):
     name, params, options = case["model"], copy.deepcopy(case["model_params"]), case["run_params"]
     candidate_space_label = params.pop("candidate_space_label", "configured_fallback")
     dataset = prepare_pde(dataset, name)
-    train_dataset, evaluation_dataset, split_index = temporal_block_holdout(
-        dataset, options["test_size"]
-    )
+    fractional_split = None
+    if case.get("fde_pde_protocol_version"):
+        from kd.evaluation.fractional import temporal_views
+        train_dataset, evaluation_dataset, fractional_split = temporal_views(dataset, options["test_size"])
+        split_index = fractional_split["test_frame_start"]
+    else:
+        train_dataset, evaluation_dataset, split_index = temporal_block_holdout(
+            dataset, options["test_size"]
+        )
     model = None
     if name == "reference":
         from kd.evaluation.reference import abstain
@@ -2632,6 +2464,13 @@ def run_pde(dataset, case):
             model.import_dataset(train_dataset, **kwargs)
             found = fit_call(model.train, n_epochs=options["dscv_epochs"], verbose=False)
             result = {"expression": str(found.get("expression", "")), "reward": found.get("r")}
+        elif name == "pysindy" and getattr(model, "library_kind", None):
+            fit_call(model.fit_dataset, train_dataset)
+            result = {
+                "expression": "u_t = " + str(model.best_expression_),
+                "n_train": model.n_train_,
+                "notes": "Explicit PDE library; dimensionless SR3 and selected-support least-squares refit.",
+            }
         elif name in {"sindy", "pysindy"}:
             X, y, variable_names = pde_sindy_problem(train_dataset, **sindy_pde_options)
             limit = options["max_train_samples"]
@@ -2656,7 +2495,15 @@ def run_pde(dataset, case):
             }
         elif name == "sga":
             fit_call(model.fit_dataset, train_dataset, problem_name=case["dataset"])
-            result = {"expression": str(model.best_pde_), "aic": float(model.best_score_)}
+            result = {
+                "expression": model.best_expression_,
+                "native_expression_display": str(model.best_pde_),
+                "equation_export_status": model.equation_export_status_,
+                "aic": float(model.best_score_),
+            }
+            if model.best_expression_ is None:
+                result.update(status="error", error="SGA fitted equation export failed: "
+                              + model.equation_export_status_)
         elif name in {"dlga", "deepmod"}:
             X, y = pde_coordinates(train_dataset)
             limit = options["dlga_samples"] if name == "dlga" else options["max_train_samples"]
@@ -2684,20 +2531,7 @@ def run_pde(dataset, case):
                 "notes": "EqGPT handbook pretraining excludes the target row only for recognized equation names.",
             }
         else:
-            if name == "pdenet":
-                from types import SimpleNamespace
-
-                spatial = list(train_dataset.coords_spatial.values())
-                fit_data = SimpleNamespace(
-                    usol=(train_dataset.usol[None] if train_dataset.legacy else train_dataset.usol),
-                    x=spatial[0],
-                    y=spatial[1],
-                    t=train_dataset.t,
-                    domain=train_dataset.domain,
-                )
-            else:
-                fit_data = train_dataset
-            fit_call(model.fit, fit_data)
+            fit_call(model.fit, train_dataset)
             if name == "pdefind":
                 expression = "u_t = " + _linear_expression(
                     model._feature_names, model.coefficients()
@@ -2714,23 +2548,25 @@ def run_pde(dataset, case):
             if name == "pdefind":
                 result[
                     "notes"
-                ] += " Current PDEFindModel uses thresholded least squares, not STRidge."
+                ] += (" Normalized sequential thresholded ridge regression with support debiasing."
+                      if getattr(model, "solver", "legacy") == "stridge" else
+                      " Current PDEFindModel uses thresholded least squares, not STRidge.")
             else:
                 result[
                     "notes"
-                ] += " PDE-Net follows the example wrapper: one x-derived dx for both axes and periodic padding, including rectangular grids."
+                ] += " PDE-Net uses measured per-axis spacing and verified periodic padding."
     result.update(_model_stop_reason(model))
     library_fields = {
         "dscv": ("binary_operators", "unary_operators"),
         "spr": ("binary_operators", "unary_operators"),
         "sga": ("depth", "width"),
-        "dlga": ("operators",),
-        "deepmod": ("poly_order", "diff_order"),
-        "pdefind": ("derivative_order", "terms"),
+        "dlga": ("operators", "library_kind", "coordinate_terms"),
+        "deepmod": ("poly_order", "diff_order", "library_kind", "coordinate_terms", "training_variant"),
+        "pdefind": ("derivative_order", "terms", "library_kind", "coordinate_terms", "stencil", "solver"),
         "pdenet": ("derivative_order",),
-        "weakform": ("terms", "polynomial_degree", "max_derivative"),
+        "weakform": ("terms", "polynomial_degree", "max_derivative", "coordinate_terms"),
         "sindy": ("polynomial_degree", "derivative_order"),
-        "pysindy": ("polynomial_degree", "derivative_order"),
+        "pysindy": ("polynomial_degree", "derivative_order", "library_kind", "coordinate_terms", "stencil"),
     }
     library = {
         field: case["model_params"][field]
@@ -2756,18 +2592,27 @@ def run_pde(dataset, case):
     result["expression_complexity"] = expression_metrics(result.get("expression"))[
         "expression_complexity"
     ]
-    result.update(pde_equation_residual(result.get("expression"), evaluation_dataset))
+    if name == "sga" and model.best_expression_ is None:
+        result["equation_residual_status"] = "abstain_native_export"
+    else:
+        result.update(pde_equation_residual(result.get("expression"), evaluation_dataset))
     try:
-        if model is not None and name in {"pdefind", "pdenet"}:
+        if fractional_split is None and model is not None and name in {"pdefind", "pdenet"}:
             result.update(pde_rollout_metrics(model, dataset, split_index))
     except Exception as exc:
         note = f"Native held-out rollout unavailable: {type(exc).__name__}: {exc}"
         result["notes"] = " ".join(filter(None, [result.get("notes"), note]))
     try:
-        rollout_metadata = case.get("evaluation", {}).get("equation_rollout")
-        result.update(symbolic_pde_rollout_metrics(
-            result.get("expression"), dataset, split_index, rollout_metadata, ground_truth
-        ))
+        if fractional_split is not None:
+            result.update(
+                equation_rollout_status="abstain", prediction_status="abstain",
+                prediction_abstain_reason="FDE source boundary and fractional operator are unverified",
+            )
+        else:
+            rollout_metadata = case.get("evaluation", {}).get("equation_rollout")
+            result.update(symbolic_pde_rollout_metrics(
+                result.get("expression"), dataset, split_index, rollout_metadata, ground_truth
+            ))
     except Exception as exc:
         result.update(equation_rollout_status="evaluator_error",
                       equation_rollout_error=f"{type(exc).__name__}: {exc}")
@@ -2783,6 +2628,15 @@ def run_pde(dataset, case):
         test_time_range=[float(dataset.t[split_index]), float(dataset.t[-1])],
         field_shape=list(dataset.usol.shape),
     )
+    if fractional_split is not None:
+        result.update(
+            split=fractional_split,
+            n_train_time=len(train_dataset.t),
+            train_time_range=fractional_split["train_time_range"],
+            metric_target="observed_equation_residual",
+            fractional_operator_evaluated=False,
+            recovery_eligible=False, recovery_evaluator_status="not_applicable",
+        )
     return result
 
 
@@ -2896,7 +2750,7 @@ def _base_row(case, instance=None, target=None):
         key: case[key] for key in ("name", "task", "model", "dataset", "seed", "profile", "device")
     }
     row.update(
-        metric_protocol_version=("2.2" if case["model"] in {"pdefind_nd", "implicit_pde"} else METRIC_PROTOCOL_VERSION),
+        metric_protocol_version=case.get("metric_protocol_version") or metric_protocol_version(case, METRIC_PROTOCOL_VERSION),
         dataset_protocol_version=case.get("dataset_protocol_version", "legacy/unknown"),
         scientific_task=case.get("scientific_task", "legacy/unknown"),
         physical_family=case.get("physical_family", case.get("family", case["task"])),
@@ -2971,14 +2825,25 @@ def _base_row(case, instance=None, target=None):
     if case["model"] in {"eqgpt","e2e","symbolicgpt", "llmsr"}:
         from kd.dataset._overlap import training_overlap
         row["training_data_overlap"] = training_overlap(case["model"],case["dataset"])
-    if case["task"] == "green" or case["dataset"] == "pyqg_subgrid" or case["dataset"].startswith("dso_file_"):
-        row["metric_protocol_version"] = "2.3"
+    if case["task"] == "green" or case["dataset"] == "pyqg_subgrid" or case["dataset"].startswith("dso_file_") or (case["dataset"].startswith("fde_") and case["task"] == "sr"):
         row["recovery_eligible"] = False
         row["recovery_evaluator_status"] = "not_applicable"
     if case["task"] == "green":
         row["green_protocol_version"] = "green-v1"
     if case["dataset"] == "pyqg_subgrid":
         row["closure_protocol_version"] = "closure-v1"
+    if case["dataset"].startswith("fde_") and case["task"] == "sr":
+        from kd.dataset._fractional import FDE_RESPONSE_PROTOCOL_VERSION
+        row["fde_response_protocol_version"] = FDE_RESPONSE_PROTOCOL_VERSION
+        row["metric_target"] = "observed_response"
+    if case.get("fde_pde_protocol_version"):
+        row.update(
+            fde_pde_protocol_version=case["fde_pde_protocol_version"],
+            metric_target="observed_equation_residual", fractional_operator_evaluated=False,
+            recovery_eligible=False, recovery_evaluator_status="not_applicable",
+            prediction_status="abstain",
+            equation_residual_status="not_evaluated",
+        )
     if case["model"] == "symbolicgpt":
         row["method_provenance"] = {
             "protocol": (
@@ -2991,7 +2856,6 @@ def _base_row(case, instance=None, target=None):
     if case["model"] == "reference":
         from kd.evaluation.reference import metadata
         row.update(metadata(case))
-        row["metric_protocol_version"] = case.get("metric_protocol_version", METRIC_PROTOCOL_VERSION)
     row["evaluation_protocol"] = copy.deepcopy(case.get("evaluation", {}))
     row["implementation_variant"] = case.get("method_declaration", {}).get("implementation_variant", "undeclared_legacy_variant")
     row["configuration_source"] = case.get("method_declaration", {}).get("source")
@@ -3014,18 +2878,19 @@ def _failure(case, exc, instance=None, target=None, ground_truth=None):
         ),
         error=f"{type(exc).__name__}: {exc}",
     )
-    if (case["task"] == "green" or case["dataset"] == "pyqg_subgrid" or case["dataset"].startswith("dso_file_")) and isinstance(exc,FileNotFoundError):
-        row.update(status="error",capability_status="missing_asset")
+    if (case["task"] == "green" or case["dataset"] == "pyqg_subgrid" or case["dataset"].startswith(("dso_file_", "fde_"))) and isinstance(exc,FileNotFoundError):
+        row.update(status="error")
+    if case["dataset"].startswith("fde_") and "source_blocked" in str(exc):
+        row.update(status="skipped")
+    elif case.get("fde_pde_protocol_version") and isinstance(exc, SkipCase):
+        row.update(status="skipped")
     if case["model"] in {"pdefind_nd", "implicit_pde"}:
         row["equation_protocol_version"] = "equation-v1"
         message = str(exc)
         if "source_blocked" in message:
             row["status"] = "skipped"
-        row["capability_status"] = (
-            "source_blocked" if "source_blocked" in message else
-            "method_unsupported" if "method_unsupported" in message else
-            "insufficient_support" if "insufficient_support" in message else
-            "missing_asset" if isinstance(exc, FileNotFoundError) else "error")
+    from kd.benchmark_capabilities import failure_status
+    row["capability_status"] = failure_status(exc)
     traceback.print_exc()
     if case["model"] == "reference":
         row.update(recovery_eligible=False, recovery_evaluator_status="not_applicable",
@@ -3034,6 +2899,9 @@ def _failure(case, exc, instance=None, target=None, ground_truth=None):
 
 
 def _case_problems(dataset, case):
+    if case["task"] in {"pde", "steady_pde"}:
+        from kd.benchmark_capabilities import validate_pde
+        validate_pde(dataset, case.get("reference_adapter", case["model"]))
     if case["task"] == "green":
         from kd.evaluation.green import problems
         return problems(dataset,case)
@@ -3164,7 +3032,10 @@ def run_case(case, work_dir=None, checkpoint=None, *, selection=None, cache_root
                     return [_failure(case, exc, selection["instance"], selection["target"],
                                      selection.get("ground_truth"))]
                 truths = case.get("ground_truth")
-                if len(rows) == instance_row_start and isinstance(truths, (list, tuple)):
+                if len(rows) == instance_row_start and case["task"] in {"pde", "steady_pde"}:
+                    for target, truth in _pde_target_bindings(case, dataset):
+                        append(_failure(case, exc, instance, target, truth))
+                elif len(rows) == instance_row_start and isinstance(truths, (list, tuple)):
                     for index, truth in enumerate(truths):
                         append(_failure(case, exc, instance, str(index), truth))
                 else:
@@ -3213,6 +3084,10 @@ CSV_FIELDS = [
     "equation_rollout_trajectory_coverage", "equation_rollout_trajectories",
     "equation_protocol_version", "equation_expression", "capability_status",
     "green_protocol_version", "forcing_metrics", "closure_protocol_version", "training_data_overlap",
+    "fde_response_protocol_version",
+    "fde_pde_protocol_version",
+    "fractional_operator_evaluated",
+    "equation_residual_status",
     "closure_frame_metrics", "closure_layer", "closure_online_status",
     "equation_residual_normalization", "normalization_train_scale",
     "prediction_status", "prediction_abstain_reason",
@@ -3439,9 +3314,7 @@ def aggregate_results(rows):
             "experiment_identity_hash"))
         # Actual row timing wins over an unbound hash from an adapter-only fixture.
         if row.get("execution_policy"):
-            from kd.benchmark_protocol import digest
-            dimensions = (*dimensions[:3], digest({k: v for k, v in row["execution_policy"].items()
-                                                    if k != "resource_policy"}), *dimensions[4:])
+            dimensions = (*dimensions[:3], execution_policy_hash(row["execution_policy"]), *dimensions[4:])
         common = (version, execution, data_version, resource_hash, *dimensions)
         groups.setdefault((*common, "all_configurations", "all", "all", "all"), []).append(row)
         groups.setdefault((*common, row.get("method_config_hash", "legacy/unknown"),
@@ -3671,11 +3544,29 @@ def save_summary(output_dir, rows):
     write_dynamic_csv(output_dir / "benchmark_paired.csv", paired_rows)
 
 
+def _pde_target_bindings(case, dataset=None):
+    """Execution units: equation adapters fit each target; legacy adapters fit one field."""
+    model = case.get("reference_adapter", case["model"])
+    if model in {"pdefind_nd", "implicit_pde"}:
+        if dataset is None:
+            from kd.dataset._advanced import declared_targets
+            declared = declared_targets(case["dataset"])
+        else:
+            from kd.dataset._equations import targets
+            declared = targets(dataset)
+        return [(target.key, None) for target in declared]
+    return [("PDE", case.get("ground_truth"))]
+
+
 def _declared_targets(case):
     """Target-level failure accounting from predeclared truth, never fitted outputs."""
-    if case["model"] in {"pdefind_nd", "implicit_pde"} or case.get("reference_adapter") in {"pdefind_nd", "implicit_pde"}:
-        from kd.dataset._advanced import declared_targets
-        return [(target.key, None) for target in declared_targets(case["dataset"])]
+    if case["dataset"].startswith("fde_"):
+        if case["task"] == "pde":
+            return _pde_target_bindings(case)
+        from kd.dataset._fractional import response_target
+        return [(response_target(case["dataset"]), None)]
+    if case["task"] in {"pde", "steady_pde"}:
+        return _pde_target_bindings(case)
     if case["task"] == "green":
         return [("kernel",None)]
     if case["dataset"] == "pyqg_subgrid":
@@ -3770,11 +3661,17 @@ def _prepare_targets(case):
                     if problem:
                         spec.update(split=problem["split"], data_metadata=problem["metadata"],
                                     n_train=len(problem["X_train"]), n_test=len(problem["X_test"]))
+                    if case["task"] in {"pde", "steady_pde"}:
+                        from kd.dataset._equations import equation_spec, targets
+                        actual = targets(dataset)
+                        spec["equation_targets"] = [t.to_dict() for t in actual]
+                        if not problem and len(actual) == 1:
+                            spec["data_metadata"] = equation_spec(dataset, actual[0])
                     specs.append(spec)
             except Exception as exc:
                 declared = None
-                if case["model"] in {"pdefind_nd", "implicit_pde"}:
-                    declared = _declared_targets(case)
+                if case["task"] in {"pde", "steady_pde"}:
+                    declared = _pde_target_bindings(case, dataset)
                 elif hasattr(dataset, "state_vars"):
                     truths = dict(_declared_targets(case))
                     declared = [(f"d({name})/dt", truths.get(f"d({name})/dt"))
@@ -3784,6 +3681,14 @@ def _prepare_targets(case):
                 failed = _fallback_targets(case, exc, instance=instance,
                                            instance_index=instance_index, declared=declared)
                 for entry in failed:
+                    if case["task"] in {"pde", "steady_pde"}:
+                        from kd.dataset._equations import equation_spec, targets
+                        actual = targets(dataset)
+                        entry["equation_targets"] = [t.to_dict() for t in actual]
+                        target = next((t for t in actual if t.key == entry["target"]),
+                                      actual[0] if len(actual) == 1 else None)
+                        if target is not None:
+                            entry["data_metadata"] = equation_spec(dataset, target)
                     entry["preparation_row"]["target_manifest_complete"] = True
                     entry["preparation_row"]["details"] = copy.deepcopy(
                         getattr(dataset, "protocol_metadata", {}))
@@ -4156,7 +4061,11 @@ def main(argv=None):
     parser.add_argument(
         "--check-compatibility",
         action="store_true",
-        help="Load one minimal dataset instance per selected baseline/dataset pair and exit",
+        help="Check dataset/instance/target compatibility without fitting and exit",
+    )
+    parser.add_argument(
+        "--compatibility-mode", choices=("sample", "full"), default="sample",
+        help="sample checks the first instance for each selected seed; full checks all instances",
     )
     parser.add_argument("--_case-file", type=Path, help=argparse.SUPPRESS)
     parser.add_argument("--_target-file", type=Path, help=argparse.SUPPRESS)
@@ -4336,7 +4245,7 @@ def main(argv=None):
     if args.dry_run:
         return 0
     if args.check_compatibility:
-        report = check_compatibility(cases, excluded=excluded, progress=True)
+        report = check_compatibility(cases, excluded=excluded, progress=True, mode=args.compatibility_mode)
         save_compatibility_report(output, report)
         counts = {
             status: sum(row["status"] == status for row in report["pairs"])

@@ -16,13 +16,13 @@ python -m venv .venv
 # Linux / macOS
 source .venv/bin/activate
 # Windows PowerShell 使用：.venv/Scripts/Activate.ps1
-python -m pip install -r requirements.txt
+python -m pip install -r requirements/core.txt
 python -m pip install -e ".[dev]"
 python run_benchmark.py --list
 python run_benchmark.py --config configs/benchmark/core_v2.json --dry-run
 ~~~
 
-`requirements.txt` 提供核心依赖，不会安装所有外部 baseline。GPU PyTorch、Julia/PySR、
+`requirements/core.txt` 提供核心依赖，不会安装所有外部 baseline。GPU PyTorch、Julia/PySR、
 PyOperon、官方 E2E checkpoint 和 LLM-SR 服务需要各自配置，参见
 [服务器环境](docs/server_setup.md)。Conda 用户可从根目录执行
 `conda env create -f environment.yml`。
@@ -37,8 +37,9 @@ PyOperon、官方 E2E checkpoint 和 LLM-SR 服务需要各自配置，参见
 上游参考快照、checkpoint 和实验结果保留在本地，获取与放置方式见
 [数据说明](docs/data.md)。新克隆中缺少这些数据的集成测试会明确跳过。
 
-正式主实验尚未运行：预算公平性规则已确定（统一资源槽与每 target 的统一时间上限），
-相应代码与协议冻结清单见 [计划](docs/benchmark_plan.md)。当前 PIC 排序校准未通过验收，
+实验结果汇总由 `scripts/build_*` 生成到本地，暂不随公开仓库发布。
+本地开发树使用 `domain-v5`，数据修复范围见[数据说明](docs/data.md)，
+不混入服务器冻结实验。预算规则、冻结清单与待办见 [计划](docs/benchmark_plan.md)。当前 PIC 排序校准未通过验收，
 物理可信度评估是离线原型。
 运行成功、兼容性预检和方程恢复质量分别报告。具体边界见
 [方法卡片](docs/methods.md) 与 [指标协议](docs/benchmark_metrics.md)。
@@ -49,12 +50,13 @@ PyOperon、官方 E2E checkpoint 和 LLM-SR 服务需要各自配置，参见
 | --- | --- |
 | `kd/` | 数据、模型适配器、指标与可视化 |
 | `configs/` | 可复现实验配置 |
-| `examples/`、`quick_start.ipynb` | 使用示例 |
+| `examples/` | 使用示例 |
 | `tests/` | 单元测试和集成测试 |
-| `scripts/` | 运行、结果合并、审计与 profiling 工具 |
-| `hpc/`、`docker/` | 服务器运行与环境构建配方 |
+| `scripts/` | 运行、结果汇总、清单导出与审计工具 |
+| `requirements/` | 核心、文档与服务器依赖清单 |
+| `server/` | 仅在服务器使用的激活脚本、镜像配方与启动脚本 |
 | `docs/` | 当前指南与协议说明 |
-| `results/`、`.local/` | 本地结果、私有配置与备份；不提交 |
+| `results/`、`.local/`、`reports/`、`STATUS.md` | 本地结果、私有配置、运行状态与汇报材料；不提交 |
 
 ## 开发与验证
 
@@ -67,7 +69,7 @@ python -m pytest -q --require-external-data
 代码格式使用 Black，静态检查使用 Ruff，设置均在 `pyproject.toml`（排除的目录是上游
 快照，保持原格式）：`black --check run_benchmark.py kd examples tests` 与
 `ruff check run_benchmark.py kd examples tests`。本地服务器设置使用
-`hpc/server.env.example` 对应的 `.local/server.env`；不要将连接凭据、原始数据、
+`server/env/server.env.example` 对应的 `.local/server.env`；不要将连接凭据、原始数据、
 模型权重或运行日志强制加入 Git。
 
 ## 致谢与许可证

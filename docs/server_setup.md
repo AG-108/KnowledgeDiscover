@@ -1,20 +1,39 @@
 # Server setup
 
-Use a separate experiment worktree and persistent environment. Keep source/config
-changes locally, back up the remote files before synchronization and compare
+Use a separate experiment worktree and retain the validated runtime environment
+in the saved container image. Keep source/config changes locally, back up the remote files before synchronization and compare
 normalized SHA256 hashes. Preserve previous worktrees and raw result directories.
+
+## Experiment storage
+
+As agreed on 2026-10-09, server experiments write declarations, target results,
+checkpoints, logs and reports directly to a persistent mounted filesystem.
+Before starting or resuming a run, check the mount and the resolved output path;
+an unmounted directory or the container's overlay filesystem is not a valid
+destination. Keep each experiment's existing identity and first terminal records
+when changing its storage location.
+
+Configure `KD_STORAGE_ROOT` as the mounted storage root in private server settings.
+Use explicit output paths beneath it, or verified symlinks for existing relative
+`results/` paths and `/opt/kd/experiments`. An environment variable alone does not
+redirect a benchmark configuration's `output_dir`. Keep actual mount paths private.
+On replacement containers, verify the mount and links before dispatching any fits.
+
+Model weights, dependency bundles and runtime environments may remain in the
+container image, which the user will save. They do not need to be copied into the
+result mount. Local checkpoint downloads are optional additional backups; current
+experiment progress must remain available without a local backup process.
 
 ## Python environments
 
 - The 19 baselines registered in `run_benchmark.py` can share the Python 3.10
   stack below. Keep their task/data compatibility rules and external runtime
   requirements separate from Python package compatibility.
-- `requirements.txt`: portable core stack and native/example development.
-- `requirements-operon-py310.txt`: pinned Python 3.10 numeric stack and PyOperon.
-- `requirements-server-unified-py310.txt`: extra packages for the validated unified
+- `requirements/core.txt`: portable core stack and native/example development.
+- `requirements/server-operon-py310.txt`: pinned Python 3.10 numeric stack and PyOperon.
+- `requirements/server-unified-py310.txt`: extra packages for the validated unified
   server stack; install alongside the Operon list, not as a standalone core recipe.
-- `requirements-server-py310.txt`: small optional PyOperon add-on for an existing
-  environment. It is not the unified-environment specification.
+- `requirements/docs.txt`: Sphinx builder for `docs/`.
 
 The historical unified server used Python 3.10, PyTorch 2.5.1 with CUDA 12.1,
 PyOperon 0.6.1 and the pins in those files. Its E2E sympytorch fork and Julia
@@ -24,8 +43,8 @@ installation are separate assets.
 conda create -n kd-server python=3.10 pip
 conda activate kd-server
 python -m pip install torch==2.5.1 --index-url https://download.pytorch.org/whl/cu121
-python -m pip install -r requirements-operon-py310.txt
-python -m pip install -r requirements-server-unified-py310.txt
+python -m pip install -r requirements/server-operon-py310.txt
+python -m pip install -r requirements/server-unified-py310.txt
 python -m pip install -e .
 python -m pip check
 ~~~
@@ -34,7 +53,7 @@ Choose the PyTorch build for the actual device. Do not copy a Windows Conda expo
 or local build-cache paths into a Linux installation.
 
 The two server requirement files are a separate installation recipe. Do not
-combine them with `requirements.txt` in one resolver invocation: the recipes
+combine them with `requirements/core.txt` in one resolver invocation: the recipes
 pin different setuptools, PyYAML and graphviz versions.
 
 The shared numeric stack uses NumPy 2.0.2 and scikit-learn 1.6.1 for PyOperon
@@ -62,7 +81,7 @@ Python dependencies.
 
 ## Private settings and activation
 
-Copy `hpc/server.env.example` to ignored `.local/server.env` and set the actual
+Copy `server/env/server.env.example` to ignored `.local/server.env` and set the actual
 storage root, environment prefix, Conda activation path and optional asset paths.
 The activation script resolves the project from its own location unless
 `KD_PROJECT` is provided. An already selected environment can be supplied via
@@ -70,9 +89,9 @@ The activation script resolves the project from its own location unless
 
 ~~~bash
 mkdir -p .local
-cp hpc/server.env.example .local/server.env
+cp server/env/server.env.example .local/server.env
 # Edit .local/server.env for the host before activation.
-source hpc/activate_kd_server.sh
+source server/env/activate_kd_server.sh
 python -m pip check
 python run_benchmark.py --config configs/benchmark/core_ode_track.json --dry-run
 ~~~
@@ -84,7 +103,7 @@ credentials local and validate real generation before a full batch.
 
 ## D2 slot execution
 
-`hpc/activate_kd_server.sh` defaults `KD_SLOT_THREADS` to 4 and uses it for unset
+`server/env/activate_kd_server.sh` defaults `KD_SLOT_THREADS` to 4 and uses it for unset
 OpenMP/BLAS/NumExpr thread variables. The slot executor overrides inherited thread
 variables per worker. Prepare a selected manifest, then validate resources without
 fitting:
@@ -101,8 +120,11 @@ physical CUDA index or UUID. Linux requires `taskset` and `psutil`; unavailable 
 or monitoring fails before launching. Validate binding, CUDA visibility and sampled
 resource-limit behavior with a small deployment smoke before a formal batch.
 LLM-SR's already bound local vLLM service requires `--gpu-service-pid` and a separate
-LLM-SR GPU queue; its CPU/RSS belongs to that slot. Real vLLM/CUDA validation is still
-pending. See [execution](benchmark.md#d2-资源槽执行c5c6) and
+LLM-SR GPU queue; its CPU/RSS belongs to that slot. The 2026-10-09 deployment passed
+four real LLM-SR calls, HTTP disconnect cancellation, CPU binding, aggregate RSS sampling
+and service restart checks. Full-run resource evidence is recorded per target.
+Alternate LLM-SR and other GPU work only after stopping vLLM and verifying GPU memory
+release. See [execution](benchmark.md#d2-资源槽执行c5c6) and
 [resource metrics](benchmark_metrics.md#c5c6-resource-protocol-slots-v1).
 
 C7 full settings use four gplearn workers, four native Operon threads, four PySR
@@ -114,17 +136,13 @@ identify `parallelism_protocol=d2-parallel-v1`; older C5 policies and first term
 rows are preserved. Local native-worker checks do not replace Linux/CUDA/vLLM deployment
 verification. See the [method card](methods.md#d2-method-parallelism-c7).
 
-## Historical launch recipes
+## Server files
 
-The dated `hpc/run_*_20260925.sh` recipes retain their original selections and
-budgets. CPU/GPU missing-pair recipes require the manifests and compatibility
-reports from the original run; those artifacts are local and must exist before
-launching. Older dated scripts in `scripts/` likewise require their original
-manifests. They do not start when the repository is cloned or imported.
-
-For historical persistence scripts, KD_PROJECT identifies the source checkout.
-Export KD_PERSIST_DIR to select a separate destination; its default is the
-September 17 run directory under KD_STORAGE_ROOT.
+Server-only files live under `server/`: `env/` (activation scripts and the private
+settings template), `docker/sissopp/` (SISSO++ image recipe) and `launch/`
+(`serve_llmsr_backbone.sh`, `tune_pde_20261017.py`). The 2026-09 launch and
+persistence scripts were removed on 2026-10-20 together with their result
+directories; they remain in commit `718588b`.
 
 Recheck processes, logs and exit files before resuming an old output directory.
 An exit code of 1 can mean a completed batch contains fit errors/timeouts.

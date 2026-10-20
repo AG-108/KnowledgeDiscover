@@ -40,3 +40,12 @@ def pytest_runtest_setup(item):
             if item.config.getoption("--require-external-data"):
                 pytest.fail(reason, pytrace=False)
             pytest.skip(reason)
+
+
+@pytest.fixture
+def lightweight_cli_environment(monkeypatch):
+    """Skip installed-package hashing only for explicitly opted-in CLI tests."""
+    from kd import benchmark_identity
+
+    monkeypatch.setattr(benchmark_identity, "environment_fingerprint",
+                        lambda: {"test_environment": "cli-configuration-only"})

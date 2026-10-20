@@ -1,7 +1,115 @@
 # A1–A6 工程验收
 
-更新：2026-10-08。已完成可验证工程实现；来源不足项见 [待解决问题](deferred_source_issues.md)。
+> 2026-10-20 清理说明：`results/validation/`、`results/calibration/` 等证据目录已于 2026-10-20 删除，下文 `results/...` 与 `.local/...` 路径只作历史记录，本地已不存在；范围见[工程记录](#工程记录)。
+
+更新：2026-10-12。已完成可验证工程实现；来源不足项见 [待解决问题](deferred_source_issues.md)。
 四方法主队列已获用户授权；代码与独立精度校准结果不作为主实验性能排名。
+
+## 替换容器接续（2026-10-12）
+
+用户授权继续未完成实验；新容器使用原冻结源码与持久化结果，未同步本地开发树的数据协议修订。
+
+- 挂载与结果链接核验通过。启动前四方法保留 1936/4290 个首次终态：SISSO 1425、DLGA 15、
+  PhySO 410、SymbolicGPT 86；LLM-SR 保留 230/1425，均为 `ok`。
+  完成数包含错误和超时，不等同于方程恢复成功。
+- 两个矩阵的实现、统一环境、输入资产身份及 target-plan seal 一致；125 个 baseline 与
+  15 个 LLM-SR 完整分块封存逐一通过核验，记录启动前 2166 个首次终态 SHA256。
+  模型四个权重分片、tokenizer/config 与离线依赖锁均通过 SHA256 核验。
+- 迁移仅调整独立调度器的实际 CPU 编号和 GPU UUID，冻结方法代码、参数、种子与预算不变。
+  保持 slots-v3 相同硬件、每槽四核和 28 GB RSS、GPU 独占，以及原首次终态不可覆盖规则。
+  vLLM 服务保留数值设备编号，实验资源绑定实际 UUID；服务启动后的真实请求返回 HTTP 200。
+  新服务树 RSS 为 2,964,721,664 bytes，两个下一分块的资源绑定 dry-run 通过；停止服务后显存 1 MiB。
+- 09:55（台北）交替队列启动，保留旧队列的 next_chunk 顺序：`gpu-0033`，随后
+  `gpu_llmsr-0015`；剩余 148 个 baseline 分块与 75 个 LLM-SR 分块。
+  以新容器 PID 1 创建时间重新计算 44 小时截止，完整下一分块预算不足时保存状态并停止派发。
+- 10:01（台北）复核首个新增终态：PhySO / Livermore-5 / seed4，`timeout`、attempt=1，
+  已直接写入挂载，执行器继续下一目标。新结果记录实际四核绑定及 GPU UUID。
+  启动前 2166 个首次终态文件及两个父矩阵声明的 SHA256 全部保持不变。
+
+旧队列计划、状态、启动信息与驱动保留副本。接续证据位于持久化交替队列的
+`resume_audits/20261012_42006/`；连接与操作信息仅记录在私有部署说明中。
+
+## 持久化恢复与 LLM-SR 入队（2026-10-09）
+
+用户授权恢复并续跑原实验，将 LLM-SR 加入队列；实验结果直接写入持久化挂载，
+模型权重与运行环境保留在用户将保存的镜像内。
+
+- 恢复 10 月 8 日 00:56 检查点：1718 个首次终态，SISSO 1425、DLGA 15、PhySO 192、
+  SymbolicGPT 86。压缩包 SHA256、62,589 份文件、111 个完整分块封存，以及冻结代码、
+  统一环境与输入资产身份全部通过。启动后复核原 1718 个首次终态哈希不变。
+  原 4155 cases / 4290 targets 与矩阵 seal 保留，错误和超时不重跑。
+- 原始 BF16 `meta-llama/Llama-3.1-8B-Instruct` 的四个权重分片 SHA256 与 HF 元数据一致，
+  tokenizer/config 同时绑定；独立 vLLM 0.10.2 / torch 2.8.0+cu128 环境离线安装并通过依赖检查。
+  原统一环境保留 torch 2.5.1+cu121，未将隔离服务依赖安装到其中。
+- 四次真实 LLM-SR 调用全部完成、无需重试，四个程序均通过解析和求值；
+  独立合成任务的训练 MSE 为 0.06236，仅证明部署链路，不作为精确恢复验收。
+  HTTP 断开前观测到 1 个运行任务，断开后约 0.29 秒清零，下一请求返回 HTTP 200。
+  服务与验收客户端合计 RSS 峰值 3,130,527,744 bytes，均绑定 GPU 槽的四个 CPU 编号。
+- 关闭 vLLM 后 GPU 显存回到 1 MiB；重启并更换服务 PID 后，同一冻结 LLM-SR 分块的
+  D2 dry-run 通过，确认科学身份与运行时进程绑定分离。
+- LLM-SR 独立 main 矩阵：1380 cases / 1425 targets、5 seeds、T=300 秒、软截止、
+  1000 调用内部预算、4 evaluators、temperature=0.8、max_tokens=1024。
+  两项独立 SR/ODE 数据准备与原比较矩阵的目标 metadata 完全一致，其余成功声明按相同数据输入复用。
+  90 个 LLM-SR 分块与剩余 162 个 baseline GPU 分块交替，21:04（台北）已启动。
+  首个 LLM-SR target 已保存 `ok`，`stop_reason=time_limit`、`stop_reason_source=fit_deadline`，
+  fit=300.0135 秒、score=1.1219 秒；含服务 RSS 峰值 4196.46 MiB，资源超限与监控错误均为空。
+  队列已继续下一 target；所有阶段记录直接保存在挂载内。
+
+恢复、服务验收、重启检查、冻结矩阵与调度记录均保留在服务器持久化实验目录。
+私有路径和操作入口见 `.local/server_eitech_20261005/README-full-main.md`；
+严格 1000 调用无 T 对照及 FDE 诊断不混入此次主矩阵。
+
+## FDE 全部 PDE 方法覆盖（2026-10-08）
+
+新增 5 个 FDE 时空场的 `_pde` 网格接口，其中 3 个内置坐标场可直接运行。
+`configs/benchmark/fde_pde.json` 包含全部 13 个 PDE 方法，共 39 cases；
+`fde_all_methods.json` 合并原 50 个响应拟合 cases，共 89 cases。
+科学任务为整数阶 PDE 残差诊断，分数阶算子和恢复仍待来源认证。
+详细协议、导出和运行方式见 [FDE 说明](fde_dataset.md#全部-pde-方法覆盖)。
+
+- 最终相关回归 362 passed、0 failed、0 skipped，149.46 秒；启用
+  `--require-external-data`，覆盖响应/PDE 接口、真实资产、划分隔离、原生稀疏/弱形式/SGA 拟合、
+  SGA 系数与微分导出、原 runner、加载器、domain、Green/closure、冻结、方程协议及规划。
+  证据 `results/validation/fde_pde_final_regression_20261008.xml`。
+- 全部 39 组合的实际兼容性检查：36 compatible、3 incompatible、0 error。
+  不适用项全部为 PDE-Net 的二维空间要求，目标保留 `method_unsupported`；
+  证据 `results/validation/fde_pde_compatibility_20261008/compatibility_report.json`。
+- 全部 39 组合的原生入口 smoke：拟合预算 8 秒、宽限 1 秒，33 `ok`、3 `skipped`、
+  3 `timeout`、0 `error`；证据 `results/validation/fde_pde_smoke_20261008/benchmark_summary.json`。
+  此次记录用于验证方法入口及终态分母；其评分先于首帧与 SGA 导出修订，不作为最终评分证据。
+- 评分修订后的 DSCV / SGA / PDE-FIND 真实 CLI：9 cases / 9 targets 全部返回，
+  8 个残差有限、1 个 SGA 候选为 `nonfinite_candidate`，覆盖率为 0，不授予误差分数。
+  SGA 的另外两个场均成功导出带系数方程并评分。证据
+  `results/validation/fde_pde_scoring_smoke_20261008/benchmark_summary.json`。
+- EqGPT 单独采用默认 90 秒拟合预算仍触发 `hard_timeout`，phase 为 fit，
+  保留缺少候选的终态与分母；证据 `results/validation/fde_pde_eqgpt_smoke_20261008/`。
+  数据加载及模型导入兼容，尚未验证此 CPU 预算内的有效 EqGPT 拟合。
+- 展开库存见 `results/validation/fde_pde_inventory_20261008/`。响应/PDE 接口沿用同一物理家族与文件，
+  原有 455 项资产哈希无变化。默认矩阵仍为 3311 cases，四方法主配置仍为 4155 cases，
+  服务器冻结队列未修改。Ruff 与差异空白检查通过。
+
+## FDE 响应拟合接入（2026-10-08）
+
+按用户选择接入观测响应拟合，科学任务为 `fractional_equation_response`，数值调度
+为 `sr`，使用 `fde-response-v1` / 指标 2.3。5 个记录可直接运行；另 2 个 DAT 条目
+需要显式坐标及其来源，缺省保留 `source_blocked` 目标。重复资产不新增独立拟合。
+接口、划分与运行方式见 [FDE 说明](fde_dataset.md)。
+
+- 相关回归 281 passed、0 failed，124.18 秒；开启 `--require-external-data`。
+  覆盖 FDE、统一加载、既有 benchmark、domain 协议、Green/closure 与冻结报告；
+  证据 `results/validation/fde_response_regression_20261008.xml`。Ruff 与差异空白检查通过。
+- gplearn 真实 smoke：5 cases / 5 targets 全部 `ok`，每目标拟合上限 10 秒，
+  使用 smoke 参数。全部预测有限，时间块无交叉，恢复资格均为 false；
+  证据 `results/validation/fde_response_smoke_20261008/benchmark_summary.json`。
+  此结果验证执行链路；预测误差保留在结果中，不作为精度校准或方程恢复结论。
+- 7 个注册名的实际兼容性检查：5 compatible、2 source_blocked；
+  证据 `results/validation/fde_response_compatibility_20261008/compatibility_report.json`。
+- 库存新增 12 项 FDE 资产；此前资产无缺失、SHA256 无变化。
+  原 ZIP 与全部 11 个提取文件逐字节复核通过；
+  资产变化及展开库存见 `results/validation/fde_response_inventory_20261008/`。
+- 独立配置 `configs/benchmark/fde_response.json` 默认选择 5 个记录、10 个 SR 适配器，
+  单 seed 共 50 个标量拟合，使用 smoke 参数。完整多方法实验尚未执行。
+  FDE 为 opt-in；原四方法配置仍生成 4155 cases，本次未操作服务器冻结队列。
 
 ## 本地临时资料清理（2026-10-08）
 
@@ -21,8 +129,7 @@
 
 - 移除 56 个无现用引用的旧脚本、上游独立测试和 TensorFlow 遗留文件；
   DLGA 测试另整理为 `tests/test_kd_dlga.py`，将初始化断言并入已有元数据测试。
-  Python 文件数 306 → 269，净减少 5,887 行；范围与恢复说明见
-  [代码整理记录](code_cleanup.md)。
+  Python 文件数 306 → 269，净减少 5,887 行；范围见[工程记录](#工程记录)。
 - 本地 Python 3.10 完整回归：615 passed、0 failed、6 skipped，566.63 秒；
   `results/validation/code_cleanup_20261007.xml`。开启 `--require-external-data`，
   未因测试数据缺失跳过；6 项跳过均为本地没有 SISSO++ 原生绑定的集成测试。
@@ -56,7 +163,7 @@
   固定开始顺序为 Nguyen-1/seed0 的三个 SR 方法及 burgers/seed0 的 DLGA，随后继续完整矩阵，
   不基于主实验结果修改参数。完成后的分片按同一父矩阵合并，未运行项始终保留分母。
 
-参数、适用范围与保真度限制见 [校准说明](four_methods_calibration.md)。
+参数、适用范围与保真度限制见 [校准说明](methods.md#four-method-calibration-variants-2026-10-05)。
 流水线仍在执行，当前没有完整主实验性能结论。
 
 首批真实四方法分片合并与冻结报告入口核验通过：4 首次终态、完整 4290 target 分母、
@@ -265,3 +372,14 @@ PySR/Operon 缺乏可靠原生停止码时，来源 `fit_deadline` 表示已观�
 代际、批次、长原生调用与初始化仍可能触发 T+grace 硬超时。
 Linux/真实 CUDA/vLLM 部署和服务器端 HTTP 断连取消生成仍待验证；
 本地工程验收不解除来源、正式预算、语法与矩阵冻结条件。
+
+## 工程记录
+
+`results/validation/`、`results/calibration/` 下的证据目录已于 2026-10-20 删除。本文及其他文档提到的 commit `718588b` 是本地归档标签 `archive/pre-publish-20261020` 中的中间提交，未推送到 GitHub；已删除的原始文档只在本地可取回。
+
+- **四方法校准（2026-10-05）**：独立无噪声合成开发数据，PhySO/SISSO/SymbolicGPT 各 6/6、DLGA 3/3 通过，冻结 `configs/benchmark/four_methods_full.json`。仍生效的参数与边界见[方法卡片](methods.md#four-method-calibration-variants-2026-10-05)；校准结果不作为主实验性能结论。
+- **代码整理（2026-10-07）**：移除 56 个无现用引用的旧文件（PDE-Net 独立训练/调试脚本及 aTEAM 上游测试、DISCOVER 的 TensorFlow 组件与无调用方 dataset、绑定旧结果路径的 hpc 队列脚本）。公共调度、进度与分方法报告提取到 `kd/benchmark_batch.py`；`load_config_new` 为 `load_config` 的兼容别名；保留 PDE-Net 运行时导入的 `aTEAM/pdetools/example/` 及其许可证。Python 文件 306 → 269；服务器主实验继续使用冻结快照 `/opt/kd/releases/four_methods_20261005_v1`。临时恢复副本已于 10-08 删除。
+- **工程计划（2026-10-11，10-14 修订）**：P1-1～P1-4（任务能力、实际输入身份、SGA 方程导出、全实例预检与资产角色）完成，见[数据接入修复](data.md#domain-v5-接入修复2026-10-11)。封存与 summary snapshot 改为原子发布，复用已有 snapshot 前核对 hash 与名称，只覆盖进程中断边界，不等于断电持久化；显式恢复工具仅在出现实际恢复需求时追加。核心 CI 补入 4 个现有测试入口和 9 个模块的 Ruff，本地隔离环境 153 passed，未取得远程 CI 结果。summary 成本三组真实输入重放中位数 0.13–0.28 秒，证据不足以支持节流，暂不优化。来源认证与原生短拟合为独立条件分支，未启动。
+- **工程精简（2026-10-13）**：删除 `_failure` 中被覆盖的能力状态赋值和冻结报告的重复 hash；PDEFind 活动配置与示例移除 `alpha/max_iter`（显式传入仍接受并警告，求解算法不变）；配置 CLI 测试替换环境指纹扫描，共用 helper 移入 `tests/benchmark_helpers.py`；PDE 准备与切片移入 `kd/benchmark_preparation.py`，预检和执行共用 `prepare_views` 与导数 stencil 规则，统一指标版本推导与执行策略 hash。相关回归 512 passed。源码与 PDEFind 配置变化，新运行使用新输出身份。
+- **results 清理（2026-10-20）**：按用户要求，先将 smoke、dry-run、preflight 产物（1,812 个文件，23.12 MiB）移入 `.local/results_cleanup_20261020/quarantine/`；随后同日删除 `results/` 下其余内容，只保留 `results/analysis/{combined_results_20261017,cloud_results_20261016,pde_extension_20261017}/` 和从根目录移入的 `results/knowledge_discover_results_20261016_summary.tar.gz`。隔离目录已不存在。未修改函数、实验配置或评价协议，未改写历史 smoke 的成功或失败记录。
+- **同步冲突清理（2026-10-20）**：73 个未跟踪的 `-Solaris` 文件均有对应无后缀文件（71 个内容不同）；原字节归档在 `.local/sync_cleanup_20261020/`。该次清理实际把较新的 `*-Solaris` 副本隔离掉了；同日恢复 69 个文件。OneDrive 同时把 `.git` 中的本地 main 退回到 1 月的 `bc404ed`，真实历史为 GitHub 上的 `741b837`；清理结果最终作为一次提交接在 `741b837` 之后。`kd/benchmark_identity.py:source_fingerprint` 递归纳入 `kd/` 等目录，文件变化会改变新运行的源码身份；继续旧批次须使用与旧身份一致的冻结源码，不能绕过身份检查。

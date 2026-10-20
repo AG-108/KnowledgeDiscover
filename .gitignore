@@ -53,6 +53,12 @@ nosetests.xml
 /.local/
 /STATUS.md
 /docs/reports/
+# Research planning, results write-ups and qualification material stay local (2026-10-20)
+/docs/paper/
+/docs/agent_handoff.md
+/docs/benchmark.xmind
+/docs/benchmark_results_*.md
+/reports/
 /.codex/
 /.claude/
 .env
@@ -117,6 +123,7 @@ tmp_physo*
 /kd/dataset/Discover_Green_function/
 /kd/dataset/Discovery_of_soild_consititutive/
 /kd/dataset/EqGPT/
+/kd/dataset/FDE/
 /kd/dataset/SymbolicGPT/
 /kd/dataset/TLC/
 /kd/dataset/ViscousGravityCurrent/
@@ -139,3 +146,4 @@ Desktop.ini
 # Historical local automation
 /workflow/
 /agent.md
+/sshkey/

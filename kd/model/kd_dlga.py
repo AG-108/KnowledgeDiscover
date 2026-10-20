@@ -4,6 +4,7 @@ import logging
 import os
 import pickle
 import random
+import time
 
 import numpy as np
 import torch
@@ -16,7 +17,9 @@ class KD_DLGA(DLGA):
     """Expose DLGA with a configurable operator library and benchmark-friendly outputs."""
 
     def __init__(
-        self, operators: list[str], epi: float, input_dim: int, verbose: bool = True, **kwargs
+        self, operators: list[str], epi: float, input_dim: int, verbose: bool = True,
+        library_kind=None, coordinate_terms=False, normalize_coordinates=False,
+        fitness_kind="legacy", **kwargs
     ):
         self.user_operators = operators
         self.library_size = len(operators)
@@ -24,6 +27,93 @@ class KD_DLGA(DLGA):
         super().__init__(epi=epi, input_dim=input_dim, **kwargs)
         self.equations_ = None
         self.best_equation_ = None
+        self.library_kind = library_kind
+        self.coordinate_terms = coordinate_terms
+        self.normalize_coordinates = normalize_coordinates
+        self.fitness_kind = fitness_kind
+
+    def train_NN(self, X, y):
+        if not self.normalize_coordinates:
+            return super().train_NN(X, y)
+        import copy
+        from kd.benchmark_deadline import current_deadline, SoftDeadline
+
+        class ScaledNetwork(torch.nn.Module):
+            def __init__(self, network, values, targets):
+                super().__init__()
+                self.network = network
+                self.register_buffer("center", torch.as_tensor((values.max(0) + values.min(0)) / 2))
+                self.register_buffer("scale", torch.as_tensor(np.maximum(np.ptp(values, axis=0) / 2, 1e-8)))
+                self.register_buffer("offset", torch.as_tensor(float(np.mean(targets))))
+                self.register_buffer("amplitude", torch.as_tensor(max(float(np.std(targets)), 1e-8)))
+
+            def forward(self, values):
+                return self.offset + self.amplitude * self.network((values - self.center) / self.scale)
+
+        self.Net = ScaledNetwork(self.Net, X, y).to(device=self.device, dtype=self.dtype)
+        permutation = np.random.permutation(len(X))
+        ntrain = max(2, int(len(X) * 0.9))
+        tx = torch.as_tensor(X[permutation], device=self.device, dtype=self.dtype)
+        ty = torch.as_tensor(y[permutation], device=self.device, dtype=self.dtype).reshape(-1, 1)
+        deadline = current_deadline()
+        stop_at = time.perf_counter() + deadline.remaining() * 0.7 if deadline else float("inf")
+        best, best_state = float("inf"), copy.deepcopy(self.Net.state_dict())
+        optimizer = torch.optim.Adam(self.Net.parameters(), lr=self.learning_rate)
+
+        def loss():
+            if time.perf_counter() >= stop_at:
+                raise SoftDeadline()
+            return torch.mean((self.Net(tx[:ntrain]) - ty[:ntrain])**2) / self.Net.amplitude**2
+
+        def checkpoint():
+            nonlocal best, best_state
+            with torch.no_grad():
+                error = float(torch.mean((self.Net(tx[ntrain:]) - ty[ntrain:])**2))
+            self.val_loss_history.append(error)
+            if error < best:
+                best, best_state = error, copy.deepcopy(self.Net.state_dict())
+
+        try:
+            for step in range(self.max_iter):
+                optimizer.zero_grad()
+                value = loss()
+                if not torch.isfinite(value):
+                    raise RuntimeError("Nonfinite DLGA observation loss")
+                value.backward()
+                optimizer.step()
+                if step % 100 == 0:
+                    self.train_loss_history.append(float(value.detach()))
+                    checkpoint()
+            checkpoint()
+            if self.least_squares_nfev:
+                self.Net.load_state_dict(best_state)
+                self._refine_observations(tx[:ntrain], ty[:ntrain])
+                checkpoint()
+            elif self.lbfgs_max_iter:
+                self.Net.load_state_dict(best_state)
+                optimizer = torch.optim.LBFGS(self.Net.parameters(), max_iter=self.lbfgs_max_iter,
+                    tolerance_grad=1e-12, tolerance_change=1e-15, line_search_fn="strong_wolfe")
+                calls = [0]
+
+                def closure():
+                    optimizer.zero_grad()
+                    value = loss()
+                    value.backward()
+                    calls[0] += 1
+                    if calls[0] % 25 == 0:
+                        checkpoint()
+                    return value
+
+                optimizer.step(closure)
+                checkpoint()
+        except SoftDeadline:
+            checkpoint()
+        self.Net.load_state_dict(best_state)
+        self.best_epoch = "calibrated"
+        os.makedirs("model_save", exist_ok=True)
+        torch.save(best_state, "model_save/Net_calibrated.pkl")
+        self.observation_validation_nmse_ = best / float(self.Net.amplitude**2)
+        return self.Net, self.best_epoch
 
     def generate_meta_data(self, X):
         self.Net.to(self.device)
@@ -65,6 +155,11 @@ class KD_DLGA(DLGA):
             logging.warning("Failed to compute u_tt via autograd, falling back to zeros: %s", e)
             utt = torch.zeros_like(u)
         available_ops = {"u": u, "u_x": ux, "u_t": ut, "u_xx": uxx, "u_xxx": uxxx, "u_tt": utt}
+        if self.library_kind:
+            from kd.model.pde_library import evaluate_terms
+            available_ops.update(zip(self.user_operators, evaluate_terms(
+                self.user_operators, {**available_ops, "x": X_tensor[:, :1]}
+            )))
         # Restrict Theta to the configured operators used by the equation search.
         theta_columns = []
         for op_name in self.user_operators:
@@ -86,6 +181,8 @@ class KD_DLGA(DLGA):
         return self.Theta
 
     def random_module(self):
+        if self.library_kind:
+            return [random.randrange(self.library_size)]
         genes_module = []
         for _ in range(self.max_length):
             if self.library_size == 0:
@@ -139,7 +236,10 @@ class KD_DLGA(DLGA):
             # Preserve the fitted coefficient; display rounding changes the
             # exported equation and prevents reproducible precision checks.
             coef_str = str(float(coef[i, 0]))
-            term_str = "*".join([name[gene] for gene in item if gene < len(name)])
+            term_str = "*".join([
+                f"({name[gene]})" if self.library_kind else name[gene]
+                for gene in item if gene < len(name)
+            ])
             if not term_str:
                 continue
             string.append(f"{coef_str}*{term_str}")
@@ -162,6 +262,11 @@ class KD_DLGA(DLGA):
         os.makedirs("result_save/", exist_ok=True)
 
         for iter_num in tqdm(range(self.n_generations)):
+            from kd.benchmark_deadline import current_deadline
+            deadline = current_deadline()
+            if deadline and deadline.remaining() < 2 and hasattr(self, "coef"):
+                self.stop_reason_ = "time_limit"
+                break
             best_chrom_path = "result_save/best_save.pkl"
             best = []
             if self.Chrom:
@@ -255,8 +360,14 @@ class KD_DLGA(DLGA):
 
     def fit(self, X, y):
         """Fit the neural surrogate and run the operator-aware genetic search."""
+        if self.library_kind:
+            from kd.model.pde_library import library_names
+            self.user_operators = library_names(self.library_kind, self.coordinate_terms, X[:, 0])
+            self.library_size = len(self.user_operators)
         self.Net, self.best_epoch = self.train_NN(X, y)
         self.Theta = self.generate_meta_data(X)
+        self._theta_numpy = self.Theta.detach().cpu().numpy()
+        self.stop_reason_ = "budget_exhausted"
 
         try:
             # Run the operator-aware evolutionary search.
@@ -311,3 +422,30 @@ class KD_DLGA(DLGA):
         with torch.no_grad():
             u_pred = self.Net(X_tensor).cpu().numpy()
         return u_pred
+
+    def cross_over(self):
+        # Population length and generation budget are independent parameters.
+        for index in range(0, len(self.Chrom) - 1, 2):
+            left, right = self.Chrom[index:index + 2]
+            if left and right:
+                i, j = random.randrange(len(left)), random.randrange(len(right))
+                left[i], right[j] = right[j].copy(), left[i].copy()
+        return self.Chrom
+
+    def translate_DNA(self, gene):
+        if not hasattr(self, "_theta_numpy"):
+            return super().translate_DNA(gene)
+        columns = [np.prod(self._theta_numpy[:, module], axis=1) for module in gene]
+        return np.column_stack(columns), sum(map(len, gene))
+
+    def get_fitness(self, gene_translate, length_penalty_coef):
+        if self.fitness_kind == "legacy":
+            return super().get_fitness(gene_translate, length_penalty_coef)
+        target = self.u_t.reshape(-1)
+        scales = np.linalg.norm(gene_translate, axis=0)
+        safe = np.maximum(scales, 1e-15)
+        design = gene_translate / safe
+        coefficients = np.linalg.lstsq(design, target, rcond=None)[0] / safe
+        mse = float(np.mean((target - gene_translate @ coefficients)**2))
+        normalized = mse / max(float(np.mean(target**2)), 1e-30)
+        return coefficients[:, None], normalized + self.epi * length_penalty_coef, mse, "u_t"

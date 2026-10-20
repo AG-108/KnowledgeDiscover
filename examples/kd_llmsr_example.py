@@ -11,7 +11,7 @@ from kd.model.kd_llmsr import KD_LLMSR
 dataset = SymbolicRegressionDataset(name="Koza-2")
 data = dataset.get_data()
 
-# Start the backbone first, for example with scripts/serve_llmsr_backbone.sh.
+# Start the backbone first, for example with server/launch/serve_llmsr_backbone.sh.
 endpoint = os.environ.get("LLMSR_ENDPOINT", "http://127.0.0.1:10005/v1/chat/completions")
 
 # Protocol defaults (Llama-3.1-8B-Instruct, 4 programs per prompt, 10 islands,

@@ -3,6 +3,7 @@
 import copy
 import json
 import shutil
+from pathlib import Path
 
 import pytest
 
@@ -151,6 +152,96 @@ def test_partial_resume_adds_seal_without_rewriting_first_terminal(tmp_path):
     assert freeze_run(run)["sha256"] != old
     assert first.read_bytes() == original
     assert (run / "freezes" / f"{old}.json").is_file()
+
+
+@pytest.mark.parametrize("failure", ["temporary", "summary", "index", "latest"])
+def test_interrupted_seal_preserves_complete_publications_and_retries(tmp_path, monkeypatch, failure):
+    parent = matrix(tmp_path / "parent", seeds=(0,))
+    run = tmp_path / "run"
+    rows = shard(run, parent, parent["cases"], omit_last=True)
+    latest = run / "benchmark_freeze.json"
+    old_bytes = latest.read_bytes()
+    old = verify_freeze(run)
+    history = {path: path.read_bytes() for path in (run / "freezes").iterdir()}
+    first = run / "cases" / parent["cases"][0]["name"] / "targets/i0000_t0000/result.json"
+    terminal_bytes = first.read_bytes()
+    new = dict(rows[0], target_id="i0000_t0001", target="d(v)/dt")
+    benchmark.write_json(first.parent.parent / "i0000_t0001/result.json", new)
+    benchmark.save_summary(run, rows + [new])
+    # Preserve deliberately noncanonical source bytes exactly in the snapshot.
+    summary = run / "benchmark_summary.json"
+    summary.write_bytes(summary.read_bytes() + b" \n")
+    summary_bytes = summary.read_bytes()
+    original_replace, original_write = Path.replace, Path.write_bytes
+
+    def interrupt_replace(path, destination):
+        destination = Path(destination)
+        selected = (destination == latest if failure == "latest" else
+                    destination.parent == run / "freezes" and
+                    destination.name.startswith("summary-") == (failure == "summary"))
+        if selected:
+            raise OSError("interrupted publication")
+        return original_replace(path, destination)
+
+    def interrupt_write(path, data):
+        if path.parent == run / "freezes" and path.name.startswith("summary-"):
+            original_write(path, data[:7])
+            raise OSError("interrupted temporary write")
+        return original_write(path, data)
+
+    with monkeypatch.context() as patch:
+        if failure == "temporary":
+            patch.setattr(Path, "write_bytes", interrupt_write)
+        else:
+            patch.setattr(Path, "replace", interrupt_replace)
+        with pytest.raises(OSError, match="interrupted"):
+            freeze_run(run)
+    assert latest.read_bytes() == old_bytes
+    assert verify_freeze(run, allow_summary_update=True) == old
+    assert all(path.read_bytes() == data for path, data in history.items())
+    for path in (run / "freezes").glob("*.json"):
+        if path.name.startswith("summary-"):
+            assert identity.file_digest(path) == path.stem.removeprefix("summary-")
+        else:
+            assert json.loads(path.read_text())["sha256"] == path.stem
+    result = freeze_run(run)
+    assert verify_freeze(run) == result
+    assert result["n_declared_targets"] == result["n_terminal_rows"] == 2
+    assert result["sha256"] != old["sha256"]
+    assert first.read_bytes() == terminal_bytes
+    assert (run / "freezes" / f"summary-{identity.file_digest(summary)}.json").read_bytes() == summary_bytes
+    assert all(path.read_bytes() == data for path, data in history.items())
+
+
+@pytest.mark.parametrize("corruption", ["summary", "index_payload", "index_sha", "index_other_valid"])
+def test_existing_corrupt_snapshot_is_rejected_without_overwriting(tmp_path, corruption):
+    from kd.benchmark_protocol import digest
+
+    parent = matrix(tmp_path / "parent", seeds=(0,))
+    run = tmp_path / "run"
+    shard(run, parent, parent["cases"])
+    latest = run / "benchmark_freeze.json"
+    index = verify_freeze(run)
+    if corruption == "summary":
+        snapshot = run / "freezes" / f"summary-{index['input_sha256']['benchmark_summary.json']}.json"
+        snapshot.write_bytes(b"[]\n")
+    else:
+        snapshot = run / "freezes" / f"{index['sha256']}.json"
+        changed = copy.deepcopy(index)
+        if corruption == "index_sha":
+            changed["sha256"] = "0" * 64
+        else:
+            changed["n_declared_targets"] += 1
+            if corruption == "index_other_valid":
+                changed["sha256"] = digest({key: value for key, value in changed.items() if key != "sha256"})
+        benchmark.write_json(snapshot, changed)
+    damaged_bytes = snapshot.read_bytes()
+    # A failed first publication can leave snapshots with no latest index.
+    latest.unlink()
+    with pytest.raises(ValueError, match="snapshot digest mismatch"):
+        freeze_run(run)
+    assert not latest.exists()
+    assert snapshot.read_bytes() == damaged_bytes
 
 
 def test_timing_inherits_strict_control_and_main_override_is_rejected():

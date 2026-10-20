@@ -1,0 +1,13 @@
+{
+  "profile": "full",
+  "tasks": ["pde", "steady_pde"],
+  "models": ["*"],
+  "datasets": ["*", "fde_*_pde"],
+  "seeds": [0],
+  "output_dir": "results/validation/dataset_integration_pde_final_20261011",
+  "overrides": {
+    "datasets": {
+      "pdeformer_sinus": {"n_pde": 1, "n_x": 32, "n_t": 21}
+    }
+  }
+}

@@ -7,8 +7,10 @@ but cannot change previously sealed declarations, terminals or scoring records.
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
+from kd.benchmark_execution import atomic_bytes
 from kd.benchmark_identity import file_digest
 from kd.benchmark_protocol import digest
 
@@ -20,10 +22,8 @@ def read_json(path):
 
 
 def _write(path, value):
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(value, ensure_ascii=False, indent=2, allow_nan=False) + "\n",
-                    encoding="utf-8")
+    data = json.dumps(value, ensure_ascii=False, indent=2, allow_nan=False) + "\n"
+    atomic_bytes(path, data.replace("\n", os.linesep).encode("utf-8"))
 
 
 def contained(directory, relative):
@@ -171,9 +171,10 @@ def freeze_run(directory):
     summary_relative = f"freezes/summary-{inputs['benchmark_summary.json']}.json"
     summary_snapshot = directory / summary_relative
     if not summary_snapshot.exists():
-        summary_snapshot.parent.mkdir(parents=True, exist_ok=True)
-        summary_snapshot.write_bytes((directory / "benchmark_summary.json").read_bytes())
-    inputs[summary_relative] = file_digest(summary_snapshot)
+        atomic_bytes(summary_snapshot, (directory / "benchmark_summary.json").read_bytes())
+    if file_digest(summary_snapshot) != inputs['benchmark_summary.json']:
+        raise ValueError("Summary snapshot digest mismatch")
+    inputs[summary_relative] = inputs['benchmark_summary.json']
     index = {"schema": SCHEMA, "input_sha256": inputs,
              "parent_matrix_hash": manifest.get("parent_matrix_hash"),
              "experiment_identity_hash": manifest.get("experiment_identity_hash"),
@@ -182,5 +183,9 @@ def freeze_run(directory):
     snapshot = directory / "freezes" / f"{index['sha256']}.json"
     if not snapshot.exists():
         _write(snapshot, index)
+    existing = read_json(snapshot)
+    if (existing != index or existing.get("sha256") != snapshot.stem or
+            digest({key: value for key, value in existing.items() if key != "sha256"}) != snapshot.stem):
+        raise ValueError("Run freeze snapshot digest mismatch")
     _write(directory / "benchmark_freeze.json", index)
     return index

@@ -1,5 +1,7 @@
 """Checked A3/A4 observations and source declarations; no invented time axes."""
 
+import hashlib
+import io
 from pathlib import Path
 
 import numpy as np
@@ -12,6 +14,38 @@ from ._equations import EquationTarget, SteadyPDEDataset
 ROOT = Path(__file__).resolve().parent
 
 EVOLUTION_SPECS = {
+    "parametric_burgers": {
+        "path": "data/Parametric_Burgers_equation.npy",
+        "axes": "tx",
+        "shape": (200, 251),
+        "grid": {"x": (0.0, 0.004, 251), "t": (0.0, 0.005, 200)},
+        "sha256": "4ef1c1f7b4e9878bdde6324c8344047090a3b28b2ebabaca26ff0a7c5eedeecc",
+        "order": 1,
+        "reference": "-u*u_x+0.02*exp(t)*u_xx",
+        "coefficient_dependencies": ["t"],
+        "unknown_coefficient_functions": ["viscosity(t)"],
+    },
+    "parametric_convection_diffusion": {
+        "path": "data/Parametric_convection_diffusion.npy",
+        "axes": "tx",
+        "shape": (250, 201),
+        "grid": {"x": (0.0, 0.04, 201), "t": (0.0, 0.02, 250)},
+        "sha256": "6d000a7c22e5551e7ab7523aabbcd497d8fd4756d6ce32b53ed692790e164af9",
+        "order": 1,
+        "reference": "-(1+0.25*sin(x))*u_x+u_xx",
+        "coefficient_dependencies": ["x"],
+        "unknown_coefficient_functions": ["advection(x)"],
+    },
+    "advection_diffusion": {
+        "path": "data/Advection_diffusion.mat",
+        "axes": "xyt",
+        "shape": (51, 51, 61, 4),
+        "value": "Expression1",
+        "sha256": "faf14f3b50500c32f08a910e47a5c0c7d017d641818db4d5bb268dd4153ea6d7",
+        "order": 1,
+        # Upstream shows the discovered structure, not certified generating coefficients.
+        "reference": None,
+    },
     "burgers2d": {
         "path": "EqGPT/data/Burgers_2D/Burgers2D.mat",
         "axes": "tyx",
@@ -104,20 +138,49 @@ def declared_targets(name):
 
 
 def metadata(name, spec):
+    from ._provenance import source_evidence
+
+    evidence = source_evidence(name)
     return {
         "source_paths": [spec["path"]],
         "coordinate_units": "unknown",
         "field_units": "unknown",
-        "boundary": "unknown",
-        "source_status": "packaged_observation_and_description",
+        "boundary": evidence.get("boundary", "unknown"),
+        "source_status": evidence.get("source_status", "packaged_observation_and_description"),
+        "source_evidence": evidence,
         "source_reference": spec.get("reference"),
         "reference_usage": "scoring_only; excluded from model namespace",
+        "coefficient_dependencies": list(spec.get("coefficient_dependencies", [])),
+        "unknown_coefficient_functions": list(spec.get("unknown_coefficient_functions", [])),
     }
 
 
 def load_evolution(name):
     spec = EVOLUTION_SPECS[name]
-    if name == "implicit_mixed":
+    if spec.get("sha256"):
+        raw = (ROOT / spec["path"]).read_bytes()
+        if hashlib.sha256(raw).hexdigest() != spec["sha256"]:
+            raise ValueError("source_blocked: checked evolution asset SHA256 changed")
+        if "grid" in spec:
+            u = np.asarray(np.load(io.BytesIO(raw), allow_pickle=False), dtype=float)
+            if u.shape != spec["shape"]:
+                raise ValueError("source_blocked: parametric field layout changed")
+            axes = {axis: start + step * np.arange(count)
+                    for axis, (start, step, count) in spec["grid"].items()}
+            u = u.transpose(tuple(spec["axes"].index(axis) for axis in axes))
+        else:
+            packed = np.asarray(loadmat(io.BytesIO(raw))[spec["value"]], dtype=float)
+            if packed.shape != (np.prod(spec["shape"]), 1):
+                raise ValueError("source_blocked: Expression1 vector layout changed")
+            packed = packed.reshape(spec["shape"], order="C")
+            axes = {"x": packed[:, 0, 0, 0], "y": packed[0, :, 0, 1],
+                    "t": packed[0, 0, :, 2]}
+            mesh = np.meshgrid(*axes.values(), indexing="ij")
+            if any(not np.array_equal(packed[..., i], coordinate)
+                   for i, coordinate in enumerate(mesh)):
+                raise ValueError("source_blocked: Expression1 coordinates are not Cartesian")
+            u = packed[..., 3]
+    elif name == "implicit_mixed":
         # Verified retained upstream script: header=None, transpose, dx=.01, dt=.02.
         u = pd.read_csv(ROOT / spec["path"], header=None).to_numpy(dtype=float).T
         if u.shape != (501, 501):

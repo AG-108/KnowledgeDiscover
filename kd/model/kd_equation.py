@@ -34,8 +34,20 @@ def canonical_equation(coefficients, terms):
     return dict(zip(keys, coef.tolist()))
 
 
+def coordinate_basis_symbols(coordinate_basis, coordinates):
+    """Validate configured coefficient features against observed coordinates only."""
+    symbols = set()
+    for basis in coordinate_basis:
+        current = {str(symbol) for symbol in sp.sympify(basis).free_symbols}
+        if current - set(coordinates):
+            raise ValueError("Coordinate basis may contain only observed coordinates")
+        symbols.update(current)
+    return symbols
+
+
 def library(namespace, fields, *, implicit=False, coordinate_basis=()):
     """Same declared library for every equation in a method/subtrack."""
+    coordinate_basis_symbols(coordinate_basis, set(namespace) & {"x", "y", "z", "t"})
     terms = ["1"] + list(fields)
     terms += [f"{field}**{power}" for field in fields if field != "p" for power in (2, 3)]
     derivatives = [
@@ -60,10 +72,6 @@ def library(namespace, fields, *, implicit=False, coordinate_basis=()):
     base_terms = list(terms)
     # Finite coefficient basis comes only from method configuration, never coef_dict.
     for basis in coordinate_basis:
-        if {str(s) for s in sp.sympify(basis).free_symbols} - set(
-            str(x) for x in namespace if x in "xyz"
-        ):
-            raise ValueError("Coordinate basis may contain only observed spatial coordinates")
         terms += [f"({basis})*({term})" for term in base_terms]
     terms = canonical_terms(terms)
     symbols = [sp.Symbol(key) for key in namespace if key != "1"]

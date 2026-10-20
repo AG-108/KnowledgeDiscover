@@ -161,15 +161,32 @@ class _DeadlineLogger:
         self.deadline = deadline
         self.stop_reason_ = None
         self.stop_reason_source_ = "epoch_deadline"
+        # Epoch time is measured between log calls only, so PhySO's setup
+        # before the first epoch does not inflate the estimate.
+        self._last_log = None
+        self._longest_epoch = 0.0
 
     def __getattr__(self, name):
         return getattr(self.logger, name)
 
     def log(self, *args, **kwargs):
         self.logger.log(*args, **kwargs)
+        now = time.perf_counter()
+        if self._last_log is not None:
+            self._longest_epoch = max(self._longest_epoch, now - self._last_log)
+        self._last_log = now
         if self.deadline.expired():
             self.stop_reason_ = "time_limit"
             self.deadline.check()
+        # The deadline is only checked between epochs, so an epoch started just
+        # before expiry overruns into the runner's hard timeout and loses every
+        # retained candidate. Stop early when the slowest epoch so far would not
+        # fit in the remaining budget.
+        if self._longest_epoch >= self.deadline.remaining():
+            self.stop_reason_ = "time_limit"
+            self.stop_reason_source_ = "epoch_deadline_predicted"
+            self.deadline.stopped = True
+            raise SoftDeadline("Next PhySO epoch would exceed the fit time limit")
 
 
 def _physo_fit(function, deadline, args, kwargs):

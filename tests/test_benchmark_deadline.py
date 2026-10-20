@@ -147,6 +147,37 @@ def test_physo_logger_retains_best_and_does_not_hide_native_errors():
         anytime_call(SR, get_run_logger=lambda: logger)
 
 
+def test_physo_stops_before_an_epoch_that_would_overrun_the_deadline():
+    class Logger:
+        def log(self, **kwargs):
+            pass
+        def get_pareto_front(self):
+            return [], ["best"], [0.9], []
+    def SR(**options):
+        wrapped = options["get_run_logger"]()
+        # A 3 s epoch with only ~2 s left: the next epoch cannot finish in time.
+        wrapped._last_log = time.perf_counter() - 3
+        current_deadline().expires = time.perf_counter() + 2
+        wrapped.log()
+        raise AssertionError("Unreachable")
+    SR.__module__ = "physo.task.sr"
+    with deadline_scope(60):
+        expression, wrapped = anytime_call(SR, get_run_logger=Logger)
+    assert expression == "best"
+    assert wrapped.stop_reason_ == "time_limit"
+    assert wrapped.stop_reason_source_ == "epoch_deadline_predicted"
+
+    def SR(**options):
+        wrapped = options["get_run_logger"]()
+        for _ in range(3):  # fast epochs with plenty of budget keep running
+            wrapped.log()
+        return "finished", wrapped
+    SR.__module__ = "physo.task.sr"
+    with deadline_scope(60):
+        expression, wrapped = anytime_call(SR, get_run_logger=Logger)
+    assert expression == "finished" and wrapped.stop_reason_ is None
+
+
 def test_llmsr_cancels_slow_http_and_keeps_best_without_live_children(monkeypatch):
     from kd.model.kd_llmsr import KD_LLMSR
 
@@ -267,12 +298,8 @@ def test_dscv_preserves_partial_batch_candidate_and_adapter_reason(monkeypatch):
     assert model.stop_reason_ == "time_limit"
 
 
-def test_execution_protocol_separates_hard_only_results():
-    assert execution_policy(1)["version"] == "target-v2"
-
-
 def test_real_target_worker_returns_time_limit_and_preserves_first_result(tmp_path):
-    from test_run_benchmark import make_case
+    from benchmark_helpers import make_case
 
     import run_benchmark as benchmark
 
@@ -299,7 +326,7 @@ def test_native_soft_stop_on_toy_data_under_process_watchdog(tmp_path, method):
     from kd.benchmark_execution import supervise
 
     budget = {"pysr": 60, "pyoperon": 0.01, "physo": 0.3}[method]
-    from test_benchmark_execution import host_slots
+    from benchmark_helpers import host_slots
 
     resources = host_slots()["cpu"] if method == "pysr" else None
     policy = execution_policy(budget, setup_timeout=180, score_timeout=30,

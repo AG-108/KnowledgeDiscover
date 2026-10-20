@@ -13,6 +13,11 @@ from scipy.spatial import cKDTree
 from ._equations import Derivative, state_fields
 
 
+def default_stencil(order):
+    """Spatial centered stencil size used by derivatives and support checks."""
+    return max(5, 2 * (order // 2) + 3)
+
+
 def axis_derivative(values, coordinate, order=1, axis=0, stencil=None):
     """Centered polynomial FD on explicit coordinates; no boundary wrapping.
 
@@ -29,7 +34,7 @@ def axis_derivative(values, coordinate, order=1, axis=0, stencil=None):
         raise ValueError("Derivative coordinates must be strictly increasing")
     if order == 0:
         return values.copy()
-    stencil = stencil or max(5, 2 * (order // 2) + 3)
+    stencil = stencil or default_stencil(order)
     if stencil % 2 != 1 or stencil <= order:
         raise ValueError("A derivative stencil must be odd and longer than its order")
     result = np.full_like(values, np.nan, dtype=float)
@@ -226,6 +231,9 @@ def namespace(dataset, *, spatial_order=2, temporal_order=0, neighbors=40, degre
     result = {"1": np.ones(values.shape[1:])}
     for axis, array in zip("xyz", coordinate_fields[:dimension]):
         result[axis] = array
+    if t is not None:
+        # Preserve absolute observed time across train/test views and coefficient bases.
+        result["t"] = np.broadcast_to(t, values.shape[1:])
     for channel, field in enumerate(fields):
         result[field] = values[channel]
         for orders in itertools.product(range(spatial_order + 1), repeat=dimension):

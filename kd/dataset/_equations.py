@@ -160,7 +160,8 @@ def equation_spec(dataset, target):
             for field in fields if field != "p"
             for axis in range(len(spatial)) if target.time_order > 0
         ],
-        "temporal_order_status": "source_unverified" if dataset.equation_name == "tlc_wave_darcy" else "declared",
+        "temporal_order_status": metadata.get("temporal_order_status",
+            "source_unverified" if dataset.equation_name == "tlc_wave_darcy" else "declared"),
         "target": target.to_dict(),
         "spatial_axes": spatial,
         "coordinate_units": metadata.get("coordinate_units", "unknown"),
@@ -173,6 +174,7 @@ def equation_spec(dataset, target):
         "known_parameters": metadata.get("known_parameters", {}),
         "known_sources": list(getattr(dataset, "known_sources", {})),
         "unknown_coefficient_functions": metadata.get("unknown_coefficient_functions", []),
+        "coefficient_dependencies": metadata.get("coefficient_dependencies", []),
         "time_axis": None if steady else "t",
         "evaluation": ["observed_equation_residual"],
         "prediction": "abstain",

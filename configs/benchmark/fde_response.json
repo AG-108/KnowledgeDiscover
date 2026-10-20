@@ -1,0 +1,11 @@
+{
+  "profile": "smoke",
+  "tasks": ["sr"],
+  "models": ["*"],
+  "datasets": ["fde_creep", "fde_silt", "fde_pt_fade", "fde_pt_fde", "fde_tsfade_fft"],
+  "seeds": [0],
+  "output_dir": "results/fde_response",
+  "timeout": 90,
+  "setup_timeout": 120,
+  "score_timeout": 90
+}

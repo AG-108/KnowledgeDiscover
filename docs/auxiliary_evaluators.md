@@ -30,12 +30,13 @@ procedure); explicit TLS sign convention; windows follow the author's ten
 half-range windows shifted by range/20 but sample one fixed grid; underdetermined
 TLS systems and near-zero mean window coefficients are rejected.
 
-Calibration status: `scripts/run_pic_ranking_validation.py` evaluates the true
-structure and missing/extra-term candidates on multimode Burgers and KdV for three
-seeds against a 6/6 true-structure top-1 threshold. Recorded runs ranged 1/6 to
-4/6; the latest 5000-epoch sine run gave 3/6. **PIC does not pass and must not
-determine rankings.** Smoke: `python scripts/run_pic_torch_example.py --config
-configs/benchmark/pic_torch_smoke.json` (execution check only).
+Calibration status: the ranking validation (true structure versus missing/extra-term
+candidates on multimode Burgers and KdV, three seeds, 6/6 true-structure top-1
+threshold) recorded 1/6 to 4/6; the latest 5000-epoch sine run gave 3/6. **PIC does
+not pass and must not determine rankings.** The validation and standalone smoke
+scripts (`scripts/run_pic_ranking_validation.py`, `scripts/run_pic_torch_example.py`)
+and their configs were removed on 2026-10-20 and remain in commit `718588b`; the
+runner path above is the maintained entry point.
 
 ## Physical credibility (offline prototype)
 
@@ -66,10 +67,10 @@ and check definitions, but no method identity, ground truth or dataset name;
 responses containing protected fields are rejected. It may not override measured
 evidence.
 
-Not done: expert labels, judge comparison, any composite score.
-`python scripts/generate_physical_credibility_challenges.py --output-dir
-artifacts/credibility` generates blank candidate-pair annotation sheets (equivalent
-rewrites, wrong signs, missing/redundant terms, invalid domains); generator intent
+Not done: expert labels, judge comparison, any composite score. The blank
+annotation-sheet generator (`scripts/generate_physical_credibility_challenges.py`:
+equivalent rewrites, wrong signs, missing/redundant terms, invalid domains) was
+removed on 2026-10-20 and remains in commit `718588b`; generator intent
 is not a label. Validation should compare numeric-only, direct-LLM and
 evidence-assisted judges on expert agreement, violation detection, unsupported
 claims, abstention and sensitivity to order, renaming and equivalent forms.

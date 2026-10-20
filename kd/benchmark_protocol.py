@@ -17,6 +17,21 @@ def digest(value):
     ).hexdigest()
 
 
+def metric_protocol_version(case, default):
+    """Derive a new case's metric protocol; legacy cases use the same fallback."""
+    if case.get("model") in {"pdefind_nd", "implicit_pde"}:
+        return "2.2"
+    name, task = case.get("dataset", ""), case.get("task")
+    if task == "green" or name == "pyqg_subgrid" or name.startswith("dso_file_") or (name.startswith("fde_") and task == "sr"):
+        return "2.3"
+    return default
+
+
+def execution_policy_hash(policy):
+    """Timing identity excludes resource placement; callers own missing-policy defaults."""
+    return digest({key: value for key, value in policy.items() if key != "resource_policy"})
+
+
 def recovery_eligibility(case, target=None):
     """Eligibility belongs to the declared target, including missing/failed outputs."""
     if case.get("model") in {"reference", "pdefind_nd", "implicit_pde"}:
@@ -151,13 +166,10 @@ def read_manifests(paths):
 
 
 def comparison_fields(case, policy=None):
-    timing = {
-        key: value for key, value in (policy or {}).items() if key != "resource_policy"
-    }
     return {
         "method_config_hash": digest(method_configuration(case)),
         "evaluation_protocol_hash": digest(case.get("evaluation", {})),
-        "execution_policy_hash": digest(timing) if policy is not None else "unbound",
+        "execution_policy_hash": execution_policy_hash(policy) if policy is not None else "unbound",
         "experiment_identity_hash": case.get("experiment_identity_hash", "unbound"),
         "benchmark_role": benchmark_role(case),
     }

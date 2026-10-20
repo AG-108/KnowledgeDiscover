@@ -22,6 +22,38 @@ FIELD_EVIDENCE = {
                              "missing_evidence": ["generator boundary", "physical units"]},
 }
 
+PARAMETRIC_PAPER = "https://arxiv.org/pdf/2005.07916"
+CHECKED_EVOLUTION_EVIDENCE = {
+    "parametric_burgers": {
+        "source_status": "paper_and_observation_consistent; upstream_bytes_unverified",
+        "axis_evidence": "paper III.A.1: u[t,x]; 200 times [0,1), 251 positions [0,1]",
+        "equation_evidence": PARAMETRIC_PAPER + "#page=12",
+        "initial_condition": "(1.5-x)*sin(2*pi*x)",
+        "boundary": {"kind": "dirichlet", "verified": True, "value": 0.0,
+                     "axes": ["x"], "evidence": PARAMETRIC_PAPER + "#page=12"},
+        "missing_evidence": ["byte-identical upstream Burgers file", "physical units"],
+    },
+    "parametric_convection_diffusion": {
+        "source_status": "upstream_byte_verified",
+        "axis_evidence": "paper III.A.2: u[t,x]; 250 times [0,5), 201 positions [0,8]",
+        "equation_evidence": PARAMETRIC_PAPER + "#page=14",
+        "initial_condition": "(8-x)*sin(x)",
+        "boundary": {"kind": "dirichlet", "verified": True, "value": 0.0,
+                     "axes": ["x"], "evidence": PARAMETRIC_PAPER + "#page=14"},
+        "missing_evidence": ["physical units"],
+    },
+    "advection_diffusion": {
+        "source_status": "upstream_byte_verified",
+        "axis_evidence": "Expression1 C-order reshape(51,51,61,4); channels x,y,t,u",
+        "layout_evidence": "https://github.com/PhIMaL/DeePyMoD/blob/"
+                           "543c2e5fc7a6a5637be660775873724d884790ba/"
+                           "examples/PDE_2D_Advection-Diffusion.ipynb",
+        "equation_evidence": None,
+        "boundary": "unknown; opposite observed edges disagree; no periodic wrapping",
+        "missing_evidence": ["generating coefficients", "boundary conditions", "physical units"],
+    },
+}
+
 # A train rate must vary to identify a rate-dependent law; this is an eligibility
 # rule shared by all methods, not a choice made from a method's test score.
 CONSTITUTIVE_ELIGIBILITY = {
@@ -34,6 +66,29 @@ CONSTITUTIVE_ELIGIBILITY = {
 
 def source_evidence(name):
     """JSON-safe declarations with explicit gaps, usable without external data."""
+    if name in CHECKED_EVOLUTION_EVIDENCE:
+        from ._advanced import EVOLUTION_SPECS
+        from ._core_sources import evidence
+
+        spec = EVOLUTION_SPECS[name]
+        result = deepcopy(CHECKED_EVOLUTION_EVIDENCE[name])
+        result.update(evidence([spec["path"]]))
+        result.update(
+            verification_date="2026-10-16",
+            verification_scope=("upstream byte identity and source layout" if
+                                result["source_status"] == "upstream_byte_verified" else
+                                "local SHA256, paper layout, initial/boundary values and numerical residual"),
+            asset_sha256={spec["path"]: spec["sha256"]},
+            reference_status="paper_declared_not_certified" if spec["reference"] else "unknown",
+            generalization="same-trajectory temporal block residual; no forward rollout",
+        )
+        return result
+    if name.startswith("fde_"):
+        from ._fractional import FDE_PDE_SPECS, FDE_SPECS, pde_evidence, response_evidence
+        if name in FDE_PDE_SPECS:
+            return pde_evidence(name)
+        if name in FDE_SPECS:
+            return response_evidence(name)
     if name in FIELD_EVIDENCE:
         return deepcopy(FIELD_EVIDENCE[name])
     if name.startswith("cyt_"):

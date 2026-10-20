@@ -1,6 +1,6 @@
 # Benchmark 当前计划
 
-更新：2026-10-02。代码与结果文件优先；本地运行交接见根目录 `STATUS.md`。
+更新：2026-10-20。代码与结果文件优先；本地根目录 `STATUS.md`（不公开，含私有服务器入口）的约束与待办另摘入第 1 节和第 3 节，本地运行交接仍以 `STATUS.md` 为准。
 规范：[运行](benchmark.md) · [指标](benchmark_metrics.md) · [方法](methods.md) ·
 [数据](data.md) · [验收](validation.md) · [来源问题](deferred_source_issues.md) · [服务器](server_setup.md)。
 
@@ -26,9 +26,25 @@ Linux/真实 CUDA/vLLM 部署 smoke 待验收，
 注册、加载、短训练通过不等于来源或方程恢复已认证。
 
 历史全量、服务器补跑、tuning 与 smoke 来自不同代码、预算和协议，只作诊断与测速，不能拼成主表。
-正式主实验尚未启动。ODE 同时报告导数和通过参考校验的系统轨迹评分；PDE rollout 仅已验证的一维均匀周期标量场。
+ODE 同时报告导数和通过参考校验的系统轨迹评分；PDE rollout 仅已验证的一维均匀周期标量场。
 PIC 排序校准未通过，物理可信度缺专家验证，保留为辅助原型。
-LLM-SR 客户端已实现，但 backbone 未下载、真实生成未验证；vLLM 环境独立建立。
+LLM-SR 已于 2026-10-09 准备原始 BF16 backbone，并在独立 vLLM 环境通过真实生成、
+HTTP 断连取消和服务重启检查；同一 SR/ODE 范围的 1380 cases / 1425 targets 已加入独占 GPU 交替队列。
+主轨沿用 T=300 和 1000 调用内部预算，严格 1000 调用无 T 对照仍分开且未启动。
+
+### 服务器主实验与现行约束
+
+- 用户授权的四方法主矩阵（PhySO、SISSO、SymbolicGPT、DLGA；279 数据集、5 seeds、T=300）冻结为
+  `configs/benchmark/four_methods_full.json`，4155 cases / 4290 targets，2026-10-05 起在服务器分块运行；
+  LLM-SR 独立 main 矩阵 1380 cases / 1425 targets 于 10-09 加入交替队列。最近的归档快照
+  （2026-10-16 14:10:52）见本地综合结果 `docs/benchmark_results_combined_20261017.md`（不公开），不代表服务器当前状态。
+- 服务器部署：数据 `domain-v4`、执行 `target-v2`；本地开发树为 `domain-v5`，两者不混用。
+- 服务器实验的声明、首次终态、检查点、日志与报告直接写入持久化挂载，不依赖容器镜像或本地备份助手。
+- 迁移只按 slots-v3 重新绑定实际 CPU 编号与 GPU UUID，继续原预算、原分母和首次终态；
+  已有错误/超时不重试，不根据主实验结果调参。
+- PhySO 使用 CPU 后端但独占 GPU 槽（10 月 8 日实测约 1 核、GPU 0%），这是冻结调度的效率限制；
+  用户确认保持原公平资源安排，不改到 CPU 槽，也不与 SymbolicGPT 同时拟合。
+- 实现变更或新增实际输入创建新输出身份，新增数据与外部运行时需逐项确认实际读取依赖进入身份；不复用服务器冻结运行。
 
 ## 2. 已定决策（2026-09-29，用户确认）
 
@@ -65,7 +81,7 @@ LLM-SR 客户端已实现，但 backbone 未下载、真实生成未验证；vLL
 - 2026-10-05 用户明确授权四方法在不相交的独立合成开发数据上调整参数，
   须先达到结构恢复与系数误差 `<1e-5`，随后冻结每方法、每任务的一套配置；
   试验与失败记录全部保留，不以正式测试响应或参考方程选择参数。
-  本轮细节见 [四方法校准](four_methods_calibration.md)；其余方法沿用先前开发集用途。
+  本轮细节见 [四方法校准](methods.md#four-method-calibration-variants-2026-10-05)；其余方法沿用先前开发集用途。
 - 函数集/算子库属于任务说明（语法），不算调参：SR 使用数据集发布的 `function_set`
   （`search_space_policy=declared`）；Core ODE 需预先声明**一套对 8 个系统共用**的语法
   （按系统声明会泄露真值）。`declared_plus_reference` 为 oracle 诊断，永不进主表。
@@ -93,7 +109,7 @@ LLM-SR 客户端已实现，但 backbone 未下载、真实生成未验证；vLL
 | C2（完成） | 已落盘终态（ok / error / timeout / skipped）视为完成，只补无结果中断项；保留首次结果及全部尝试 | runner、并行脚本 | 中断前后/父进程漏合并恢复通过；失败和超时不自动重试；配置/预算不符拒绝复用 |
 | C3（完成） | 统一累计 fit 软截止；可取消 LLM 请求与评估、原生时间参数、代际/训练/批次钩子；最后步骤观察截止 | `kd/benchmark_deadline.py`、runner、LLM-SR、DSO/DSCV；PhySO 公开 logger | 当前最优与 time_limit、无候选失败、进程清理、随机演化一致性、原生有界检查及终态续跑通过；target-v2 隔离旧协议 |
 | C4（完成） | 停止原因、来源字段、适配器信号传递、失败/超时归类（C5 增加第七类 resource_limit） | adapter + 结果行 + 聚合 | 每行有值；聚合数量/比例/来源；无信号的原生返回标为 native_return |
-| C5（完成） | 两槽绑核、CUDA/线程隔离；28 GB RSS 采样超限终止进程树，记 resource_limit；本机 vLLM 服务树纳入槽；资源策略与首次结果冻结 | `scripts/run_slots.py`、`kd/benchmark_resources.py`、`kd/benchmark_execution.py`、`hpc/activate_kd_server.sh`；旧并行入口 CPU worker 默认改为 1 | 本地两槽并发/不重叠核、环境、RSS 子进程树终止、服务计费与续跑通过；Linux/CUDA/vLLM 部署 smoke 待验证 |
+| C5（完成） | 两槽绑核、CUDA/线程隔离；28 GB RSS 采样超限终止进程树，记 resource_limit；本机 vLLM 服务树纳入槽；资源策略与首次结果冻结 | `scripts/run_slots.py`、`kd/benchmark_resources.py`、`kd/benchmark_execution.py`、`server/env/activate_kd_server.sh`；旧并行入口 CPU worker 默认改为 1 | 本地两槽并发/不重叠核、环境、RSS 子进程树终止、服务计费与续跑通过；Linux/CUDA/vLLM 部署 smoke 待验证 |
 | C6（完成） | 采样进程树 CPU 秒、独占 GPU 槽 wall 秒；准备/耦合评分共享成本单列并按 case 去重 | 父进程资源监视器、`run_benchmark.py` 汇总、冻结与配对报告 | summary/aggregate JSON/CSV 有字段与测量覆盖；失败和超限保留成本，不混资源配置 |
 | C7（完成） | full PySR multiprocessing/procs=4、Operon n_threads=4、gplearn n_jobs=4、LLM-SR num_evaluators=4；torch 4 线程；并行任务数值线程为 1；绑定后参数/设备写入新身份 | `configs/benchmark/baselines/*.json`、`kd/benchmark_resources.py`、`scripts/run_slots.py` | SR/ODE full 配置与 D2 一致；真实 gplearn/PySR 四 worker 绑核、Operon 四线程与 torch 线程检查通过；预算和原 manifest 保留 |
 | C8（可选） | anytime 轨迹：记录（时间、训练误差、表达式），在 60 s / 300 s / T 处回放测试指标 | 支持 C3 的 adapter | 一次运行得到预算敏感性曲线 |
@@ -121,6 +137,29 @@ Windows 原子替换竞争有回归保护；服务器/Linux 进程组仍需部�
 - 接口变化后运行相关回归；完整交付后做一次完整回归，真实数据检查加 `--require-external-data`。
   最终证据集中保存 `results/validation/`，避免堆积重复中间版本。
 
+### 待办（2026-10-20 合并）
+
+以下来自原 `STATUS.md` 和已删除的审查文档，已与第 5、7 节去重；后者列出的条目不在此重复。
+
+- 新方法进入正式矩阵前单独审查固定配置、语法、来源与预算；诊断配置不自动获得主轨资格。
+- 封存索引写入中断后的可信恢复：原子发布已完成；出现实际恢复需求时再提供显式入口，识别最后完整 seal、保留损坏证据、拒绝被修改终态，不按 mtime 猜测。
+- 可选依赖、源码 fork 与 Julia 环境的可迁移锁定及 wheel 资产检查；取得实际 Windows/Linux 远程 CI 结果，指定集成验收时缺失依赖应失败。
+- 监督开销：summary 成本已测且暂不节流；进程启动、gplearn 逐代包装与 50 ms 资源采样开销未测，出现实际延迟或积压后再按时间/数量节流，首次终态保持即时落盘。
+- 资源指标边界：psutil 采样可漏短命子进程，RSS 相加可重复计共享页，GPU 成本为独占槽 wall 秒；补采样覆盖说明，评估 cgroup / job accounting，不改已确认的 28 GB RSS 定义。
+- 失败诊断：为第 7 节各项保存统一错误类型/阶段、最近候选与关键数值，用小型确定性夹具区分数据、条件数、导数、实现与预算问题；不以延长预算或删除失败行掩盖。
+- runner / adapter 接口随实际修改逐步拆分，不整体重写：deadline 分派仍依赖模块名和函数名；`kd/` 中 7 个文件 10 处 `from run_benchmark import`，预检接收整个 runner 并调用私有函数。（来源：overengineering_review_20261020.md，见 commit 718588b）
+- `build_experiments` 把全局 run 默认值（含 `dscv_epochs`、`spr_pinn_epochs`、`dlga_population` 等方法专用预算）整份写入每个 case 的 `run_params` 并计入方法配置 hash，无关参数变化会改变 case 身份；新协议只保留适用项，不改写旧 manifest。（来源：overengineering_review_20261020.md，见 commit 718588b）
+- `source_fingerprint` 不区分方法，纳入 `kd/`、`scripts/`、`server/launch/`、`configs/benchmark/` 全部指定类型文件（含纯绘图脚本），`--dry-run` 也做完整身份绑定；仅当无关变更实际阻断续跑时再收窄范围。（来源：overengineering_review_20261020.md，见 commit 718588b）
+- `regression_metrics` 无溢出保护：量级约 1e300 的标签使 MSE/方差溢出，行仍可为 `ok`（Livermore2-Vars3-16、Vars6-9、Vars7-19）；应给出明确的数值无效状态。（来源：research_benchmark_audit_20261015.md，见 commit 718588b）
+- 符号评分超时：Korns-2、Livermore2-Vars3-5、Vars7-11、Vars7-3 在 score 阶段超时，SymPy 化简为候选原因，尚未栈级定位。（来源：research_benchmark_audit_20261015.md，见 commit 718588b）
+- DLGA 可输出 `u_t= (empty equation)` 占位，runner 只拒绝空值和字符串 `None`，该占位可记为 `ok`；需修正分类并逐条核对已有结果。（来源：research_benchmark_audit_20261015.md，见 commit 718588b）
+- DSCV 的 SR/ODE 路径没有固定系数留出预测接口，`test_mse` 不可用，历史 `ok` 不代表数值评价完整。（来源：research_benchmark_audit_20261015.md，见 commit 718588b）
+- SGA 内部搜索分数 `best_score_` 写入通用 `aic` 字段，不是正式 AIC；新结果改用独立字段名，冻结结果保留原样。（来源：research_benchmark_audit_20261015.md，见 commit 718588b）
+- AIC/BIC 的 n、k、RSS/logL 取自配置，不核验是否来自当前候选、种子与训练划分；现有配置均未启用，`frozen_report.METRICS` 未纳入。应从训练域预测自动取得 n/RSS，由 adapter 提供参数数及来源（先 SR/ODE RHS，后显式 PDE），不默认 k=0。（来源：research_benchmark_audit_20261015.md，见 commit 718588b）
+- `wave_breaking` 只注册在 runner 目录，不在 `kd.dataset.DATASET_REGISTRY`，`load_dataset` 与 benchmark 目录不一致。（来源：pde_dataset_reassessment_20261016.md，见 commit 718588b）
+- wave_breaking、CYT、本构与三个有坐标的 FDE 场只有 seed 0、低预算诊断；需列出适用方法、实例、seed 与评价目标，安排多方法、多 seed 和整曲线/空间块留出实验。（来源：pde_dataset_reassessment_20261016.md，见 commit 718588b）
+- `solid_dif` 63 个实例中 43 个只有 3–7 个应变率组，按 `test_size=0.2` 整组留出后测试集仅 1 个点，NRMSE/R² 无定义；需单独报告可定义误差与测试规模。（来源：pde_dataset_reassessment_20261016.md，见 commit 718588b）
+
 ## 4. 容量与预算冻结
 
 默认单 seed 4470 fits：代数公式 2412、闭合 18、本构 774、ODE 308、时变 PDE 942、稳态 16。
@@ -143,7 +182,9 @@ Windows 原子替换竞争有回归保护；服务器/Linux 进程组仍需部�
 - [ ] 拟纳入正式运行子轨的剩余来源与参考条件；阻塞见 deferred_source_issues.md。
 - [ ] 从修正后的领域矩阵重新估算容量；TLC、Green、WDwake、CYT、本构均有明确子轨与接入状态。
 - [x] C5/C6 实现与本地进程回归；证据见 validation.md（未运行全量实验）。
-- [ ] C5/C6 Linux 绑核、真实 CUDA 与 vLLM 服务部署 smoke。
+- [ ] C5/C6 Linux 绑核、真实 CUDA 与 vLLM 服务部署 smoke。四方法 Linux 部署与 LLM-SR 真实生成、
+      HTTP 断连取消、服务重启已有记录（见 validation.md）；其他方法、CUDA 路径与新环境仍需核验
+      T + grace 退出、进程树清理、RSS / 显存、服务计费及服务绑定与设备互斥，不能从导入或本地预检推定通过。
 - [x] C7 实现与专项回归；旧 C5 策略与新 d2-parallel-v1 分区，详见 validation.md。
 - [x] C3 实现并通过测试；22 项专项与 570 项完整回归，未运行全量实验。
 - [ ] 移除主轨配置中的 per-dataset override：`core_ode_track.json`、`core_v2*.json` 的
@@ -154,7 +195,8 @@ Windows 原子替换竞争有回归保护；服务器/Linux 进程组仍需部�
 - [ ] 声明 Core ODE 共用语法并写入数据集元数据。
 - [ ] 开发集测速，确定 T、SR 主队列和 seed 数。
 - [ ] Robertson：干净数据进主表；噪声/稀疏轨在观测时间表与导数估计器验证前不进主表。
-- [ ] LLM-SR：backbone 下载后执行 `check_llmsr_backbone.py --sha256` 与 `--server --calls 4`，再测速。
+- [ ] LLM-SR：2026-10-09 已完成权重 SHA256、`--server --calls 4`、断连取消与服务重启检查；
+  全量逐 target 的时间与资源证据随正式队列持续保存，吞吐和性能结论待汇总。
 - [ ] 冻结代码提交、环境锁定文件、manifest SHA256；主表只从这一次运行产生。
 
 ## 6. 执行顺序

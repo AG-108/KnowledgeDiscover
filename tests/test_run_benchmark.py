@@ -9,49 +9,10 @@ import numpy as np
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from benchmark_helpers import PDE_METHODS, SR_METHODS, make_case, mock_target_workers
+
 import run_benchmark as benchmark
 from kd.dataset import GridPDEDataset, ODEDataset, TabularRegressionDataset
-
-
-def make_case(model="gplearn", dataset="Koza-2", **kwargs):
-    catalog, _ = benchmark.dataset_catalog()
-    return benchmark.build_experiments(catalog, models=[model], datasets=[dataset], **kwargs)[0]
-
-
-def mock_target_workers(monkeypatch, case, statuses, *, interrupt_at=None, commit_first=False,
-                        specs=None):
-    """A worker transport double; real process/time boundaries have separate tests."""
-    calls = []
-    if specs is None:
-        specs = [benchmark._target_spec(case["dataset"], 0, target, index, truth)
-                 for index, (target, truth) in enumerate(benchmark._declared_targets(case)
-                 or [("y", case.get("ground_truth"))])]
-
-    def launch(case_path, attempt, policy, spec=None):
-        if spec is None:
-            benchmark.write_json(attempt / "targets.json", specs)
-            return {"returncode": 0, "timeout_phase": None}
-        index = len(calls)
-        calls.append(spec["target_id"])
-        (attempt / "run.log").write_text(f"attempt {attempt.name}", encoding="utf-8")
-        if interrupt_at == index and not commit_first:
-            raise KeyboardInterrupt
-        status = statuses[index]
-        outcome = dict(returncode=1 if status == "error" else 0,
-                       timeout_phase="fit" if status == "timeout" else None,
-                       worker_elapsed_seconds=1.0, fit_seconds=0.8,
-                       setup_seconds=0.1, score_seconds=0.1)
-        if status != "timeout":
-            row = benchmark._base_row(case, spec["instance"], spec["target"])
-            row.update(status=status, expression="x1", ground_truth_expression=spec["ground_truth"],
-                       target_id=spec["target_id"], attempt=int(attempt.name), execution_policy=policy)
-            benchmark.write_json(attempt / "result.json", benchmark._finalize_stop_reason(row))
-        if interrupt_at == index:
-            raise KeyboardInterrupt
-        return outcome
-
-    monkeypatch.setattr(benchmark, "_launch_worker", launch)
-    return calls
 
 
 def test_full_matrix_covers_catalog_and_examples():
@@ -63,7 +24,8 @@ def test_full_matrix_covers_catalog_and_examples():
     assert set(benchmark.BASELINES) == {c["model"] for c in cases}
     assert set(catalog) - {"rubber_test"} == {c["dataset"] for c in cases}
     assert {c["task"] for c in cases} == {"sr", "ode", "pde", "steady_pde", "green"}
-    assert "wave_breaking" in catalog and "advection_diffusion" in excluded
+    assert "wave_breaking" in catalog and "advection_diffusion" in catalog
+    assert "advection_diffusion" not in excluded
     assert len({c["name"] for c in cases}) == len(cases)
     for spec in benchmark.BASELINES.values():
         assert (benchmark.ROOT / "examples" / spec["example"]).is_file()
@@ -72,21 +34,22 @@ def test_full_matrix_covers_catalog_and_examples():
 def test_domain_datasets_are_included_in_the_full_matrix():
     catalog, _ = benchmark.dataset_catalog()
     expected = {
-        "cyt_flatplate": ("sr", 10),
-        "cyt_naca0012": ("sr", 10),
-        "solid_dif": ("sr", 10),
-        "solid_strain_stress": ("sr", 10),
-        "solid_hardening": ("sr", 10),
-        "vgs_I_0-100": ("pde", 13),
-        "vgs_I_100-200": ("pde", 13),
-        "vgs_II_0-1000": ("pde", 13),
-        "vgs_II_1000-2000": ("pde", 13),
+        "cyt_flatplate": ("sr", SR_METHODS),
+        "cyt_naca0012": ("sr", SR_METHODS),
+        "solid_dif": ("sr", SR_METHODS),
+        "solid_strain_stress": ("sr", SR_METHODS),
+        "solid_hardening": ("sr", SR_METHODS),
+        "vgs_I_0-100": ("pde", PDE_METHODS),
+        "vgs_I_100-200": ("pde", PDE_METHODS),
+        "vgs_II_0-1000": ("pde", PDE_METHODS),
+        "vgs_II_1000-2000": ("pde", PDE_METHODS),
     }
 
     cases = benchmark.build_experiments(catalog, datasets=list(expected))
-    for dataset, (task, baseline_count) in expected.items():
+    for dataset, (task, methods) in expected.items():
         selected = [case for case in cases if case["dataset"] == dataset]
-        assert len(selected) == baseline_count
+        assert {case["model"] for case in selected} == methods
+        assert len(selected) == len(methods)
         assert {case["task"] for case in selected} == {task}
 
 
@@ -133,7 +96,7 @@ def test_device_assignment_is_recorded_and_cpu_only_models_reject_cuda():
         )
 
 
-def test_total_config_and_cli_device_override(tmp_path):
+def test_total_config_and_cli_device_override(tmp_path, lightweight_cli_environment):
     config = tmp_path / "server.json"
     config.write_text(
         json.dumps(
@@ -247,35 +210,6 @@ def test_physo_legacy_pretty_expression_parsing():
 
     # A line-positioned fraction cannot be flattened without changing meaning.
     assert benchmark.expression_sympy(" x₁\n────\n x₂", ["x1", "x2"]) is None
-
-
-def test_physo_legacy_log_recovery_requires_exact_display_match(tmp_path):
-    import sympy as sp
-
-    from scripts.recompute_recovery_metrics import matched_physo_log_expression, reevaluate
-
-    program = "(x1+1)/x1"
-    display = sp.pretty(sp.sympify(program, evaluate=False), use_unicode=True)
-    log_path = tmp_path / "physo.log"
-    log_path.write_text(
-        "epoch,reward,complexity,program\n"
-        "0,0.2,1,x1\n"
-        f"0,0.9,2,{program}\n"
-        "1,0.8,2,(x1+2)/x1\n",
-        encoding="utf-8",
-    )
-    assert matched_physo_log_expression(log_path, display) == program
-    assert matched_physo_log_expression(log_path, display + " ") is None
-
-    row = reevaluate("formal", "physo_full_20260918", {
-        "task": "sr", "model": "physo", "status": "ok", "expression": display,
-        "ground_truth_expression": "1 + 1/x1", "variable_names": ["x1"],
-        "physo_log_path": log_path,
-    })
-    assert row["recovery_evaluable"] is True
-    assert row["structural_recovery"] == 1
-    assert row["evaluation_expression"] == program
-    assert row["recovery_expression_provenance"] == "exact_display_match_to_physo_log"
 
 
 def test_gplearn_exp_primitive_and_physo_machine_expression():
@@ -397,6 +331,44 @@ def test_physo_preserves_declared_ode_state_names(monkeypatch):
     assert result["exact_recovery"] == 1
     assert result["test_mse"] == 0
     assert torch.is_tensor(Expression()(torch.as_tensor(X.T)))
+
+
+def test_physo_aliases_names_over_token_limit(monkeypatch):
+    from types import ModuleType, SimpleNamespace
+
+    import sympy as sp
+
+    physo = ModuleType("physo")
+    physo.config = SimpleNamespace(config0=SimpleNamespace(config0={}))
+
+    class Expression:
+        def get_infix_sympy(self, **kwargs):
+            return [sp.Symbol("x0") + sp.Symbol("infected")]
+
+        def __call__(self, X):
+            return X.sum(axis=0)
+
+    def fit(X, y, **kwargs):
+        # PhySO's MAX_NAME_SIZE rejects "susceptible" (11 chars).
+        assert kwargs["X_names"] == ["x0", "infected"]
+        return Expression(), SimpleNamespace()
+
+    physo.SR = fit
+    learn = ModuleType("physo.learn")
+    monitoring = ModuleType("physo.learn.monitoring")
+    physo.learn, learn.monitoring = learn, monitoring
+    for module in (physo, learn, monitoring):
+        monkeypatch.setitem(sys.modules, module.__name__, module)
+    X = np.array([[1., 2.], [3., 4.]])
+    problem = dict(X_train=X, y_train=X.sum(axis=1), X_test=X, y_test=X.sum(axis=1),
+                   variable_names=["susceptible", "infected"], target="d(infected)/dt",
+                   split="synthetic", metadata={}, ground_truth="susceptible+infected")
+    case = dict(model="physo", model_params={"device": "cpu"}, task="ode",
+                dataset="development_ode", seed=0, run_params={})
+    result = benchmark.run_regression(problem, case)
+    assert sp.sympify(result["expression"]).free_symbols == {
+        sp.Symbol("susceptible"), sp.Symbol("infected")}
+    assert result["exact_recovery"] == 1
 
 
 def test_declared_benchmark_search_space_is_adapted_without_truth_inspection():
@@ -523,7 +495,7 @@ def test_symbolicgpt_reference_repair_is_opt_in():
     assert repaired["op_list"] == ["add", "sin", "sqrt"]
 
 
-def test_cli_search_space_policy_override_is_recorded(tmp_path):
+def test_cli_search_space_policy_override_is_recorded(tmp_path, lightweight_cli_environment):
     config = benchmark.ROOT / "configs/benchmark/tuning/gplearn_dataset_repaired.json"
     assert benchmark.main([
         "--config", str(config), "--datasets", "Nguyen-8", "--dry-run",
@@ -642,6 +614,12 @@ def test_sindy_pde_adapter_aligns_derivatives_and_discovers_rhs():
 def test_pdefind_uses_configured_terms_for_fit_and_rollout():
     from kd.model.kd_pdefind import PDEFindModel
 
+    config_path = Path(__file__).resolve().parents[1] / "configs/benchmark/baselines/pdefind.json"
+    config = json.loads(config_path.read_text(encoding="utf-8"))
+    assert not {"alpha", "max_iter"} & config["model"].keys()
+    for profile in config.get("profiles", {}).values():
+        assert not {"alpha", "max_iter"} & profile.get("model", {}).keys()
+
     data = scalar_grid()
     model = PDEFindModel(derivative_order=1, terms=["u_x"], threshold=0)
     model.fit(data)
@@ -653,6 +631,14 @@ def test_pdefind_uses_configured_terms_for_fit_and_rollout():
     restricted.fit(data)
     assert "u_xxx" not in restricted._feature_names
     assert "u*u_xxx" not in restricted._feature_names
+
+    with pytest.warns(UserWarning, match="ignores alpha, max_iter"):
+        legacy = PDEFindModel(derivative_order=1, terms=["u_x"], threshold=0,
+                              alpha=1e-5, max_iter=500)
+    legacy.fit(data)
+    np.testing.assert_array_equal(legacy.coefficients(), model.coefficients())
+    np.testing.assert_array_equal(legacy.predict(data.usol[:, 0], 0.1),
+                                  model.predict(data.usol[:, 0], 0.1))
 
     case = make_case(
         model="pdefind", dataset="kdv",
@@ -878,8 +864,11 @@ def test_execution_protocol_versions_are_not_pooled():
     row = {**benchmark._base_row(make_case()), "status": "ok"}
     old = dict(row)
     old.pop("execution_protocol_version")
-    groups = benchmark.aggregate_results([row, old])
-    assert {item["execution_protocol_version"] for item in groups} == {"target-v2", "legacy/unknown"}
+    hard_only = dict(row, execution_protocol_version="target-v1")
+    groups = benchmark.aggregate_results([row, hard_only, old])
+    assert {item["execution_protocol_version"] for item in groups} == {
+        "target-v2", "target-v1", "legacy/unknown"
+    }
     assert all(item["n_rows"] == 1 for item in groups)
 
 

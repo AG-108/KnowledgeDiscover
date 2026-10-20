@@ -1,0 +1,643 @@
+<!DOCTYPE html>
+
+<html lang="en" data-content_root="../../../">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>kd.viz.dscv_viz &#8212; KD 0.1.0 documentation</title>
+    <link rel="stylesheet" type="text/css" href="../../../_static/pygments.css?v=5ecbeea2" />
+    <link rel="stylesheet" type="text/css" href="../../../_static/alabaster.css?v=a66d8bb5" />
+    <script src="../../../_static/documentation_options.js?v=01f34227"></script>
+    <script src="../../../_static/doctools.js?v=9a2dae69"></script>
+    <script src="../../../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <link rel="index" title="Index" href="../../../genindex.html" />
+    <link rel="search" title="Search" href="../../../search.html" />
+   
+  <link rel="stylesheet" href="../../../_static/custom.css" type="text/css" />
+  
+
+  
+  
+
+  </head><body>
+  <div class="document">
+    
+      <div class="sphinxsidebar" role="navigation" aria-label="Main">
+        <div class="sphinxsidebarwrapper">
+<h1 class="logo"><a href="../../../index.html">KD</a></h1>
+
+
+
+<p class="blurb">Knowledge Discovery Documentation</p>
+
+
+
+
+<p>
+<iframe src="https://ghbtns.com/github-btn.html?user=AG-108&repo=KnowledgeDiscover&type=watch&count=true&size=large&v=2"
+  allowtransparency="true" frameborder="0" scrolling="0" width="200px" height="35px"></iframe>
+</p>
+
+
+
+
+
+<h3>Navigation</h3>
+<p class="caption" role="heading"><span class="caption-text">Contents:</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../api.html">API Documentation</a></li>
+</ul>
+
+<div class="relations">
+<h3>Related Topics</h3>
+<ul>
+  <li><a href="../../../index.html">Documentation overview</a><ul>
+  <li><a href="../../index.html">Module code</a><ul>
+  </ul></li>
+  </ul></li>
+</ul>
+</div>
+<search id="searchbox" style="display: none" role="search">
+  <h3 id="searchlabel">Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../../../search.html" method="get">
+      <input type="text" name="q" aria-labelledby="searchlabel" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"/>
+      <input type="submit" value="Go" />
+    </form>
+    </div>
+</search>
+<script>document.getElementById('searchbox').style.display = "block"</script>
+
+
+
+
+
+
+
+
+        </div>
+      </div>
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          
+
+          <div class="body" role="main">
+            
+  <h1>Source code for kd.viz.dscv_viz</h1><div class="highlight"><pre>
+<span></span><span class="kn">import</span><span class="w"> </span><span class="nn">io</span>
+
+<span class="kn">import</span><span class="w"> </span><span class="nn">matplotlib.pyplot</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">plt</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">PIL</span><span class="w"> </span><span class="kn">import</span> <span class="n">Image</span>
+
+<span class="c1"># Public plot helpers control whether figures are displayed or saved.</span>
+
+
+<div class="viewcode-block" id="plot_expression_tree">
+<a class="viewcode-back" href="../../../api.html#kd.viz.dscv_viz.plot_expression_tree">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">plot_expression_tree</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">output_dir</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="kc">None</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">"""Display the best program as an expression tree."""</span>
+
+    <span class="n">graph</span> <span class="o">=</span> <span class="n">model</span><span class="o">.</span><span class="n">searcher</span><span class="o">.</span><span class="n">plotter</span><span class="o">.</span><span class="n">tree_plot</span><span class="p">(</span><span class="n">model</span><span class="o">.</span><span class="n">searcher</span><span class="o">.</span><span class="n">best_p</span><span class="p">)</span>
+
+    <span class="k">if</span> <span class="n">output_dir</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">png_bytes</span> <span class="o">=</span> <span class="n">graph</span><span class="o">.</span><span class="n">pipe</span><span class="p">(</span><span class="nb">format</span><span class="o">=</span><span class="s2">"png"</span><span class="p">)</span>
+        <span class="n">image</span> <span class="o">=</span> <span class="n">Image</span><span class="o">.</span><span class="n">open</span><span class="p">(</span><span class="n">io</span><span class="o">.</span><span class="n">BytesIO</span><span class="p">(</span><span class="n">png_bytes</span><span class="p">))</span>
+        <span class="n">plt</span><span class="o">.</span><span class="n">imshow</span><span class="p">(</span><span class="n">image</span><span class="p">)</span>
+        <span class="n">plt</span><span class="o">.</span><span class="n">axis</span><span class="p">(</span><span class="s2">"off"</span><span class="p">)</span>
+        <span class="n">plt</span><span class="o">.</span><span class="n">show</span><span class="p">()</span>
+        <span class="n">plt</span><span class="o">.</span><span class="n">close</span><span class="p">()</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="k">pass</span></div>
+
+
+
+<div class="viewcode-block" id="plot_density">
+<a class="viewcode-back" href="../../../api.html#kd.viz.dscv_viz.plot_density">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">plot_density</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">epoches</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">output_dir</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="kc">None</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">"""Plot the reward density for the requested training epochs."""</span>
+
+    <span class="n">model</span><span class="o">.</span><span class="n">plot</span><span class="p">(</span><span class="n">fig_type</span><span class="o">=</span><span class="s2">"density"</span><span class="p">,</span> <span class="n">epoches</span><span class="o">=</span><span class="n">epoches</span><span class="p">)</span></div>
+
+
+
+<span class="c1"># Configure fonts that support English and Chinese labels.</span>
+<span class="n">plt</span><span class="o">.</span><span class="n">rcParams</span><span class="p">[</span><span class="s2">"font.sans-serif"</span><span class="p">]</span> <span class="o">=</span> <span class="p">[</span><span class="s2">"SimHei"</span><span class="p">,</span> <span class="s2">"DejaVu Sans"</span><span class="p">,</span> <span class="s2">"Arial Unicode MS"</span><span class="p">,</span> <span class="s2">"Arial"</span><span class="p">]</span>
+<span class="n">plt</span><span class="o">.</span><span class="n">rcParams</span><span class="p">[</span><span class="s2">"axes.unicode_minus"</span><span class="p">]</span> <span class="o">=</span> <span class="kc">False</span>  <span class="c1"># Preserve minus signs with fallback fonts.</span>
+
+<span class="n">PLOT_STYLE</span> <span class="o">=</span> <span class="p">{</span>
+    <span class="s2">"font.size"</span><span class="p">:</span> <span class="mi">12</span><span class="p">,</span>
+    <span class="s2">"figure.titlesize"</span><span class="p">:</span> <span class="mi">14</span><span class="p">,</span>
+    <span class="s2">"axes.labelsize"</span><span class="p">:</span> <span class="mi">12</span><span class="p">,</span>
+    <span class="s2">"xtick.labelsize"</span><span class="p">:</span> <span class="mi">10</span><span class="p">,</span>
+    <span class="s2">"ytick.labelsize"</span><span class="p">:</span> <span class="mi">10</span><span class="p">,</span>
+    <span class="s2">"axes.prop_cycle"</span><span class="p">:</span> <span class="n">plt</span><span class="o">.</span><span class="n">cycler</span><span class="p">(</span><span class="s2">"color"</span><span class="p">,</span> <span class="p">[</span><span class="s2">"#1f77b4"</span><span class="p">,</span> <span class="s2">"#ff7f0e"</span><span class="p">,</span> <span class="s2">"#2ca02c"</span><span class="p">,</span> <span class="s2">"#d62728"</span><span class="p">]),</span>
+    <span class="s2">"savefig.dpi"</span><span class="p">:</span> <span class="mi">300</span><span class="p">,</span>
+    <span class="s2">"savefig.bbox"</span><span class="p">:</span> <span class="s2">"tight"</span><span class="p">,</span>
+    <span class="s2">"font.sans-serif"</span><span class="p">:</span> <span class="p">[</span><span class="s2">"SimHei"</span><span class="p">,</span> <span class="s2">"DejaVu Sans"</span><span class="p">,</span> <span class="s2">"Arial Unicode MS"</span><span class="p">,</span> <span class="s2">"Arial"</span><span class="p">],</span>
+    <span class="s2">"axes.unicode_minus"</span><span class="p">:</span> <span class="kc">False</span><span class="p">,</span>
+<span class="p">}</span>
+
+
+<div class="viewcode-block" id="plot_evolution">
+<a class="viewcode-back" href="../../../api.html#kd.viz.dscv_viz.plot_evolution">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">plot_evolution</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">figsize</span><span class="o">=</span><span class="p">(</span><span class="mi">10</span><span class="p">,</span> <span class="mi">6</span><span class="p">)):</span>
+<span class="w">    </span><span class="sd">"""</span>
+<span class="sd">    Plot reward changes during training.</span>
+
+<span class="sd">    Parameters:</span>
+<span class="sd">        model: Trained KD_DSCV model.</span>
+<span class="sd">        figsize (tuple, optional): Figure size.</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        matplotlib.figure.Figure: Generated figure object.</span>
+<span class="sd">    """</span>
+    <span class="k">with</span> <span class="n">plt</span><span class="o">.</span><span class="n">style</span><span class="o">.</span><span class="n">context</span><span class="p">(</span><span class="n">PLOT_STYLE</span><span class="p">):</span>
+        <span class="n">fig</span><span class="p">,</span> <span class="n">ax</span> <span class="o">=</span> <span class="n">plt</span><span class="o">.</span><span class="n">subplots</span><span class="p">(</span><span class="n">figsize</span><span class="o">=</span><span class="n">figsize</span><span class="p">)</span>
+
+        <span class="c1"># Extract the reward history from the trained model.</span>
+        <span class="n">rewards</span> <span class="o">=</span> <span class="n">model</span><span class="o">.</span><span class="n">searcher</span><span class="o">.</span><span class="n">r_train</span>
+
+        <span class="c1"># Derive the maximum, mean, and running-best reward series.</span>
+        <span class="n">x</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="nb">len</span><span class="p">(</span><span class="n">rewards</span><span class="p">)</span> <span class="o">+</span> <span class="mi">1</span><span class="p">)</span>
+        <span class="n">r_max</span> <span class="o">=</span> <span class="p">[</span><span class="n">np</span><span class="o">.</span><span class="n">max</span><span class="p">(</span><span class="n">r</span><span class="p">)</span> <span class="k">for</span> <span class="n">r</span> <span class="ow">in</span> <span class="n">rewards</span><span class="p">]</span>
+        <span class="n">r_avg</span> <span class="o">=</span> <span class="p">[</span><span class="n">np</span><span class="o">.</span><span class="n">mean</span><span class="p">(</span><span class="n">r</span><span class="p">)</span> <span class="k">for</span> <span class="n">r</span> <span class="ow">in</span> <span class="n">rewards</span><span class="p">]</span>
+        <span class="n">r_best</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">maximum</span><span class="o">.</span><span class="n">accumulate</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">(</span><span class="n">r_max</span><span class="p">))</span>
+
+        <span class="c1"># Plot all reward summaries on the same axes.</span>
+        <span class="n">ax</span><span class="o">.</span><span class="n">plot</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">r_best</span><span class="p">,</span> <span class="n">linestyle</span><span class="o">=</span><span class="s2">"-"</span><span class="p">,</span> <span class="n">color</span><span class="o">=</span><span class="s2">"black"</span><span class="p">,</span> <span class="n">linewidth</span><span class="o">=</span><span class="mi">2</span><span class="p">,</span> <span class="n">label</span><span class="o">=</span><span class="s2">"Best Reward"</span><span class="p">)</span>
+        <span class="n">ax</span><span class="o">.</span><span class="n">plot</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">r_max</span><span class="p">,</span> <span class="n">color</span><span class="o">=</span><span class="s2">"#F47E62"</span><span class="p">,</span> <span class="n">linestyle</span><span class="o">=</span><span class="s2">"-."</span><span class="p">,</span> <span class="n">linewidth</span><span class="o">=</span><span class="mi">2</span><span class="p">,</span> <span class="n">label</span><span class="o">=</span><span class="s2">"Maximum Reward"</span><span class="p">)</span>
+        <span class="n">ax</span><span class="o">.</span><span class="n">plot</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">r_avg</span><span class="p">,</span> <span class="n">color</span><span class="o">=</span><span class="s2">"#4F8FBA"</span><span class="p">,</span> <span class="n">linestyle</span><span class="o">=</span><span class="s2">"--"</span><span class="p">,</span> <span class="n">linewidth</span><span class="o">=</span><span class="mi">2</span><span class="p">,</span> <span class="n">label</span><span class="o">=</span><span class="s2">"Average Reward"</span><span class="p">)</span>
+
+        <span class="n">ax</span><span class="o">.</span><span class="n">set_xlabel</span><span class="p">(</span><span class="s2">"Iteration Count"</span><span class="p">)</span>
+        <span class="n">ax</span><span class="o">.</span><span class="n">set_ylabel</span><span class="p">(</span><span class="s2">"Reward Value"</span><span class="p">)</span>
+        <span class="n">ax</span><span class="o">.</span><span class="n">grids</span><span class="p">(</span><span class="kc">True</span><span class="p">,</span> <span class="n">linestyle</span><span class="o">=</span><span class="s2">"--"</span><span class="p">,</span> <span class="n">alpha</span><span class="o">=</span><span class="mf">0.5</span><span class="p">)</span>
+        <span class="n">ax</span><span class="o">.</span><span class="n">legend</span><span class="p">(</span><span class="n">loc</span><span class="o">=</span><span class="s2">"best"</span><span class="p">,</span> <span class="n">frameon</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+
+        <span class="n">plt</span><span class="o">.</span><span class="n">show</span><span class="p">()</span>
+
+        <span class="n">plt</span><span class="o">.</span><span class="n">close</span><span class="p">()</span></div>
+
+
+
+<span class="c1"># Internal numerical helpers.</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">_finite_difference</span><span class="p">(</span><span class="n">y</span><span class="p">,</span> <span class="n">x</span><span class="p">,</span> <span class="n">order</span><span class="o">=</span><span class="mi">1</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">"""Approximate a derivative with centered finite differences."""</span>
+    <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">y</span><span class="o">.</span><span class="n">shape</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">1</span><span class="p">:</span>
+        <span class="n">y</span> <span class="o">=</span> <span class="n">y</span><span class="o">.</span><span class="n">flatten</span><span class="p">()</span>
+    <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">x</span><span class="o">.</span><span class="n">shape</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">1</span><span class="p">:</span>
+        <span class="n">x</span> <span class="o">=</span> <span class="n">x</span><span class="o">.</span><span class="n">flatten</span><span class="p">()</span>
+    <span class="n">dx</span> <span class="o">=</span> <span class="n">x</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="o">-</span> <span class="n">x</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+    <span class="k">if</span> <span class="n">order</span> <span class="o">==</span> <span class="mi">1</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">np</span><span class="o">.</span><span class="n">gradient</span><span class="p">(</span><span class="n">y</span><span class="p">,</span> <span class="n">dx</span><span class="p">,</span> <span class="n">edge_order</span><span class="o">=</span><span class="mi">2</span><span class="p">)</span>
+    <span class="k">elif</span> <span class="n">order</span> <span class="o">==</span> <span class="mi">2</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">np</span><span class="o">.</span><span class="n">gradient</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">gradient</span><span class="p">(</span><span class="n">y</span><span class="p">,</span> <span class="n">dx</span><span class="p">,</span> <span class="n">edge_order</span><span class="o">=</span><span class="mi">2</span><span class="p">),</span> <span class="n">dx</span><span class="p">,</span> <span class="n">edge_order</span><span class="o">=</span><span class="mi">2</span><span class="p">)</span>
+    <span class="k">elif</span> <span class="n">order</span> <span class="o">==</span> <span class="mi">3</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">np</span><span class="o">.</span><span class="n">gradient</span><span class="p">(</span>
+            <span class="n">np</span><span class="o">.</span><span class="n">gradient</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">gradient</span><span class="p">(</span><span class="n">y</span><span class="p">,</span> <span class="n">dx</span><span class="p">,</span> <span class="n">edge_order</span><span class="o">=</span><span class="mi">2</span><span class="p">),</span> <span class="n">dx</span><span class="p">,</span> <span class="n">edge_order</span><span class="o">=</span><span class="mi">2</span><span class="p">),</span> <span class="n">dx</span><span class="p">,</span> <span class="n">edge_order</span><span class="o">=</span><span class="mi">2</span>
+        <span class="p">)</span>
+    <span class="k">elif</span> <span class="n">order</span> <span class="o">==</span> <span class="mi">4</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">np</span><span class="o">.</span><span class="n">gradient</span><span class="p">(</span>
+            <span class="n">np</span><span class="o">.</span><span class="n">gradient</span><span class="p">(</span>
+                <span class="n">np</span><span class="o">.</span><span class="n">gradient</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">gradient</span><span class="p">(</span><span class="n">y</span><span class="p">,</span> <span class="n">dx</span><span class="p">,</span> <span class="n">edge_order</span><span class="o">=</span><span class="mi">2</span><span class="p">),</span> <span class="n">dx</span><span class="p">,</span> <span class="n">edge_order</span><span class="o">=</span><span class="mi">2</span><span class="p">),</span> <span class="n">dx</span><span class="p">,</span> <span class="n">edge_order</span><span class="o">=</span><span class="mi">2</span>
+            <span class="p">),</span>
+            <span class="n">dx</span><span class="p">,</span>
+            <span class="n">edge_order</span><span class="o">=</span><span class="mi">2</span><span class="p">,</span>
+        <span class="p">)</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"只支持1-4阶导数, 但请求了 </span><span class="si">{order}</span><span class="s2"> 阶"</span><span class="p">)</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">_evaluate_term_recursively</span><span class="p">(</span><span class="n">node</span><span class="p">,</span> <span class="n">u_snapshot</span><span class="p">,</span> <span class="n">x_coords</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">"""Evaluate a symbolic expression tree over the supplied field values."""</span>
+    <span class="k">if</span> <span class="ow">not</span> <span class="n">node</span><span class="o">.</span><span class="n">children</span><span class="p">:</span>
+        <span class="k">if</span> <span class="n">node</span><span class="o">.</span><span class="n">val</span> <span class="o">==</span> <span class="s2">"u1"</span><span class="p">:</span>
+            <span class="k">return</span> <span class="n">u_snapshot</span>
+        <span class="k">elif</span> <span class="n">node</span><span class="o">.</span><span class="n">val</span> <span class="o">==</span> <span class="s2">"x1"</span><span class="p">:</span>
+            <span class="k">return</span> <span class="n">x_coords</span>
+        <span class="k">try</span><span class="p">:</span>  <span class="c1"># Numeric leaf nodes represent fitted constants.</span>
+            <span class="k">return</span> <span class="nb">float</span><span class="p">(</span><span class="n">node</span><span class="o">.</span><span class="n">val</span><span class="p">)</span>
+        <span class="k">except</span> <span class="ne">ValueError</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">"未知的叶子节点或无法转换为浮点数的常数: </span><span class="si">{</span><span class="n">node</span><span class="o">.</span><span class="n">val</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+
+    <span class="c1"># Evaluate child nodes before applying the current operator.</span>
+    <span class="n">child_values</span> <span class="o">=</span> <span class="p">[</span>
+        <span class="n">_evaluate_term_recursively</span><span class="p">(</span><span class="n">child</span><span class="p">,</span> <span class="n">u_snapshot</span><span class="p">,</span> <span class="n">x_coords</span><span class="p">)</span> <span class="k">for</span> <span class="n">child</span> <span class="ow">in</span> <span class="n">node</span><span class="o">.</span><span class="n">children</span>
+    <span class="p">]</span>
+    <span class="n">op_name</span> <span class="o">=</span> <span class="n">node</span><span class="o">.</span><span class="n">val</span><span class="o">.</span><span class="n">removesuffix</span><span class="p">(</span>
+        <span class="s2">"_t"</span>
+    <span class="p">)</span>  <span class="c1"># Normalize tensor-compatible operator suffixes before dispatch.</span>
+
+    <span class="k">if</span> <span class="n">op_name</span> <span class="o">==</span> <span class="s2">"add"</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">child_values</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">+</span> <span class="n">child_values</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span>
+    <span class="k">elif</span> <span class="n">op_name</span> <span class="o">==</span> <span class="s2">"sub"</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">child_values</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">-</span> <span class="n">child_values</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span>
+    <span class="k">elif</span> <span class="n">op_name</span> <span class="o">==</span> <span class="s2">"mul"</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">child_values</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">*</span> <span class="n">child_values</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span>
+    <span class="k">elif</span> <span class="n">op_name</span> <span class="o">==</span> <span class="s2">"div"</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">child_values</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">/</span> <span class="p">(</span><span class="n">child_values</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="o">+</span> <span class="mf">1e-8</span><span class="p">)</span>
+
+    <span class="k">elif</span> <span class="n">op_name</span> <span class="o">==</span> <span class="s2">"n2"</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">child_values</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">**</span> <span class="mi">2</span>
+    <span class="k">elif</span> <span class="n">op_name</span> <span class="o">==</span> <span class="s2">"n3"</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">child_values</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">**</span> <span class="mi">3</span>
+    <span class="k">elif</span> <span class="n">op_name</span> <span class="o">==</span> <span class="s2">"n4"</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">child_values</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">**</span> <span class="mi">4</span>
+    <span class="k">elif</span> <span class="n">op_name</span> <span class="o">==</span> <span class="s2">"n5"</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">child_values</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">**</span> <span class="mi">5</span>
+
+    <span class="k">elif</span> <span class="n">op_name</span> <span class="o">==</span> <span class="s2">"inv"</span><span class="p">:</span>
+        <span class="k">return</span> <span class="mf">1.0</span> <span class="o">/</span> <span class="p">(</span><span class="n">child_values</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">+</span> <span class="mf">1e-8</span><span class="p">)</span>
+    <span class="k">elif</span> <span class="n">op_name</span> <span class="o">==</span> <span class="s2">"neg"</span><span class="p">:</span>
+        <span class="k">return</span> <span class="o">-</span><span class="n">child_values</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+
+    <span class="k">elif</span> <span class="n">op_name</span> <span class="o">==</span> <span class="s2">"sin"</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">np</span><span class="o">.</span><span class="n">sin</span><span class="p">(</span><span class="n">child_values</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span>
+    <span class="k">elif</span> <span class="n">op_name</span> <span class="o">==</span> <span class="s2">"cos"</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">np</span><span class="o">.</span><span class="n">cos</span><span class="p">(</span><span class="n">child_values</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span>
+    <span class="k">elif</span> <span class="n">op_name</span> <span class="o">==</span> <span class="s2">"tan"</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">np</span><span class="o">.</span><span class="n">tan</span><span class="p">(</span><span class="n">child_values</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span>
+
+    <span class="k">elif</span> <span class="n">op_name</span> <span class="o">==</span> <span class="s2">"diff"</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">_finite_difference</span><span class="p">(</span><span class="n">child_values</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">x_coords</span><span class="p">,</span> <span class="n">order</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+    <span class="k">elif</span> <span class="n">op_name</span> <span class="o">==</span> <span class="s2">"diff2"</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">_finite_difference</span><span class="p">(</span><span class="n">child_values</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">x_coords</span><span class="p">,</span> <span class="n">order</span><span class="o">=</span><span class="mi">2</span><span class="p">)</span>
+    <span class="k">elif</span> <span class="n">op_name</span> <span class="o">==</span> <span class="s2">"diff3"</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">_finite_difference</span><span class="p">(</span><span class="n">child_values</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">x_coords</span><span class="p">,</span> <span class="n">order</span><span class="o">=</span><span class="mi">3</span><span class="p">)</span>
+    <span class="k">elif</span> <span class="n">op_name</span> <span class="o">==</span> <span class="s2">"diff4"</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">_finite_difference</span><span class="p">(</span><span class="n">child_values</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">x_coords</span><span class="p">,</span> <span class="n">order</span><span class="o">=</span><span class="mi">4</span><span class="p">)</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">"未知的操作: </span><span class="si">{</span><span class="n">op_name</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">_calculate_pde_fields</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">best_program</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">"""Compute aligned reference, prediction, residual, and coordinate arrays."""</span>
+    <span class="c1"># Read the fitted terms, coefficients, and reference field.</span>
+    <span class="n">data_dict</span> <span class="o">=</span> <span class="n">model</span><span class="o">.</span><span class="n">data_class</span><span class="o">.</span><span class="n">get_data</span><span class="p">()</span>
+    <span class="n">final_symbolic_terms</span> <span class="o">=</span> <span class="n">best_program</span><span class="o">.</span><span class="n">STRidge</span><span class="o">.</span><span class="n">terms</span>
+    <span class="n">w_best</span> <span class="o">=</span> <span class="n">best_program</span><span class="o">.</span><span class="n">w</span>
+    <span class="n">u_trimmed</span> <span class="o">=</span> <span class="n">data_dict</span><span class="p">[</span><span class="s2">"u"</span><span class="p">]</span>
+    <span class="n">ut_trimmed</span> <span class="o">=</span> <span class="n">data_dict</span><span class="p">[</span><span class="s2">"ut"</span><span class="p">]</span>
+    <span class="n">x_axis</span> <span class="o">=</span> <span class="n">data_dict</span><span class="p">[</span><span class="s2">"X"</span><span class="p">][</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">flatten</span><span class="p">()</span>
+
+    <span class="c1"># Evaluate each symbolic term over the full field.</span>
+    <span class="n">num_space_points</span><span class="p">,</span> <span class="n">num_timesteps_trimmed</span> <span class="o">=</span> <span class="n">u_trimmed</span><span class="o">.</span><span class="n">shape</span>
+    <span class="n">Theta_final</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">zeros</span><span class="p">((</span><span class="n">u_trimmed</span><span class="o">.</span><span class="n">size</span><span class="p">,</span> <span class="nb">len</span><span class="p">(</span><span class="n">final_symbolic_terms</span><span class="p">)))</span>
+    <span class="k">for</span> <span class="n">i</span><span class="p">,</span> <span class="n">term_node</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="n">final_symbolic_terms</span><span class="p">):</span>
+        <span class="n">term_values_grid</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">zeros_like</span><span class="p">(</span><span class="n">u_trimmed</span><span class="p">)</span>
+        <span class="k">for</span> <span class="n">t_idx</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">num_timesteps_trimmed</span><span class="p">):</span>
+            <span class="n">u_snapshot</span> <span class="o">=</span> <span class="n">u_trimmed</span><span class="p">[:,</span> <span class="n">t_idx</span><span class="p">]</span>
+            <span class="n">term_values_grid</span><span class="p">[:,</span> <span class="n">t_idx</span><span class="p">]</span> <span class="o">=</span> <span class="n">_evaluate_term_recursively</span><span class="p">(</span><span class="n">term_node</span><span class="p">,</span> <span class="n">u_snapshot</span><span class="p">,</span> <span class="n">x_axis</span><span class="p">)</span>
+        <span class="n">Theta_final</span><span class="p">[:,</span> <span class="n">i</span><span class="p">]</span> <span class="o">=</span> <span class="n">term_values_grid</span><span class="o">.</span><span class="n">flatten</span><span class="p">()</span>
+
+    <span class="k">if</span> <span class="ow">not</span> <span class="n">np</span><span class="o">.</span><span class="n">isfinite</span><span class="p">(</span><span class="n">Theta_final</span><span class="p">)</span><span class="o">.</span><span class="n">all</span><span class="p">():</span>
+        <span class="nb">print</span><span class="p">(</span><span class="s2">"</span><span class="se">\n</span><span class="s2">[计算警告]: 发现的方程包含数值不稳定的项"</span><span class="p">)</span>
+        <span class="nb">print</span><span class="p">(</span><span class="s2">"  后续的可视化可能会失败或显示不正确"</span><span class="p">)</span>
+        <span class="c1"># return None</span>
+
+    <span class="c1"># Reconstruct the right-hand side and physical residual.</span>
+    <span class="k">if</span> <span class="n">Theta_final</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="o">==</span> <span class="nb">len</span><span class="p">(</span><span class="n">w_best</span><span class="p">)</span> <span class="o">-</span> <span class="mi">1</span><span class="p">:</span>
+        <span class="n">y_hat_rhs</span> <span class="o">=</span> <span class="n">Theta_final</span> <span class="o">@</span> <span class="n">w_best</span><span class="p">[:</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span> <span class="o">+</span> <span class="n">w_best</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="n">y_hat_rhs</span> <span class="o">=</span> <span class="n">Theta_final</span> <span class="o">@</span> <span class="n">w_best</span>
+    <span class="n">physical_residual</span> <span class="o">=</span> <span class="n">ut_trimmed</span><span class="o">.</span><span class="n">flatten</span><span class="p">()</span> <span class="o">-</span> <span class="n">y_hat_rhs</span><span class="o">.</span><span class="n">flatten</span><span class="p">()</span>
+
+    <span class="c1"># Build coordinates aligned with the flattened field arrays.</span>
+    <span class="n">t_axis_trimmed</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="n">num_timesteps_trimmed</span><span class="p">)</span>
+    <span class="n">X_grid</span><span class="p">,</span> <span class="n">T_grid</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">meshgrid</span><span class="p">(</span><span class="n">x_axis</span><span class="p">,</span> <span class="n">t_axis_trimmed</span><span class="p">,</span> <span class="n">indexing</span><span class="o">=</span><span class="s2">"ij"</span><span class="p">)</span>
+    <span class="n">coords_for_plot</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">stack</span><span class="p">([</span><span class="n">X_grid</span><span class="o">.</span><span class="n">flatten</span><span class="p">(),</span> <span class="n">T_grid</span><span class="o">.</span><span class="n">flatten</span><span class="p">()],</span> <span class="n">axis</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+
+    <span class="c1"># Return aligned arrays for all public plotting functions.</span>
+    <span class="k">return</span> <span class="p">{</span>
+        <span class="s2">"residual"</span><span class="p">:</span> <span class="n">physical_residual</span><span class="p">,</span>
+        <span class="s2">"coords"</span><span class="p">:</span> <span class="n">coords_for_plot</span><span class="p">,</span>
+        <span class="s2">"ut_grid"</span><span class="p">:</span> <span class="n">ut_trimmed</span><span class="p">,</span>
+        <span class="s2">"y_hat_grid"</span><span class="p">:</span> <span class="n">y_hat_rhs</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="n">num_space_points</span><span class="p">,</span> <span class="n">num_timesteps_trimmed</span><span class="p">),</span>
+        <span class="s2">"x_axis"</span><span class="p">:</span> <span class="n">x_axis</span><span class="p">,</span>
+        <span class="s2">"t_axis"</span><span class="p">:</span> <span class="n">t_axis_trimmed</span><span class="p">,</span>
+    <span class="p">}</span>
+
+
+<div class="viewcode-block" id="plot_pde_residual_analysis">
+<a class="viewcode-back" href="../../../api.html#kd.viz.dscv_viz.plot_pde_residual_analysis">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">plot_pde_residual_analysis</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">best_program</span><span class="p">,</span> <span class="n">show_plot</span><span class="o">=</span><span class="kc">True</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">"""Plot the physical residual of a fitted DISCOVER program."""</span>
+    <span class="c1"># Share the same aligned field calculation across plots.</span>
+    <span class="n">fields</span> <span class="o">=</span> <span class="n">_calculate_pde_fields</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">best_program</span><span class="p">)</span>
+
+    <span class="k">if</span> <span class="n">show_plot</span><span class="p">:</span>
+        <span class="n">physical_residual</span> <span class="o">=</span> <span class="n">fields</span><span class="p">[</span><span class="s2">"residual"</span><span class="p">]</span>
+        <span class="n">coords_for_plot</span> <span class="o">=</span> <span class="n">fields</span><span class="p">[</span><span class="s2">"coords"</span><span class="p">]</span>
+
+        <span class="n">plt</span><span class="o">.</span><span class="n">figure</span><span class="p">(</span><span class="n">figsize</span><span class="o">=</span><span class="p">(</span><span class="mi">12</span><span class="p">,</span> <span class="mi">5</span><span class="p">))</span>
+        <span class="n">plt</span><span class="o">.</span><span class="n">subplot</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">1</span><span class="p">)</span>
+        <span class="n">sc</span> <span class="o">=</span> <span class="n">plt</span><span class="o">.</span><span class="n">scatter</span><span class="p">(</span>
+            <span class="n">coords_for_plot</span><span class="p">[:,</span> <span class="mi">1</span><span class="p">],</span>
+            <span class="n">coords_for_plot</span><span class="p">[:,</span> <span class="mi">0</span><span class="p">],</span>
+            <span class="n">c</span><span class="o">=</span><span class="n">physical_residual</span><span class="p">,</span>
+            <span class="n">cmap</span><span class="o">=</span><span class="s2">"coolwarm"</span><span class="p">,</span>
+            <span class="n">s</span><span class="o">=</span><span class="mi">15</span><span class="p">,</span>
+            <span class="n">alpha</span><span class="o">=</span><span class="mf">0.8</span><span class="p">,</span>
+        <span class="p">)</span>
+        <span class="n">plt</span><span class="o">.</span><span class="n">colorbar</span><span class="p">(</span><span class="n">sc</span><span class="p">,</span> <span class="n">label</span><span class="o">=</span><span class="s2">"Physical Residual ($u_t$ - RHS)"</span><span class="p">)</span>
+        <span class="n">plt</span><span class="o">.</span><span class="n">xlabel</span><span class="p">(</span><span class="s2">"Time (trimmed, index)"</span><span class="p">)</span>
+        <span class="n">plt</span><span class="o">.</span><span class="n">ylabel</span><span class="p">(</span><span class="s2">"Space"</span><span class="p">)</span>
+        <span class="n">plt</span><span class="o">.</span><span class="n">title</span><span class="p">(</span><span class="s2">"Spatiotemporal Distribution of Residuals"</span><span class="p">)</span>
+        <span class="n">plt</span><span class="o">.</span><span class="n">subplot</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">2</span><span class="p">)</span>
+        <span class="n">plt</span><span class="o">.</span><span class="n">hist</span><span class="p">(</span><span class="n">physical_residual</span><span class="p">,</span> <span class="n">bins</span><span class="o">=</span><span class="mi">50</span><span class="p">,</span> <span class="n">density</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">edgecolor</span><span class="o">=</span><span class="s2">"black"</span><span class="p">,</span> <span class="n">alpha</span><span class="o">=</span><span class="mf">0.7</span><span class="p">)</span>
+        <span class="n">plt</span><span class="o">.</span><span class="n">xlabel</span><span class="p">(</span><span class="s2">"Residual Value"</span><span class="p">)</span>
+        <span class="n">plt</span><span class="o">.</span><span class="n">ylabel</span><span class="p">(</span><span class="s2">"Probability Density"</span><span class="p">)</span>
+        <span class="n">plt</span><span class="o">.</span><span class="n">title</span><span class="p">(</span><span class="s2">"Residual Distribution"</span><span class="p">)</span>
+        <span class="n">plt</span><span class="o">.</span><span class="n">tight_layout</span><span class="p">()</span>
+        <span class="n">plt</span><span class="o">.</span><span class="n">show</span><span class="p">()</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">fields</span><span class="p">[</span><span class="s2">"residual"</span><span class="p">],</span> <span class="n">fields</span><span class="p">[</span><span class="s2">"coords"</span><span class="p">]</span></div>
+
+
+
+<div class="viewcode-block" id="plot_field_comparison">
+<a class="viewcode-back" href="../../../api.html#kd.viz.dscv_viz.plot_field_comparison">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">plot_field_comparison</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">best_program</span><span class="p">,</span> <span class="n">show_plot</span><span class="o">=</span><span class="kc">True</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">"""Compare the reconstructed and reference PDE fields."""</span>
+    <span class="c1"># Reuse the common aligned field calculation.</span>
+    <span class="n">fields</span> <span class="o">=</span> <span class="n">_calculate_pde_fields</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">best_program</span><span class="p">)</span>
+
+    <span class="n">ut_grid</span> <span class="o">=</span> <span class="n">fields</span><span class="p">[</span><span class="s2">"ut_grid"</span><span class="p">]</span>
+    <span class="n">y_hat_grid</span> <span class="o">=</span> <span class="n">fields</span><span class="p">[</span><span class="s2">"y_hat_grid"</span><span class="p">]</span>
+    <span class="n">x_axis</span> <span class="o">=</span> <span class="n">fields</span><span class="p">[</span><span class="s2">"x_axis"</span><span class="p">]</span>
+    <span class="n">t_axis</span> <span class="o">=</span> <span class="n">fields</span><span class="p">[</span><span class="s2">"t_axis"</span><span class="p">]</span>
+
+    <span class="k">if</span> <span class="n">show_plot</span><span class="p">:</span>
+        <span class="c1"># Use a shared color range for a meaningful field comparison.</span>
+        <span class="n">vmin</span> <span class="o">=</span> <span class="nb">min</span><span class="p">(</span><span class="n">ut_grid</span><span class="o">.</span><span class="n">min</span><span class="p">(),</span> <span class="n">y_hat_grid</span><span class="o">.</span><span class="n">min</span><span class="p">())</span>
+        <span class="n">vmax</span> <span class="o">=</span> <span class="nb">max</span><span class="p">(</span><span class="n">ut_grid</span><span class="o">.</span><span class="n">max</span><span class="p">(),</span> <span class="n">y_hat_grid</span><span class="o">.</span><span class="n">max</span><span class="p">())</span>
+
+        <span class="c1"># Place reference and predicted fields side by side.</span>
+        <span class="n">fig</span><span class="p">,</span> <span class="n">axes</span> <span class="o">=</span> <span class="n">plt</span><span class="o">.</span><span class="n">subplots</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="n">figsize</span><span class="o">=</span><span class="p">(</span><span class="mi">14</span><span class="p">,</span> <span class="mi">6</span><span class="p">),</span> <span class="n">sharey</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+        <span class="n">fig</span><span class="o">.</span><span class="n">suptitle</span><span class="p">(</span><span class="s2">"Predicted Field vs. True Field Comparison"</span><span class="p">,</span> <span class="n">fontsize</span><span class="o">=</span><span class="mi">16</span><span class="p">)</span>
+
+        <span class="c1"># Plot the reference field on the left.</span>
+        <span class="n">ax0</span> <span class="o">=</span> <span class="n">axes</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+        <span class="n">im0</span> <span class="o">=</span> <span class="n">ax0</span><span class="o">.</span><span class="n">pcolormesh</span><span class="p">(</span>
+            <span class="n">t_axis</span><span class="p">,</span> <span class="n">x_axis</span><span class="p">,</span> <span class="n">ut_grid</span><span class="p">,</span> <span class="n">cmap</span><span class="o">=</span><span class="s2">"viridis"</span><span class="p">,</span> <span class="n">vmin</span><span class="o">=</span><span class="n">vmin</span><span class="p">,</span> <span class="n">vmax</span><span class="o">=</span><span class="n">vmax</span><span class="p">,</span> <span class="n">shading</span><span class="o">=</span><span class="s2">"gouraud"</span>
+        <span class="p">)</span>
+        <span class="n">fig</span><span class="o">.</span><span class="n">colorbar</span><span class="p">(</span><span class="n">im0</span><span class="p">,</span> <span class="n">ax</span><span class="o">=</span><span class="n">ax0</span><span class="p">,</span> <span class="n">label</span><span class="o">=</span><span class="s2">"Value"</span><span class="p">)</span>
+        <span class="n">ax0</span><span class="o">.</span><span class="n">set_title</span><span class="p">(</span><span class="s2">"True Field ($u_t$)"</span><span class="p">,</span> <span class="n">fontsize</span><span class="o">=</span><span class="mi">14</span><span class="p">)</span>
+        <span class="n">ax0</span><span class="o">.</span><span class="n">set_xlabel</span><span class="p">(</span><span class="s2">"Time (trimmed, index)"</span><span class="p">,</span> <span class="n">fontsize</span><span class="o">=</span><span class="mi">12</span><span class="p">)</span>
+        <span class="n">ax0</span><span class="o">.</span><span class="n">set_ylabel</span><span class="p">(</span><span class="s2">"Space"</span><span class="p">,</span> <span class="n">fontsize</span><span class="o">=</span><span class="mi">12</span><span class="p">)</span>
+
+        <span class="c1"># Plot the reconstructed field on the right.</span>
+        <span class="n">ax1</span> <span class="o">=</span> <span class="n">axes</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span>
+        <span class="n">im1</span> <span class="o">=</span> <span class="n">ax1</span><span class="o">.</span><span class="n">pcolormesh</span><span class="p">(</span>
+            <span class="n">t_axis</span><span class="p">,</span> <span class="n">x_axis</span><span class="p">,</span> <span class="n">y_hat_grid</span><span class="p">,</span> <span class="n">cmap</span><span class="o">=</span><span class="s2">"viridis"</span><span class="p">,</span> <span class="n">vmin</span><span class="o">=</span><span class="n">vmin</span><span class="p">,</span> <span class="n">vmax</span><span class="o">=</span><span class="n">vmax</span><span class="p">,</span> <span class="n">shading</span><span class="o">=</span><span class="s2">"gouraud"</span>
+        <span class="p">)</span>
+        <span class="n">fig</span><span class="o">.</span><span class="n">colorbar</span><span class="p">(</span><span class="n">im1</span><span class="p">,</span> <span class="n">ax</span><span class="o">=</span><span class="n">ax1</span><span class="p">,</span> <span class="n">label</span><span class="o">=</span><span class="s2">"Value"</span><span class="p">)</span>
+        <span class="n">ax1</span><span class="o">.</span><span class="n">set_title</span><span class="p">(</span><span class="s2">"Predicted Field (RHS)"</span><span class="p">,</span> <span class="n">fontsize</span><span class="o">=</span><span class="mi">14</span><span class="p">)</span>
+        <span class="n">ax1</span><span class="o">.</span><span class="n">set_xlabel</span><span class="p">(</span><span class="s2">"Time (trimmed, index)"</span><span class="p">,</span> <span class="n">fontsize</span><span class="o">=</span><span class="mi">12</span><span class="p">)</span>
+
+        <span class="n">plt</span><span class="o">.</span><span class="n">tight_layout</span><span class="p">(</span><span class="n">rect</span><span class="o">=</span><span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="mf">0.03</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mf">0.95</span><span class="p">])</span>
+        <span class="n">plt</span><span class="o">.</span><span class="n">show</span><span class="p">()</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">ut_grid</span><span class="p">,</span> <span class="n">y_hat_grid</span><span class="p">,</span> <span class="n">x_axis</span><span class="p">,</span> <span class="n">t_axis</span></div>
+
+
+
+<div class="viewcode-block" id="plot_actual_vs_predicted">
+<a class="viewcode-back" href="../../../api.html#kd.viz.dscv_viz.plot_actual_vs_predicted">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">plot_actual_vs_predicted</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">best_program</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">"""</span>
+<span class="sd">    Plots an "Actual vs. Predicted" scatter plot with a 45-degree reference line.</span>
+
+<span class="sd">    Args:</span>
+<span class="sd">        model: The trained KD_DSCV model instance.</span>
+<span class="sd">        best_program: The final Program object discovered by the model.</span>
+<span class="sd">    """</span>
+    <span class="nb">print</span><span class="p">(</span><span class="s2">"Generating 'Actual vs. Predicted' plot..."</span><span class="p">)</span>
+    <span class="c1"># Call the helper function to get all computed fields</span>
+    <span class="n">fields</span> <span class="o">=</span> <span class="n">_calculate_pde_fields</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">best_program</span><span class="p">)</span>
+
+    <span class="n">y_true</span> <span class="o">=</span> <span class="n">fields</span><span class="p">[</span><span class="s2">"ut_grid"</span><span class="p">]</span>
+    <span class="n">y_pred</span> <span class="o">=</span> <span class="n">fields</span><span class="p">[</span><span class="s2">"y_hat_grid"</span><span class="p">]</span>
+
+    <span class="n">plt</span><span class="o">.</span><span class="n">figure</span><span class="p">(</span><span class="n">figsize</span><span class="o">=</span><span class="p">(</span><span class="mi">8</span><span class="p">,</span> <span class="mi">8</span><span class="p">))</span>
+    <span class="n">plt</span><span class="o">.</span><span class="n">scatter</span><span class="p">(</span><span class="n">y_true</span><span class="p">,</span> <span class="n">y_pred</span><span class="p">,</span> <span class="n">alpha</span><span class="o">=</span><span class="mf">0.3</span><span class="p">,</span> <span class="n">s</span><span class="o">=</span><span class="mi">10</span><span class="p">,</span> <span class="n">label</span><span class="o">=</span><span class="s2">"Predicted Points"</span><span class="p">)</span>
+
+    <span class="n">min_val</span> <span class="o">=</span> <span class="nb">min</span><span class="p">(</span><span class="n">y_true</span><span class="o">.</span><span class="n">min</span><span class="p">(),</span> <span class="n">y_pred</span><span class="o">.</span><span class="n">min</span><span class="p">())</span>
+    <span class="n">max_val</span> <span class="o">=</span> <span class="nb">max</span><span class="p">(</span><span class="n">y_true</span><span class="o">.</span><span class="n">max</span><span class="p">(),</span> <span class="n">y_pred</span><span class="o">.</span><span class="n">max</span><span class="p">())</span>
+    <span class="n">margin</span> <span class="o">=</span> <span class="mf">0.1</span> <span class="o">*</span> <span class="p">(</span><span class="n">max_val</span> <span class="o">-</span> <span class="n">min_val</span><span class="p">)</span> <span class="k">if</span> <span class="p">(</span><span class="n">max_val</span> <span class="o">-</span> <span class="n">min_val</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">0</span> <span class="k">else</span> <span class="mf">0.1</span>
+    <span class="n">plot_limit</span> <span class="o">=</span> <span class="p">(</span><span class="n">min_val</span> <span class="o">-</span> <span class="n">margin</span><span class="p">,</span> <span class="n">max_val</span> <span class="o">+</span> <span class="n">margin</span><span class="p">)</span>
+
+    <span class="n">plt</span><span class="o">.</span><span class="n">plot</span><span class="p">(</span><span class="n">plot_limit</span><span class="p">,</span> <span class="n">plot_limit</span><span class="p">,</span> <span class="s2">"r--"</span><span class="p">,</span> <span class="n">label</span><span class="o">=</span><span class="s2">"Perfect Prediction (y=x)"</span><span class="p">)</span>
+
+    <span class="n">plt</span><span class="o">.</span><span class="n">xlabel</span><span class="p">(</span><span class="s2">"True Values (Ground Truth, $u_t$)"</span><span class="p">)</span>
+    <span class="n">plt</span><span class="o">.</span><span class="n">ylabel</span><span class="p">(</span><span class="s2">"Predicted Values (RHS)"</span><span class="p">)</span>
+    <span class="n">plt</span><span class="o">.</span><span class="n">title</span><span class="p">(</span><span class="s2">"Actual vs. Predicted"</span><span class="p">)</span>
+    <span class="n">plt</span><span class="o">.</span><span class="n">legend</span><span class="p">()</span>
+    <span class="n">plt</span><span class="o">.</span><span class="n">grid</span><span class="p">(</span><span class="kc">True</span><span class="p">)</span>
+    <span class="n">plt</span><span class="o">.</span><span class="n">axis</span><span class="p">(</span><span class="s2">"equal"</span><span class="p">)</span>
+    <span class="n">plt</span><span class="o">.</span><span class="n">xlim</span><span class="p">(</span><span class="n">plot_limit</span><span class="p">)</span>
+    <span class="n">plt</span><span class="o">.</span><span class="n">ylim</span><span class="p">(</span><span class="n">plot_limit</span><span class="p">)</span>
+    <span class="n">plt</span><span class="o">.</span><span class="n">show</span><span class="p">()</span></div>
+
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">_calculate_pinn_fields</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">best_program</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">"""Read aligned PINN field values cached by a fitted program."""</span>
+    <span class="c1"># Trigger reward evaluation so the program caches Theta and predictions.</span>
+    <span class="n">_</span> <span class="o">=</span> <span class="n">best_program</span><span class="o">.</span><span class="n">r_ridge</span>
+
+    <span class="c1"># Read the aligned values produced during reward evaluation.</span>
+    <span class="n">y_hat_rhs</span> <span class="o">=</span> <span class="n">best_program</span><span class="o">.</span><span class="n">y_hat_rhs</span>
+    <span class="n">Theta</span> <span class="o">=</span> <span class="n">best_program</span><span class="o">.</span><span class="n">Theta</span>
+
+    <span class="k">if</span> <span class="n">y_hat_rhs</span> <span class="ow">is</span> <span class="kc">None</span> <span class="ow">or</span> <span class="n">Theta</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">AttributeError</span><span class="p">(</span>
+            <span class="s2">"best_program 对象中未找到缓存的 Theta 矩阵或 y_hat_rhs。请确保对 pde_pinn.py 和 program.py 的修改已生效。"</span>
+        <span class="p">)</span>
+
+    <span class="c1"># Read the cropped target arrays from the active task.</span>
+    <span class="n">task</span> <span class="o">=</span> <span class="n">best_program</span><span class="o">.</span><span class="n">task</span>
+    <span class="n">ut_full</span> <span class="o">=</span> <span class="n">task</span><span class="o">.</span><span class="n">ut</span>
+    <span class="n">x_coords_tensor</span> <span class="o">=</span> <span class="n">task</span><span class="o">.</span><span class="n">x</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+    <span class="n">t_coords_tensor</span> <span class="o">=</span> <span class="n">task</span><span class="o">.</span><span class="n">t</span>
+
+    <span class="c1"># Move task coordinates to NumPy for plotting.</span>
+    <span class="n">x_coords_np</span> <span class="o">=</span> <span class="n">x_coords_tensor</span><span class="o">.</span><span class="n">cpu</span><span class="p">()</span><span class="o">.</span><span class="n">detach</span><span class="p">()</span><span class="o">.</span><span class="n">numpy</span><span class="p">()</span>
+    <span class="n">t_coords_np</span> <span class="o">=</span> <span class="n">t_coords_tensor</span><span class="o">.</span><span class="n">cpu</span><span class="p">()</span><span class="o">.</span><span class="n">detach</span><span class="p">()</span><span class="o">.</span><span class="n">numpy</span><span class="p">()</span>
+
+    <span class="c1"># Compute the physical residual on the sampled points.</span>
+    <span class="n">physical_residual</span> <span class="o">=</span> <span class="n">ut_full</span><span class="o">.</span><span class="n">flatten</span><span class="p">()</span> <span class="o">-</span> <span class="n">y_hat_rhs</span><span class="o">.</span><span class="n">flatten</span><span class="p">()</span>
+
+    <span class="c1"># Combine spatial and time coordinates into an (N, 2) array.</span>
+    <span class="n">coords_for_plot</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">hstack</span><span class="p">([</span><span class="n">x_coords_np</span><span class="p">,</span> <span class="n">t_coords_np</span><span class="p">])</span>
+
+    <span class="c1"># Return aligned arrays for the PINN visualization functions.</span>
+    <span class="k">return</span> <span class="p">{</span>
+        <span class="s2">"residual"</span><span class="p">:</span> <span class="n">physical_residual</span><span class="p">,</span>
+        <span class="s2">"coords"</span><span class="p">:</span> <span class="n">coords_for_plot</span><span class="p">,</span>
+        <span class="s2">"coords_x"</span><span class="p">:</span> <span class="n">x_coords_np</span><span class="o">.</span><span class="n">flatten</span><span class="p">(),</span>
+        <span class="s2">"coords_t"</span><span class="p">:</span> <span class="n">t_coords_np</span><span class="o">.</span><span class="n">flatten</span><span class="p">(),</span>
+        <span class="s2">"y_true"</span><span class="p">:</span> <span class="n">ut_full</span><span class="o">.</span><span class="n">flatten</span><span class="p">(),</span>
+        <span class="s2">"y_pred"</span><span class="p">:</span> <span class="n">y_hat_rhs</span><span class="o">.</span><span class="n">flatten</span><span class="p">(),</span>
+    <span class="p">}</span>
+
+
+<div class="viewcode-block" id="plot_spr_residual_analysis">
+<a class="viewcode-back" href="../../../api.html#kd.viz.dscv_viz.plot_spr_residual_analysis">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">plot_spr_residual_analysis</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">best_program</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">"""Plot residual diagnostics for sparse PINN samples."""</span>
+
+    <span class="c1"># Use the PINN-specific cache and sampled coordinates.</span>
+    <span class="n">fields</span> <span class="o">=</span> <span class="n">_calculate_pinn_fields</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">best_program</span><span class="p">)</span>
+
+    <span class="n">physical_residual</span> <span class="o">=</span> <span class="n">fields</span><span class="p">[</span><span class="s2">"residual"</span><span class="p">]</span>
+    <span class="n">coords_for_plot</span> <span class="o">=</span> <span class="n">fields</span><span class="p">[</span><span class="s2">"coords"</span><span class="p">]</span>  <span class="c1"># Coordinates are aligned as (space, time) rows.</span>
+
+    <span class="c1"># Fail early if cached values no longer match sampled coordinates.</span>
+    <span class="k">if</span> <span class="n">coords_for_plot</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">!=</span> <span class="nb">len</span><span class="p">(</span><span class="n">physical_residual</span><span class="p">):</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+            <span class="sa">f</span><span class="s2">"坐标点数量 (</span><span class="si">{</span><span class="n">coords_for_plot</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="si">}</span><span class="s2">) 与残差值数量 (</span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">physical_residual</span><span class="p">)</span><span class="si">}</span><span class="s2">) 不匹配。"</span>
+        <span class="p">)</span>
+
+    <span class="n">plt</span><span class="o">.</span><span class="n">figure</span><span class="p">(</span><span class="n">figsize</span><span class="o">=</span><span class="p">(</span><span class="mi">12</span><span class="p">,</span> <span class="mi">5</span><span class="p">))</span>
+
+    <span class="c1"># Plot the residual over space and time on the left.</span>
+    <span class="n">plt</span><span class="o">.</span><span class="n">subplot</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">1</span><span class="p">)</span>
+    <span class="c1"># Coordinate column 0 is space and column 1 is time.</span>
+    <span class="n">sc</span> <span class="o">=</span> <span class="n">plt</span><span class="o">.</span><span class="n">scatter</span><span class="p">(</span>
+        <span class="n">coords_for_plot</span><span class="p">[:,</span> <span class="mi">1</span><span class="p">],</span>
+        <span class="n">coords_for_plot</span><span class="p">[:,</span> <span class="mi">0</span><span class="p">],</span>
+        <span class="n">c</span><span class="o">=</span><span class="n">physical_residual</span><span class="p">,</span>
+        <span class="n">cmap</span><span class="o">=</span><span class="s2">"coolwarm"</span><span class="p">,</span>
+        <span class="n">s</span><span class="o">=</span><span class="mi">15</span><span class="p">,</span>
+        <span class="n">alpha</span><span class="o">=</span><span class="mf">0.8</span><span class="p">,</span>
+    <span class="p">)</span>
+    <span class="n">plt</span><span class="o">.</span><span class="n">colorbar</span><span class="p">(</span><span class="n">sc</span><span class="p">,</span> <span class="n">label</span><span class="o">=</span><span class="s2">"Physical Residual ($u_t$ - RHS)"</span><span class="p">)</span>
+    <span class="n">plt</span><span class="o">.</span><span class="n">xlabel</span><span class="p">(</span><span class="s2">"Time"</span><span class="p">)</span>
+    <span class="n">plt</span><span class="o">.</span><span class="n">ylabel</span><span class="p">(</span><span class="s2">"Space"</span><span class="p">)</span>
+    <span class="n">plt</span><span class="o">.</span><span class="n">title</span><span class="p">(</span><span class="s2">"Spatiotemporal Distribution of Residuals (on meta-data points)"</span><span class="p">)</span>
+
+    <span class="c1"># Plot the residual distribution on the right.</span>
+    <span class="n">plt</span><span class="o">.</span><span class="n">subplot</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">2</span><span class="p">)</span>
+    <span class="n">plt</span><span class="o">.</span><span class="n">hist</span><span class="p">(</span><span class="n">physical_residual</span><span class="p">,</span> <span class="n">bins</span><span class="o">=</span><span class="mi">50</span><span class="p">,</span> <span class="n">density</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">edgecolor</span><span class="o">=</span><span class="s2">"black"</span><span class="p">,</span> <span class="n">alpha</span><span class="o">=</span><span class="mf">0.7</span><span class="p">)</span>
+    <span class="n">plt</span><span class="o">.</span><span class="n">xlabel</span><span class="p">(</span><span class="s2">"Residual Value"</span><span class="p">)</span>
+    <span class="n">plt</span><span class="o">.</span><span class="n">ylabel</span><span class="p">(</span><span class="s2">"Probability Density"</span><span class="p">)</span>
+    <span class="n">plt</span><span class="o">.</span><span class="n">title</span><span class="p">(</span><span class="s2">"Residual Distribution"</span><span class="p">)</span>
+
+    <span class="n">plt</span><span class="o">.</span><span class="n">tight_layout</span><span class="p">()</span>
+    <span class="n">plt</span><span class="o">.</span><span class="n">show</span><span class="p">()</span></div>
+
+
+
+<div class="viewcode-block" id="plot_spr_actual_vs_predicted">
+<a class="viewcode-back" href="../../../api.html#kd.viz.dscv_viz.plot_spr_actual_vs_predicted">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">plot_spr_actual_vs_predicted</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">best_program</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">"""Plot PINN targets against reconstructed right-hand-side values."""</span>
+    <span class="nb">print</span><span class="p">(</span><span class="s2">"Generating 'Actual vs. Predicted' plot for PINN model..."</span><span class="p">)</span>
+    <span class="n">fields</span> <span class="o">=</span> <span class="n">_calculate_pinn_fields</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">best_program</span><span class="p">)</span>
+
+    <span class="n">y_true</span> <span class="o">=</span> <span class="n">fields</span><span class="p">[</span><span class="s2">"y_true"</span><span class="p">]</span>
+    <span class="n">y_pred</span> <span class="o">=</span> <span class="n">fields</span><span class="p">[</span><span class="s2">"y_pred"</span><span class="p">]</span>
+
+    <span class="n">plt</span><span class="o">.</span><span class="n">figure</span><span class="p">(</span><span class="n">figsize</span><span class="o">=</span><span class="p">(</span><span class="mi">8</span><span class="p">,</span> <span class="mi">8</span><span class="p">))</span>
+    <span class="n">plt</span><span class="o">.</span><span class="n">scatter</span><span class="p">(</span><span class="n">y_true</span><span class="p">,</span> <span class="n">y_pred</span><span class="p">,</span> <span class="n">alpha</span><span class="o">=</span><span class="mf">0.3</span><span class="p">,</span> <span class="n">s</span><span class="o">=</span><span class="mi">10</span><span class="p">,</span> <span class="n">label</span><span class="o">=</span><span class="s2">"Predicted Points"</span><span class="p">)</span>
+
+    <span class="n">min_val</span> <span class="o">=</span> <span class="nb">min</span><span class="p">(</span><span class="n">y_true</span><span class="o">.</span><span class="n">min</span><span class="p">(),</span> <span class="n">y_pred</span><span class="o">.</span><span class="n">min</span><span class="p">())</span>
+    <span class="n">max_val</span> <span class="o">=</span> <span class="nb">max</span><span class="p">(</span><span class="n">y_true</span><span class="o">.</span><span class="n">max</span><span class="p">(),</span> <span class="n">y_pred</span><span class="o">.</span><span class="n">max</span><span class="p">())</span>
+    <span class="n">margin</span> <span class="o">=</span> <span class="mf">0.1</span> <span class="o">*</span> <span class="p">(</span><span class="n">max_val</span> <span class="o">-</span> <span class="n">min_val</span><span class="p">)</span> <span class="k">if</span> <span class="p">(</span><span class="n">max_val</span> <span class="o">-</span> <span class="n">min_val</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">0</span> <span class="k">else</span> <span class="mf">0.1</span>
+    <span class="n">plot_limit</span> <span class="o">=</span> <span class="p">(</span><span class="n">min_val</span> <span class="o">-</span> <span class="n">margin</span><span class="p">,</span> <span class="n">max_val</span> <span class="o">+</span> <span class="n">margin</span><span class="p">)</span>
+
+    <span class="n">plt</span><span class="o">.</span><span class="n">plot</span><span class="p">(</span><span class="n">plot_limit</span><span class="p">,</span> <span class="n">plot_limit</span><span class="p">,</span> <span class="s2">"r--"</span><span class="p">,</span> <span class="n">label</span><span class="o">=</span><span class="s2">"Perfect Prediction (y=x)"</span><span class="p">)</span>
+
+    <span class="n">plt</span><span class="o">.</span><span class="n">xlabel</span><span class="p">(</span><span class="s2">"True Values (Ground Truth, $u_t$)"</span><span class="p">)</span>
+    <span class="n">plt</span><span class="o">.</span><span class="n">ylabel</span><span class="p">(</span><span class="s2">"Predicted Values (RHS)"</span><span class="p">)</span>
+    <span class="n">plt</span><span class="o">.</span><span class="n">title</span><span class="p">(</span><span class="s2">"Actual vs. Predicted (for PINN model)"</span><span class="p">)</span>
+    <span class="n">plt</span><span class="o">.</span><span class="n">legend</span><span class="p">()</span>
+    <span class="n">plt</span><span class="o">.</span><span class="n">grid</span><span class="p">(</span><span class="kc">True</span><span class="p">)</span>
+    <span class="n">plt</span><span class="o">.</span><span class="n">axis</span><span class="p">(</span><span class="s2">"equal"</span><span class="p">)</span>
+    <span class="n">plt</span><span class="o">.</span><span class="n">xlim</span><span class="p">(</span><span class="n">plot_limit</span><span class="p">)</span>
+    <span class="n">plt</span><span class="o">.</span><span class="n">ylim</span><span class="p">(</span><span class="n">plot_limit</span><span class="p">)</span>
+    <span class="n">plt</span><span class="o">.</span><span class="n">show</span><span class="p">()</span></div>
+
+
+
+<div class="viewcode-block" id="plot_spr_field_comparison">
+<a class="viewcode-back" href="../../../api.html#kd.viz.dscv_viz.plot_spr_field_comparison">[docs]</a>
+<span class="k">def</span><span class="w"> </span><span class="nf">plot_spr_field_comparison</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">best_program</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">"""Compare reconstructed and reference fields from irregular PINN samples."""</span>
+    <span class="nb">print</span><span class="p">(</span><span class="s2">"Generating field comparison plot for PINN model..."</span><span class="p">)</span>
+    <span class="n">fields</span> <span class="o">=</span> <span class="n">_calculate_pinn_fields</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">best_program</span><span class="p">)</span>
+
+    <span class="n">x</span><span class="p">,</span> <span class="n">t</span><span class="p">,</span> <span class="n">ut</span><span class="p">,</span> <span class="n">y_hat</span> <span class="o">=</span> <span class="n">fields</span><span class="p">[</span><span class="s2">"coords_x"</span><span class="p">],</span> <span class="n">fields</span><span class="p">[</span><span class="s2">"coords_t"</span><span class="p">],</span> <span class="n">fields</span><span class="p">[</span><span class="s2">"y_true"</span><span class="p">],</span> <span class="n">fields</span><span class="p">[</span><span class="s2">"y_pred"</span><span class="p">]</span>
+
+    <span class="c1"># Triangulate the irregular samples before rendering the field.</span>
+    <span class="kn">from</span><span class="w"> </span><span class="nn">scipy.interpolate</span><span class="w"> </span><span class="kn">import</span> <span class="n">griddata</span>
+
+    <span class="n">grid_x</span><span class="p">,</span> <span class="n">grid_t</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">mgrid</span><span class="p">[</span><span class="nb">min</span><span class="p">(</span><span class="n">x</span><span class="p">)</span> <span class="p">:</span> <span class="nb">max</span><span class="p">(</span><span class="n">x</span><span class="p">)</span> <span class="p">:</span> <span class="mi">100</span><span class="n">j</span><span class="p">,</span> <span class="nb">min</span><span class="p">(</span><span class="n">t</span><span class="p">)</span> <span class="p">:</span> <span class="nb">max</span><span class="p">(</span><span class="n">t</span><span class="p">)</span> <span class="p">:</span> <span class="mi">100</span><span class="n">j</span><span class="p">]</span>
+
+    <span class="n">grid_ut</span> <span class="o">=</span> <span class="n">griddata</span><span class="p">((</span><span class="n">x</span><span class="p">,</span> <span class="n">t</span><span class="p">),</span> <span class="n">ut</span><span class="p">,</span> <span class="p">(</span><span class="n">grid_x</span><span class="p">,</span> <span class="n">grid_t</span><span class="p">),</span> <span class="n">method</span><span class="o">=</span><span class="s2">"cubic"</span><span class="p">)</span>
+    <span class="n">grid_yhat</span> <span class="o">=</span> <span class="n">griddata</span><span class="p">((</span><span class="n">x</span><span class="p">,</span> <span class="n">t</span><span class="p">),</span> <span class="n">y_hat</span><span class="p">,</span> <span class="p">(</span><span class="n">grid_x</span><span class="p">,</span> <span class="n">grid_t</span><span class="p">),</span> <span class="n">method</span><span class="o">=</span><span class="s2">"cubic"</span><span class="p">)</span>
+
+    <span class="c1"># Share a common color scale across both fields.</span>
+    <span class="n">vmin</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">nanmin</span><span class="p">([</span><span class="n">grid_ut</span><span class="p">,</span> <span class="n">grid_yhat</span><span class="p">])</span>
+    <span class="n">vmax</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">nanmax</span><span class="p">([</span><span class="n">grid_ut</span><span class="p">,</span> <span class="n">grid_yhat</span><span class="p">])</span>
+
+    <span class="n">fig</span><span class="p">,</span> <span class="n">axes</span> <span class="o">=</span> <span class="n">plt</span><span class="o">.</span><span class="n">subplots</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="n">figsize</span><span class="o">=</span><span class="p">(</span><span class="mi">12</span><span class="p">,</span> <span class="mi">5</span><span class="p">),</span> <span class="n">sharey</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+    <span class="n">fig</span><span class="o">.</span><span class="n">suptitle</span><span class="p">(</span><span class="s2">"Field Comparison (on Sparse Points)"</span><span class="p">,</span> <span class="n">fontsize</span><span class="o">=</span><span class="mi">16</span><span class="p">)</span>
+
+    <span class="c1"># Plot the reference field on the left.</span>
+    <span class="n">ax0</span> <span class="o">=</span> <span class="n">axes</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+    <span class="n">im0</span> <span class="o">=</span> <span class="n">ax0</span><span class="o">.</span><span class="n">imshow</span><span class="p">(</span>
+        <span class="n">grid_ut</span><span class="o">.</span><span class="n">T</span><span class="p">,</span>
+        <span class="n">extent</span><span class="o">=</span><span class="p">(</span><span class="nb">min</span><span class="p">(</span><span class="n">t</span><span class="p">),</span> <span class="nb">max</span><span class="p">(</span><span class="n">t</span><span class="p">),</span> <span class="nb">min</span><span class="p">(</span><span class="n">x</span><span class="p">),</span> <span class="nb">max</span><span class="p">(</span><span class="n">x</span><span class="p">)),</span>
+        <span class="n">origin</span><span class="o">=</span><span class="s2">"lower"</span><span class="p">,</span>
+        <span class="n">aspect</span><span class="o">=</span><span class="s2">"auto"</span><span class="p">,</span>
+        <span class="n">cmap</span><span class="o">=</span><span class="s2">"viridis"</span><span class="p">,</span>
+        <span class="n">vmin</span><span class="o">=</span><span class="n">vmin</span><span class="p">,</span>
+        <span class="n">vmax</span><span class="o">=</span><span class="n">vmax</span><span class="p">,</span>
+    <span class="p">)</span>
+    <span class="n">fig</span><span class="o">.</span><span class="n">colorbar</span><span class="p">(</span><span class="n">im0</span><span class="p">,</span> <span class="n">ax</span><span class="o">=</span><span class="n">ax0</span><span class="p">,</span> <span class="n">label</span><span class="o">=</span><span class="s2">"Value"</span><span class="p">)</span>
+    <span class="n">ax0</span><span class="o">.</span><span class="n">set_title</span><span class="p">(</span><span class="s2">"True Field ($u_t$)"</span><span class="p">)</span>
+    <span class="n">ax0</span><span class="o">.</span><span class="n">set_xlabel</span><span class="p">(</span><span class="s2">"Time"</span><span class="p">)</span>
+    <span class="n">ax0</span><span class="o">.</span><span class="n">set_ylabel</span><span class="p">(</span><span class="s2">"Space"</span><span class="p">)</span>
+
+    <span class="c1"># Plot the reconstructed field on the right.</span>
+    <span class="n">ax1</span> <span class="o">=</span> <span class="n">axes</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span>
+    <span class="n">im1</span> <span class="o">=</span> <span class="n">ax1</span><span class="o">.</span><span class="n">imshow</span><span class="p">(</span>
+        <span class="n">grid_yhat</span><span class="o">.</span><span class="n">T</span><span class="p">,</span>
+        <span class="n">extent</span><span class="o">=</span><span class="p">(</span><span class="nb">min</span><span class="p">(</span><span class="n">t</span><span class="p">),</span> <span class="nb">max</span><span class="p">(</span><span class="n">t</span><span class="p">),</span> <span class="nb">min</span><span class="p">(</span><span class="n">x</span><span class="p">),</span> <span class="nb">max</span><span class="p">(</span><span class="n">x</span><span class="p">)),</span>
+        <span class="n">origin</span><span class="o">=</span><span class="s2">"lower"</span><span class="p">,</span>
+        <span class="n">aspect</span><span class="o">=</span><span class="s2">"auto"</span><span class="p">,</span>
+        <span class="n">cmap</span><span class="o">=</span><span class="s2">"viridis"</span><span class="p">,</span>
+        <span class="n">vmin</span><span class="o">=</span><span class="n">vmin</span><span class="p">,</span>
+        <span class="n">vmax</span><span class="o">=</span><span class="n">vmax</span><span class="p">,</span>
+    <span class="p">)</span>
+    <span class="n">fig</span><span class="o">.</span><span class="n">colorbar</span><span class="p">(</span><span class="n">im1</span><span class="p">,</span> <span class="n">ax</span><span class="o">=</span><span class="n">ax1</span><span class="p">,</span> <span class="n">label</span><span class="o">=</span><span class="s2">"Value"</span><span class="p">)</span>
+    <span class="n">ax1</span><span class="o">.</span><span class="n">set_title</span><span class="p">(</span><span class="s2">"Predicted Field (RHS)"</span><span class="p">)</span>
+    <span class="n">ax1</span><span class="o">.</span><span class="n">set_xlabel</span><span class="p">(</span><span class="s2">"Time"</span><span class="p">)</span>
+
+    <span class="n">plt</span><span class="o">.</span><span class="n">tight_layout</span><span class="p">(</span><span class="n">rect</span><span class="o">=</span><span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="mf">0.03</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mf">0.95</span><span class="p">])</span>
+    <span class="n">plt</span><span class="o">.</span><span class="n">show</span><span class="p">()</span></div>
+
+</pre></div>
+
+          </div>
+          
+        </div>
+      </div>
+    <div class="clearer"></div>
+  </div>
+    <div class="footer">
+      &#169;2025, Scientific-Artificial-Intelligence-Lab.
+      
+    </div>
+
+    
+    <a href="https://github.com/AG-108/KnowledgeDiscover" class="github">
+        <img style="position: absolute; top: 0; right: 0; border: 0;" src="https://github.blog/wp-content/uploads/2008/12/forkme_right_darkblue_121621.png" alt="Fork me on GitHub"  class="github"/>
+    </a>
+    
+
+    
+  </body>
+</html>

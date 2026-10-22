@@ -19,3 +19,6 @@
 *.png binary
 *.jpg binary
 *.pdf binary
+# Byte-pinned upstream fixtures (SHA-256 in kd/dataset/_core_sources.py); keep original CRLF bytes.
+kd/dataset/data/benchmarks.csv -text
+kd/dataset/data/function_sets.csv -text
